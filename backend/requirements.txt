@@ -1,0 +1,13 @@
+# Runtime deps.
+# The Gemini SDK is deliberately NOT listed: the client is injected behind the
+# GeminiClient protocol in app/feedback/gemini.py, and the concrete Google SDK
+# implementation imports the SDK lazily at call time.
+pydantic>=2.6
+
+# Ball detection (app/pose/ball_detector.py). cv2 is used only as an
+# image-processing library over arrays, never as a demuxer.
+numpy>=2.2
+opencv-python>=4.9
+
+# Dev / test
+pytest>=8.0

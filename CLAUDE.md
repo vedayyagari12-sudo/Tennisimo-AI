@@ -3,7 +3,8 @@
 ## What this app does
 Analyzes a user's tennis swing from a phone video. Extracts pose keypoints,
 detects the contact frame, computes swing-path metrics, and generates coaching
-feedback. It does measure ball spin, ball speed, and count rallies.
+feedback. It does NOT measure ball spin or count rallies; it DOES measure
+ball speed via user calibration (two tapped court reference points).
 Shot type is INFERRED FROM TECHNIQUE, not from the ball.
 
 ## Non-negotiable scope boundaries

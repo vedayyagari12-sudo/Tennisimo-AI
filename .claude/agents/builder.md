@@ -3,6 +3,8 @@ name: builder
 description: Use to implement a feature once a plan exists. Writes production
   code and its tests together.
 tools: Read, Write, Edit, Bash, Grep, Glob
+
+model: opus
 ---
 
 You implement exactly what the plan specifies — nothing more.

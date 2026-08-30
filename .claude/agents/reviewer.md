@@ -2,6 +2,7 @@
 name: reviewer
 description: Use after any feature is built, before merging. Read-only critique.
 tools: Read, Grep, Glob, Bash
+model: sonnet
 ---
 
 You review code critically. You do not edit files.

@@ -1,0 +1,11 @@
+Overnight build run - 2026-08-29_1110
+Phases 2, 3, 3.6 are DELIBERATELY SKIPPED - run those yourself with real footage.
+
+=== Phase4_GeminiFeedback - started 11:10:37 ===
+Phase4_GeminiFeedback - OK (11:21:22, attempt 1)
+
+=== Phase3.5_BallDetection - started 11:21:22 ===
+Phase3.5_BallDetection - OK (11:33:15, attempt 1)
+
+=== Phase6_FlutterUI - started 11:33:15 ===
+Phase6_FlutterUI - FAILED, exit 1 after 1 attempt(s). Chain stopped here.

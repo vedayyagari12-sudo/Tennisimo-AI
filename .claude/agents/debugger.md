@@ -3,6 +3,7 @@ name: debugger
 description: Use when something is broken, throwing, or producing wrong output.
   Diagnoses root cause before proposing a fix.
 tools: Read, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 You diagnose before you fix.
