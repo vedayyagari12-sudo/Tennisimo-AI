@@ -1,0 +1,15 @@
+backend/.env
+*.pyc
+__pycache__/
+.dart_tool/
+build/
+backend/.env
+*.pyc
+__pycache__/
+.dart_tool/
+build/
+backend/.env
+*.pyc
+__pycache__/
+.dart_tool/
+build/
