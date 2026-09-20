@@ -638,6 +638,32 @@ Order of operations is fixed and matters:
 
 Failure rate across the corpus: **3 of 6 forehands (gaps 110, 122, 18) and 2 of 7 serves (gaps 156, 88)** — 5 of 13 clips that reach Stage 7 are rejected as unusable before any analysis happens.
 
+**RE-MEASURED after Defect 1 landed (16 clips, stock settings, correctly-centred windows).**
+§5.1 required this before Defect 2 is designed; the figures above were taken on mis-centred
+windows and are superseded. Decomposed properly this time — `MIN_DETECTION_RATE = 0.40` is
+applied at Stage 6 (`pipeline.py:417`) *before* `normalize_sequence`, so a clip failing there
+never reaches Stage 7 and must not be counted against it:
+
+| Outcome | Count | Detail |
+|---|---|---|
+| Fails Stage 6 `NO_POSE_DETECTED` | 1 | `tennis_forehand_10340703`, detection 19.2 % < 40 % |
+| Fails Stage 7 gap gate | **5 of 15** | gaps 18, 88, 98, 98, 117 |
+| Passes | 10 | gap 0 (×9), gap 2 (×1) |
+
+**Correcting the windows did not move Stage 7 at all** — 5 of 13 → 5 of 15, and
+`serve_06_vertical_10340710.mp4` now gets window `[0.00, 8.00]` with the strike 3.44–3.52 s
+comfortably inside it and **still fails at `longest_gap_frames = 98`**, matching the
+monkeypatched prediction above exactly. Defects 1 and 2 are confirmed independent by
+measurement, not by argument.
+
+**The decisive observation for this fix: the distribution is bimodal with an empty region.**
+Passing clips sit at gap 0 or 2; failing clips at 18, 88, 98, 98, 117. **Nothing lies between 3
+and 17.** So every threshold value from 3 to 17 produces byte-identical results on this corpus,
+and the first value that changes anything (18) admits a clip whose tracking is genuinely broken
+at 81.2 % detection. `MAX_GAP_FRAMES` is therefore not mistuned — **no value of it separates
+these two populations**, which is the empirical form of the "wrong statistic" claim and the
+reason the two-tier fix below is a shape change rather than a retune.
+
 **Cause, as observed.** On the ground-truth clip, valid pose exists only over roughly **2.2–4.7 s**. Before that the player is small in frame or turned away during the pre-toss routine; after it there are ~5 s of post-swing recede and off-frame walking. The 8 s analysis window is sized to guarantee *swing context* — enough lead-in for a takeback and enough tail for a follow-through — and nothing about that sizing obliges the clip to hold a detectable pose across all of it. A whole-window rule of "no gap longer than 3 frames" has essentially **zero tolerance for the dead time that ordinary single-camera footage contains by construction**.
 
 **The root cause is that one constant is doing two incompatible jobs.**
