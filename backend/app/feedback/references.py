@@ -2,14 +2,27 @@
 
 PURE: no I/O, no network, no model. Every function here is deterministic.
 
-WARNING ON THE NUMBERS BELOW
-----------------------------
-Every range in ``REFERENCE_RANGES`` is a PLACEHOLDER chosen from general coaching
-intuition. None of them has been validated against measured data from this
-pipeline's own normalization (torso units, image-plane angles, this contact
-definition). Each entry is marked individually so no reader mistakes it for a
-validated threshold. They need empirical tuning against a labelled clip set
-before they drive anything user-visible.
+``REFERENCE_RANGES`` IS A DERIVED PROJECTION, NOT A TABLE
+---------------------------------------------------------
+It used to be a hand-written table keyed ``"topspin" | "slice" | "flat"``. The
+wire enum is ``ShotType`` (``"forehand_topspin"``, ``"backhand_two_handed"``,
+...), and the two key spaces shared NO member -- so
+``reference_ranges_for(ShotType.FOREHAND_TOPSPIN.value)`` returned ``{}``, as did
+every other one of the seven members, and every consumer degraded silently to
+"no references" rather than raising.
+
+It is now built at import time from ``app.analysis.rubric.RUBRIC_V1`` by taking
+each band's ``(ideal_min, ideal_max)`` and keying on ``ShotType``. One source of
+truth; the two tables cannot drift apart because there is only one table.
+``reference_ranges_for`` and ``compare_to_reference`` keep their signatures and
+their ``str`` key type, so no caller changes.
+
+WARNING ON THE NUMBERS
+----------------------
+Every band is still a PLACEHOLDER chosen from general coaching intuition, now
+carried in ``app/analysis/rubric.py`` where the warning is repeated. None has
+been validated against this pipeline's own normalization (torso units,
+image-plane angles, this contact definition).
 """
 
 from __future__ import annotations
@@ -19,13 +32,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-class ReferenceShotType(StrEnum):
-    """Shot types the reference table is keyed by."""
-
-    TOPSPIN = "topspin"
-    SLICE = "slice"
-    FLAT = "flat"
+from app.analysis.rubric import bands_for
+from app.models.enums import ShotType
 
 
 class DeviationDirection(StrEnum):
@@ -62,64 +70,18 @@ class Deviation(BaseModel):
 
 # Metric names come from the Stage 13 table (PIPELINE.md).
 # `wrist_separation_at_contact_tu` is deliberately absent: it is a shot-type
-# CLASSIFICATION input, not a coachable band, and it does not vary across the
-# shot types keyed here. `ball_speed_mph` is absent by contract -- ball speed is
-# a measurement, never a scored or referenced metric.
+# CLASSIFICATION input, not a coachable band. `ball_speed_mph` is absent by
+# contract -- ball speed is a measurement, never a scored or referenced metric.
+# `weight_transfer_tu` and `balance_sway_tu` are absent too: they used to carry
+# bands here, but the metrics are permanently None (Stage 7 pins the mid-hip at
+# the origin), so those bands were unreachable code that read as evidence the
+# metrics worked.
 REFERENCE_RANGES: dict[str, dict[str, ReferenceRange]] = {
-    ReferenceShotType.TOPSPIN.value: {
-        "shoulder_hip_separation_deg": ReferenceRange(minimum=40.0, maximum=65.0),  # PLACEHOLDER - needs empirical tuning
-        "shoulder_turn_deg": ReferenceRange(minimum=80.0, maximum=110.0),  # PLACEHOLDER - needs empirical tuning
-        "hip_rotation_deg": ReferenceRange(minimum=35.0, maximum=60.0),  # PLACEHOLDER - needs empirical tuning
-        "elbow_angle_at_contact_deg": ReferenceRange(minimum=120.0, maximum=160.0),  # PLACEHOLDER - needs empirical tuning
-        "wrist_lag_deg": ReferenceRange(minimum=15.0, maximum=45.0),  # PLACEHOLDER - needs empirical tuning
-        "contact_height_ratio": ReferenceRange(minimum=0.75, maximum=1.05),  # PLACEHOLDER - needs empirical tuning
-        "contact_point_forward_tu": ReferenceRange(minimum=0.25, maximum=0.60),  # PLACEHOLDER - needs empirical tuning
-        "peak_hand_speed_tu_s": ReferenceRange(minimum=6.0, maximum=12.0),  # PLACEHOLDER - needs empirical tuning
-        "swing_path_angle_deg": ReferenceRange(minimum=15.0, maximum=35.0),  # PLACEHOLDER - needs empirical tuning
-        "swing_plane_deviation_tu": ReferenceRange(minimum=0.0, maximum=0.08),  # PLACEHOLDER - needs empirical tuning
-        "knee_flexion_min_deg": ReferenceRange(minimum=135.0, maximum=165.0),  # PLACEHOLDER - needs empirical tuning
-        "weight_transfer_tu": ReferenceRange(minimum=0.10, maximum=0.40),  # PLACEHOLDER - needs empirical tuning
-        "follow_through_height_tu": ReferenceRange(minimum=0.30, maximum=0.90),  # PLACEHOLDER - needs empirical tuning
-        "balance_sway_tu": ReferenceRange(minimum=0.0, maximum=0.12),  # PLACEHOLDER - needs empirical tuning
-        "head_stillness_tu": ReferenceRange(minimum=0.0, maximum=0.06),  # PLACEHOLDER - needs empirical tuning
-        "tempo_ratio": ReferenceRange(minimum=1.5, maximum=3.0),  # PLACEHOLDER - needs empirical tuning
-    },
-    ReferenceShotType.SLICE.value: {
-        "shoulder_hip_separation_deg": ReferenceRange(minimum=30.0, maximum=50.0),  # PLACEHOLDER - needs empirical tuning
-        "shoulder_turn_deg": ReferenceRange(minimum=70.0, maximum=100.0),  # PLACEHOLDER - needs empirical tuning
-        "hip_rotation_deg": ReferenceRange(minimum=25.0, maximum=45.0),  # PLACEHOLDER - needs empirical tuning
-        "elbow_angle_at_contact_deg": ReferenceRange(minimum=140.0, maximum=175.0),  # PLACEHOLDER - needs empirical tuning
-        "wrist_lag_deg": ReferenceRange(minimum=5.0, maximum=25.0),  # PLACEHOLDER - needs empirical tuning
-        "contact_height_ratio": ReferenceRange(minimum=0.55, maximum=0.95),  # PLACEHOLDER - needs empirical tuning
-        "contact_point_forward_tu": ReferenceRange(minimum=0.20, maximum=0.55),  # PLACEHOLDER - needs empirical tuning
-        "peak_hand_speed_tu_s": ReferenceRange(minimum=4.0, maximum=9.0),  # PLACEHOLDER - needs empirical tuning
-        "swing_path_angle_deg": ReferenceRange(minimum=-30.0, maximum=-8.0),  # PLACEHOLDER - needs empirical tuning
-        "swing_plane_deviation_tu": ReferenceRange(minimum=0.0, maximum=0.07),  # PLACEHOLDER - needs empirical tuning
-        "knee_flexion_min_deg": ReferenceRange(minimum=130.0, maximum=160.0),  # PLACEHOLDER - needs empirical tuning
-        "weight_transfer_tu": ReferenceRange(minimum=0.10, maximum=0.40),  # PLACEHOLDER - needs empirical tuning
-        "follow_through_height_tu": ReferenceRange(minimum=0.0, maximum=0.45),  # PLACEHOLDER - needs empirical tuning
-        "balance_sway_tu": ReferenceRange(minimum=0.0, maximum=0.10),  # PLACEHOLDER - needs empirical tuning
-        "head_stillness_tu": ReferenceRange(minimum=0.0, maximum=0.05),  # PLACEHOLDER - needs empirical tuning
-        "tempo_ratio": ReferenceRange(minimum=1.5, maximum=3.0),  # PLACEHOLDER - needs empirical tuning
-    },
-    ReferenceShotType.FLAT.value: {
-        "shoulder_hip_separation_deg": ReferenceRange(minimum=35.0, maximum=60.0),  # PLACEHOLDER - needs empirical tuning
-        "shoulder_turn_deg": ReferenceRange(minimum=75.0, maximum=105.0),  # PLACEHOLDER - needs empirical tuning
-        "hip_rotation_deg": ReferenceRange(minimum=30.0, maximum=55.0),  # PLACEHOLDER - needs empirical tuning
-        "elbow_angle_at_contact_deg": ReferenceRange(minimum=130.0, maximum=170.0),  # PLACEHOLDER - needs empirical tuning
-        "wrist_lag_deg": ReferenceRange(minimum=10.0, maximum=35.0),  # PLACEHOLDER - needs empirical tuning
-        "contact_height_ratio": ReferenceRange(minimum=0.85, maximum=1.15),  # PLACEHOLDER - needs empirical tuning
-        "contact_point_forward_tu": ReferenceRange(minimum=0.30, maximum=0.65),  # PLACEHOLDER - needs empirical tuning
-        "peak_hand_speed_tu_s": ReferenceRange(minimum=6.5, maximum=13.0),  # PLACEHOLDER - needs empirical tuning
-        "swing_path_angle_deg": ReferenceRange(minimum=0.0, maximum=14.0),  # PLACEHOLDER - needs empirical tuning
-        "swing_plane_deviation_tu": ReferenceRange(minimum=0.0, maximum=0.06),  # PLACEHOLDER - needs empirical tuning
-        "knee_flexion_min_deg": ReferenceRange(minimum=135.0, maximum=165.0),  # PLACEHOLDER - needs empirical tuning
-        "weight_transfer_tu": ReferenceRange(minimum=0.12, maximum=0.45),  # PLACEHOLDER - needs empirical tuning
-        "follow_through_height_tu": ReferenceRange(minimum=0.20, maximum=0.70),  # PLACEHOLDER - needs empirical tuning
-        "balance_sway_tu": ReferenceRange(minimum=0.0, maximum=0.11),  # PLACEHOLDER - needs empirical tuning
-        "head_stillness_tu": ReferenceRange(minimum=0.0, maximum=0.06),  # PLACEHOLDER - needs empirical tuning
-        "tempo_ratio": ReferenceRange(minimum=1.5, maximum=3.0),  # PLACEHOLDER - needs empirical tuning
-    },
+    shot_type.value: {
+        name: ReferenceRange(minimum=band.ideal_min, maximum=band.ideal_max)
+        for name, band in bands_for(shot_type).items()
+    }
+    for shot_type in ShotType
 }
 
 

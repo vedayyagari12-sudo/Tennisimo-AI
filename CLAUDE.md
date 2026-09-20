@@ -16,9 +16,13 @@ Shot type is INFERRED FROM TECHNIQUE, not from the ball.
 
 ## Stack
 - Frontend: Flutter (Dart), Material 3
-- Backend: FastAPI (Python 3.11), deployed on Render
+- Backend: FastAPI (Python 3.13), deployed on Render
 - DB/Auth/Storage: Supabase (JWT ES256, verified via PyJWT + PyJWKClient)
-- Pose: MediaPipe Pose (BlazePose), run server-side in FastAPI
+- Pose: MediaPipe Tasks PoseLandmarker (BlazePose `full` bundle, VIDEO running
+  mode), pinned `mediapipe==0.10.35`, run server-side in FastAPI. The legacy
+  `mediapipe.solutions` API does NOT exist in this version -- do not write
+  against it. Model bundle is vendored at
+  backend/app/pose/models/pose_landmarker_full.task. See PIPELINE.md Stage 6.
 - LLM: Gemini 2.5 Flash, text-only payloads
 
 ## Code rules

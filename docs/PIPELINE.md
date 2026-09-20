@@ -6,6 +6,8 @@
 **Detector version:** `ball_cv_v1`
 **Revision note:** this document supersedes the `v1` pose-only plan. The only substantive change is the addition of measured ball speed via user calibration (§0.2, Stages 10–11, §2.x, §3 `app/ball/`, §4.4, §1.20 budget, Stage 16 payload). Everything else — async job model, direct-to-Storage upload, the `PoseSequence` seam, the rubric, the Gemini numeric guard — is carried forward unchanged.
 
+**Revision note (Stage 6 rewrite):** Stage 6 has been rewritten against MediaPipe Tasks `PoseLandmarker` as installed (`mediapipe==0.10.35`, Python 3.13.2). The legacy `mediapipe.solutions` API the section was originally specified against **does not exist in the installed package** — `mp.solutions` raises `AttributeError` — and that specification had never been executed. No code was migrated, because none existed: `backend/app/pose/` contained only a 54-byte `__init__.py`. **`Pipeline version` is NOT bumped: the `PoseSequence` seam is unchanged** (same `(T,33,4)`/`(T,33,3)` arrays, channel 4 still `visibility`), no reported quantity's definition changed, and no `ErrorCode` member was added or removed. Two things *did* change substantively and are called out where they land: the Tasks API has **no `smooth_landmarks` option**, so MediaPipe's one-euro filter is now accepted as part of the sensor and documented as such (Stage 6.3, Stage 7 step 7, Stage 9); and `MULTIPLE_SUBJECTS_SUSPECTED` is gone, replaced by a pure `PoseQuality.flags` warning (Stage 6.6, Stage 7 step 1b, §2.1). Knock-on edits landed in: §1.20 (rebudgeted — **the 512 MB container may no longer fit; see the risk there**), §2.1, §2.x `PoseQuality`, §3 (tree, deviations, two new signature blocks, purity classes), §3.5, §4.1, §4.4, §4.5, Stage 5, Stage 7 steps 1 and 7, Stage 9, `requirements.txt`, and `CLAUDE.md`. The riskiest open assumption in the whole pose path is named in Stage 6.11 and is gated by an acceptance test, not by argument.
+
 ---
 
 ## 0. Scope
@@ -66,11 +68,15 @@ The 60 s intake cap with an 8 s analysis window is what makes a keyframe motion 
 
 Justification, concretely:
 
-- Render's edge terminates HTTP requests that produce no response bytes for ~100 s. Our warm-path budget is 21–37 s (§1.20), which fits — but a cold start on the free tier adds 30–60 s of container spin-up *before* our code runs. Warm-path-fits-in-budget is not the same as always-fits, and a timeout mid-analysis gives the user a spinner that dies with no error.
-- Render free/starter gives ~0.5 shared vCPU and 512 MB RAM. MediaPipe inference is CPU-bound, synchronous, and holds the GIL. A single synchronous analysis request blocks the entire ASGI worker — health checks included. Two concurrent uploads on a synchronous design will time out both.
-- A background job lets us **serialize** CPU work behind a `ThreadPoolExecutor(max_workers=1)` and return `429` past a queue depth of 4, which is the only reliable OOM guard on a 512 MB container. This matters more in `v2`, not less: OpenCV's baseline RSS is now part of the picture (§1.20).
+- **The request timeout is no longer the reason, and this was re-derived rather than inherited.** Cloud Run's default request timeout is 300 s (configurable to 3600 s), so the warm-path budget of 14–27 s and even the rotation-retry worst case of ~23–41 s (§1.20) would fit inside a synchronous request with no configuration change. The earlier justification — Render's ~100 s edge timeout — is retired as a reason. Async is kept on the grounds below instead.
+- **One instance, one job at a time, is a structural property of this deployment, not a tier limitation.** §1.20.1 pins `--max-instances=1` — on **both** deployment tiers, production and dev — because the job runner and its queue-depth counter live in process memory. (`--min-instances` differs by tier: `1` on the production tier documented in §1.20.1, `0` on the dev/demo tier actually deployed today, §1.20.1a. The *at most one* half is what this bullet rests on, and it is tier-independent.) With `ThreadPoolExecutor(max_workers=1)` inside that single instance, the service can analyze exactly one clip at a time; the second, third, and fourth concurrent uploads *must* wait. A synchronous design expresses that wait as a silent open socket for up to ~2 minutes with no queue position and no way for the client to distinguish "third in line" from "dead". The async job makes the wait a first-class, observable state (`queued`, `estimated_seconds`, `429 QUEUE_FULL` past depth 4).
+- **Mobile network flakiness must not destroy completed CPU work.** On this deployment an analysis is the scarcest resource in the system (one at a time, on a single pinned instance — and on the dev tier of §1.20.1a, on an instance that may have had to cold-start to run it). A synchronous design loses the entire result if the phone changes network mid-request; async-plus-poll writes the result to `analysis_jobs` and the client picks it up on the next poll.
+- **MediaPipe inference is CPU-bound and the ASGI loop must stay responsive.** Inference runs in a `ctypes`-loaded native library that releases the GIL, so Python can still serve polls — but only if there is a core to serve them on, which is why §1.20.1 allocates 2 vCPU rather than 1. `--cpu=2` is retained on **both** tiers (it is a sizing flag, not a billing-model flag, and costs nothing while scaled to zero), so this reasoning is unaffected by the dev-tier reversal in §1.20.1a.
+- **The queue guard is now a latency and fairness guard, not primarily an OOM guard.** On the 2 GiB allocation in §1.20.1 a single job has roughly 4× headroom (§1.20's rebudget), so `429` past a queue depth of 4 exists to bound the worst-case wait a user is asked to accept, not to prevent an OOM. `max_workers` stays at 1 regardless.
 
 We do **not** introduce Celery/Redis/RQ for the MVP. The job runner is an in-process single-worker executor; the **source of truth for job state is the Supabase `analysis_jobs` row**, not process memory. On instance restart, in-flight jobs are orphaned — handled by a staleness rule: any job in `running` whose `heartbeat_at` is older than 180 s is reported to the poller as `failed` with `ErrorCode.WORKER_LOST`, and the client may retry. This costs one timestamp column and removes the entire class of "spinner forever" bugs.
+
+**Single-instance assumption, made explicit because the platform does not give it for free.** Cloud Run autoscales horizontally by default. A second container instance would mean a second independent `ThreadPoolExecutor`, a second in-process queue-depth counter (so `429 QUEUE_FULL` would admit up to 2× the intended depth), and a second heartbeat sweeper racing the first over the same `analysis_jobs` rows. That is a correctness problem, not a scaling inefficiency. It is bounded by configuration, in §1.20.1: `--max-instances=1`, which is set on every tier. **How completely it is bounded depends on the tier actually deployed.** On the production tier (`--min-instances=1`), the instance never leaves existence, so two instances are not reachable at all. On the **dev/demo tier deployed today** (`--min-instances=0`, §1.20.1a), the service scales to zero, and a scale-from-zero transition can in principle briefly overlap a departing instance with an arriving one — `max-instances=1` reduces that to "at most a brief overlap during a scale event", not "impossible". §1.20.1a states why that residual window is accepted at this stage and what triggers upgrading out of it. The known future option, recorded now and deliberately not built for the MVP: move the depth guard and the staleness sweep into the database (a `SELECT count(*) WHERE status IN ('queued','running')` admission check plus an advisory-locked sweeper), which would make `max-instances > 1` safe and would also close the dev tier's scale-event window. Until that exists, `max-instances=1` is load-bearing and must not be raised to "handle more traffic".
 
 **Upload path decision:** the client uploads the video **directly to Supabase Storage** using its own user JWT, then POSTs only the storage path to FastAPI. Reasons: (a) avoids a second full transfer of a 15–50 MB file over a mobile network through Render, (b) a slow mobile upload can exceed the Render request timeout before analysis even begins, (c) the file must live in Storage anyway for replay, (d) Storage RLS enforces per-user isolation for free. There is exactly one upload path — no multipart fallback endpoint.
 
@@ -155,7 +161,7 @@ Decisions, all opinionated:
 
 - **PyAV, not OpenCV, for decode.** `cv2.VideoCapture` handles container rotation metadata inconsistently across builds — some auto-apply the display matrix, some ignore it. Silent 90° errors are catastrophic here because a sideways human breaks pose detection entirely. PyAV exposes the stream's **display-matrix side data** explicitly so we apply rotation deliberately and record it in `VideoMeta.rotation_deg`. (OpenCV is now a dependency for ball detection, but it is used only as an image-processing library on arrays we decoded ourselves — never as a demuxer.)
 - **Rotation source is the MP4 `tkhd` display matrix, not EXIF.** EXIF orientation applies to still images (JPEG/HEIC); phone video carries rotation in the container track header. iPhones record landscape-sensor frames with a 90° display matrix for portrait captures. We apply `rot90` k times after decode.
-- **Rotation self-check.** If, after Stage 6, the pose-detection success rate is below 20 %, retry the whole clip once with rotation `+180°`. Upright-person assumption is baked into BlazePose; a wrongly oriented clip produces near-zero detections rather than wrong landmarks, which makes this check cheap and unambiguous. One retry only.
+- **Rotation self-check.** If, after Stage 6, the pose-detection success rate is below 20 %, retry the whole clip once with rotation `+180°`. Upright-person assumption is baked into BlazePose; a wrongly oriented clip produces near-zero detections rather than wrong landmarks, which makes this check unambiguous. One retry only. **The check is cheap; the retry is not.** A retry is a second full VIDEO-mode extraction pass — a further **7–12 s** on the 2 vCPU Cloud Run allocation (§1.20.1) — taking worst-case Stage 6 to ~16–26 s and the worst-case warm job to ~23–41 s (§1.20). That sits inside the 180 s `heartbeat_at` staleness window with wide margin, and also inside Cloud Run's 300 s request timeout — so the timeout is no longer what makes this survivable; the 180 s heartbeat window is. `estimated_seconds` will read low on any clip that takes this path. When the retry fires, append `rotation_retry_applied` to `PoseQuality.flags` so the cost is visible in the response rather than only in the logs.
 - **Timestamps come from PTS × time_base, never from `avg_frame_rate`.** Phone video is variable-frame-rate: iOS "Auto FPS" drops 30 → 24 fps in low light mid-clip. Trusting nominal fps corrupts every velocity in the pipeline — and, in v2, corrupts the ball-speed denominator directly.
 - **Analysis frame rate: 30 fps, fixed.** For each target time `t_k = t_0 + k/30`, select the decoded frame whose PTS is nearest `t_k`. We record the **actual** PTS of each selected frame in `PoseSequence.timestamps_s` and compute all derivatives with real Δt, not an assumed 1/30. If the source is 24 fps, some target slots select the same frame twice; the recorded timestamps expose this and the velocity math stays correct. *(This duplicate-selection behaviour is exactly why ball detection does **not** use this stream — see Stage 10.2.)*
   - Why 30 and not 60: 60 fps doubles MediaPipe cost, which is ~70 % of our budget. Why not 24: contact is a ~4 ms event; at 30 fps we localize it to ±17 ms, which is inside the coaching-relevant resolution, and peak-hand-speed estimation degrades noticeably below 30.
@@ -166,28 +172,428 @@ Decisions, all opinionated:
 
 Budget: 2–4 s (plus 0.2–0.8 s motion scan for long clips).
 
+#### 5.1 DEFECT — the keyframe motion scan mis-centres the analysis window (UNIVERSAL; fix planned, not implemented)
+
+> **Status: diagnosed on real footage, fix specified here, no code written.** `motion_scan_centre_s` in `backend/app/pose/video_io.py` behaves exactly as this document's Stage 5 bullet describes. The bullet is what is wrong.
+
+**Root cause.** The function decodes I-frames only (`skip_frame = "NONKEY"`), takes the mean absolute pixel difference between each consecutive keyframe pair, and returns the PTS of the **later** keyframe of the highest-difference pair. Two things follow from that last clause, and only the second is obvious:
+
+1. The answer's resolution is the GOP interval. Nothing in the function can localise an event to better than the spacing between keyframes.
+2. Returning a bucket *endpoint* discards where inside the bucket the motion happened. Even at the function's own resolution it reports the wrong end of the interval it correctly identified.
+
+The Stage 5 bullet above assumes "roughly one keyframe per 1–2 s, so 30–60 frames for a 60 s clip." **Measured across the entire 16-clip corpus: 3–6 keyframes per clip, GOP 3.03–4.17 s. 16 of 16 clips have GOP ≥ 3.0 s.** The assumption is not slightly optimistic; it is wrong by a factor of two to four on every clip measured, and the function degrades silently when it is wrong — there is no signal anywhere in `PoseStream` that distinguishes "located the swing" from "returned a bucket boundary 2.6 s away from it."
+
+**Worked example — `serve_vertical_10340710.mp4`, 10.4 s, 25 fps.** Keyframes at exactly `[0.0, 3.04, 6.08, 9.12]`. Motion energies: `0 → 3.04: 12.64`, `3.04 → 6.08: 15.48`, `6.08 → 9.12: 8.21`. The argmax correctly picks the middle bucket — the swing really is in it — and then returns that bucket's **end**, 6.08 s. True strike is 3.44–3.52 s, only 0.4 s into a 3.04 s bucket. The resulting window is `[2.08, 10.08]`: centre 2.6 s past the swing.
+
+On this clip the strike does survive inside the window, but only because the clip is barely longer than the window and the clamp at the clip end dragged the window start back to 2.08 s. That is luck, not margin. A 2.6 s error against a ±4 s half-window leaves 1.4 s of slack; any clip long enough that the clamp does not bite loses the swing outright, and a swing sitting *late* in its winning bucket rather than early misses in the other direction with the full GOP as the error term.
+
+**Why this is an algorithm change and not a threshold change.** There is no constant here to tune. `MOTION_SCAN_LONG_EDGE_PX` is fine and the > 10 s scan threshold is fine. Widening the analysis window to absorb the error is the only threshold-shaped option and it is unaffordable: Stage 6 is ~70 % of the job budget (§1.20) and scales linearly in sampled frames, so an 8 → 12 s window costs 4–7 s of MediaPipe time, and the 240-frame cap would force either a cap increase or a drop below the 30 fps that Stage 5 argues for on contact-resolution grounds. The defect is that the function's *output resolution* is the GOP and its *reported point* is an interval endpoint. Both are structural.
+
+##### 5.1.1 Proposed change
+
+Both remedies were evaluated. **The recommendation is to implement both, as one bounded primitive invoked over different spans, rather than as two code paths selected by a density test** — two paths with two thresholds is the shape that produced this defect in the first place.
+
+Proposed signatures (no bodies; the algorithms are in prose below):
+
+```python
+# backend/app/pose/video_io.py  —  IMPURE (PyAV decode)
+
+@dataclass(frozen=True)
+class KeyframeBucket:
+    start_s: float
+    end_s: float
+    energy: float
+
+@dataclass(frozen=True)
+class MotionScanResult:
+    centre_s: float
+    source: Literal["refined", "dense", "keyframe"]
+    keyframe_count: int
+    observed_gop_s: float
+    frames_decoded: int
+
+def keyframe_motion_profile(path: Path, probe: ClipProbe) -> list[KeyframeBucket]: ...
+
+def dense_motion_centre_s(
+    path: Path,
+    probe: ClipProbe,
+    *,
+    span_start_s: float,
+    span_end_s: float,
+    max_frames_decoded: int = MOTION_REFINE_FRAME_BUDGET,
+) -> tuple[float, int] | None: ...
+
+def motion_scan_centre_s(path: Path, probe: ClipProbe) -> MotionScanResult | None: ...
+```
+
+The return type widens deliberately. The present function returns a bare `float | None` and therefore cannot tell its caller how much to trust it, which is the mechanism by which a 2.6 s error shipped unnoticed.
+
+**Remedy (a) — refine within the winning interval.** Pass 1 is unchanged except that it retains the whole profile rather than only the argmax, and records both endpoints of each bucket. Pass 2 re-opens the container *without* `skip_frame`, seeks to the winning bucket's start, and decodes forward to its end, sampling at a stride chosen so the sampled count stays inside `MOTION_REFINE_FRAME_BUDGET` (proposed **48**). Energy is the same mean-absdiff at the same 160 px long edge, so pass 2 measures the same physical quantity as pass 1, only at finer spacing. The returned centre is the **midpoint of the highest-energy adjacent sampled pair — never an endpoint.** That rule is the structural fix and it applies at every level, including pass 1's degenerate fallback.
+
+The refinement span is the winning bucket widened by **half a GOP on each side**, clamped to the clip. A bucket endpoint carries ±GOP of uncertainty about which side of a boundary the event actually sits on, and the guard band is what stops a swing that straddles a keyframe from being localised into the wrong half. Budget 48 is chosen so that a 4 s bucket plus two ~2 s guard bands — roughly 8 s of span — samples at about 6 Hz, enough to localise a 0.3–0.5 s strike to within ~0.2 s. That is an order of magnitude better than the 3.04 s the function achieves today, and far inside what an 8 s window absorbs.
+
+**Remedy (b) — per-frame fallback when keyframes are too sparse.** "Too sparse" is defined as observed GOP ≥ **2.0 s**, i.e. fewer than one keyframe per 2 s — the density the Stage 5 bullet assumed as its *floor*, so the threshold is not a new invention but the existing assumption made testable. Measured against the corpus it fires on 16 of 16 clips, which is the honest reading of the evidence: on this corpus the sparse path is the normal path, not the exception. Remedy (b) is then not a separate algorithm; it is remedy (a) invoked over a wider span, because the half-GOP guard band already widens the refinement in proportion to the sparsity. The one genuinely distinct branch is **fewer than two keyframes**, where no bucket exists at all.
+
+**Degradation on a single-keyframe clip.** With one keyframe there is no energy pair, and today's function returns `None`; the caller then sets `motion_scan_used = False` and `analysis_window_bounds` falls back to the head of the clip — a guess, dressed as a decision. Planned behaviour: run `dense_motion_centre_s` over the **whole clip** with the same 48-frame budget, giving a stride of `duration_s / 48` (1.25 s on a 60 s clip). That is coarse, and it is still strictly better than the head of the clip: it puts the swing inside the 8 s window rather than inside the first 8 s of the file. `source` reads `"dense"`, `frames_decoded` reads 48, and the coarseness is therefore legible. Only if that decode also fails does the function return `None` and preserve today's honest no-answer. **Surface it:** append `motion_scan_coarse` to `PoseQuality.flags` whenever `source == "dense"` and the stride exceeded 0.5 s, on exactly the principle that governs `rotation_retry_applied` — a degraded path must cost something visible in the response, not only in the logs.
+
+##### 5.1.2 Cost, against the §1.20 budget
+
+Pass 2 decodes non-keyframes, so the decoder runs from the preceding keyframe regardless of stride; the budget bounds *sampled* frames, not *decoded* ones, and the cost must be stated against the latter. Worst case is a full sequential decode of the refinement span at source resolution with downscale after: ~8 s of a 25–30 fps clip is 200–240 full decodes. At the per-frame decode cost implied by the existing "decode + rotate + sample @ 640 px | 2–4 s" row for 240 frames, that is **~0.3–0.9 s added**, taking the motion-scan line item from **0.2–0.8 s to 0.5–1.7 s**. §1.20's table row should be renamed "Motion scan (keyframe pass + bounded refinement)" and rebudgeted accordingly; the warm total moves from ~14–27 s to ~14–28 s, and only on clips > 10 s.
+
+That is affordable, and the comparison that makes it affordable is already in this section: the alternative is ~14 s to decode a 60 s clip at full rate, and the rotation self-check already budgets a discretionary 7–12 s. One second to stop silently analysing the wrong eight seconds of video is the cheapest correctness in the budget. The hard bound is `MOTION_REFINE_FRAME_BUDGET`, not wall time, so the cost cannot grow with clip length.
+
+##### 5.1.3 Corpus caveat — stated plainly rather than overstated
+
+**The 16-clip corpus is all Pexels stock footage and is uniformly encoded.** A 3–4 s GOP is characteristic of stock and web-delivery encodes optimised for compression ratio. Phone video — the actual input this product takes — typically uses much shorter GOPs, often 1–2 s, which is what the original Stage 5 bullet assumed and is very likely correct for a large share of real uploads. **The corpus is therefore unrepresentative in exactly this respect, and "16 of 16" must not be read as "16 of 16 phone clips."**
+
+That does not weaken the case for the fix, for two reasons which are kept separate so that neither is smuggled into the other. First, **the backend cannot control the uploader's encoder**: a clip that has been through a messaging app, a screen recording, an editor export, or any re-encode arrives with whatever GOP that tool chose, and the current function has no way to notice. Second, and decisively, **the failure is silent** — no flag, no confidence term, no error; the job completes and reports a confident analysis of the wrong window. A defect that is uncontrollable and silent is worth a bounded second of decode even at low incidence. The honest summary: *severity on the corpus is certain and severe; incidence on real phone uploads is unknown and probably lower.*
+
+##### 5.1.4 Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| Widen the analysis window to 12 s to absorb the error | Stage 6 is ~70 % of budget and scales linearly; costs 4–7 s and forces the 240-frame cap up or the 30 fps rate down. Buys tolerance for a wrong answer instead of buying a right one. |
+| Return the **earlier** keyframe of the winning pair | The same class of error with the opposite sign. It happens to give 3.04 s on the worked clip, which is precisely why it is tempting; a swing late in its bucket is then wrong by a full GOP. Endpoint choice is not the fix — discarding intra-bucket location is. |
+| Energy-weighted centroid over all buckets | A second mover — spectator, ball boy, passing player — in a different bucket drags the centroid arbitrarily. Argmax is robust; the problem is resolution, not selection. |
+| Decode every frame on every clip | ~14 s on a 60 s clip (§1.20 long-clip note). This is the cost the keyframe scan exists to avoid. |
+| Locate the window with a coarse pose pass | MediaPipe is the dominant cost. A pose pass to find the window costs more than the window saves, and it inverts the stage order. |
+| Raise the > 10 s scan threshold so more clips skip the scan | Clips ≤ 10 s already skip it. Raising it means analysing the first 8 s of a 15 s clip, which is a worse guess than a coarse scan, not a better one. |
+
+##### 5.1.5 Test strategy
+
+The finding that matters most: **no existing test in `backend/tests/unit/pose/test_video_io.py` would have caught this.** The suite covers `analysis_window_bounds` (pure clamping arithmetic — correct, and unaffected by this change), absolute-versus-window-relative PTS, and the frame cap. Nothing asserts anything about *where* the scan points, and nothing controls keyframe spacing. That gap is why a 2.6 s miscentre shipped green.
+
+- **New fixtures.** Synthetic clips written with PyAV at a *forced* `gop_size`, so keyframe spacing is an input to the test rather than an accident of whichever file was to hand. Minimum three: `gop_size` ≈ 1 s (the assumed case), ≈ 3 s (the measured case), and a single-keyframe clip.
+- `test_refinement_locates_a_sub_gop_event` — 12 s clip, 3 s GOP, one moving bright region for 0.3 s at t = 3.45 s. Assert `abs(centre_s - 3.45) <= 0.35`. This is the test that fails today and passes after.
+- `test_a_bucket_endpoint_is_never_returned` — assert the returned centre is strictly interior to the winning bucket whenever `source == "refined"`. This encodes the structural rule directly, so a regression to endpoint-reporting is caught even if the tolerance test happens to survive it.
+- `test_sparse_keyframes_take_the_refined_path` — assert `source` and `observed_gop_s` on the 3 s-GOP clip.
+- `test_single_keyframe_clip_degrades_to_dense_not_none` — assert `source == "dense"` and a non-`None` centre.
+- `test_decode_budget_is_bounded` — a 60 s clip must report `frames_decoded <= MOTION_REFINE_FRAME_BUDGET`. Assert on the counter, never on wall time; a timing assertion on CI is a flake generator.
+- `test_motion_scan_coarse_flag_is_raised_when_the_stride_is_wide` — the degradation must be visible, and the test is what makes that visibility a contract rather than a courtesy.
+- **Existing tests that change:** none in the unit suite change semantics — all three current `test_video_io.py` tests stay valid as written. In the integration suite, `backend/tests/integration/test_pipeline_end_to_end.py::test_stage_5_window_is_absolute_and_covers_the_strike` asserts only that the window *covers* the strike, and passes today despite the 2.6 s error. **Tighten it to centring within ±1.0 s.** That is the assertion that would have failed; leaving it at "covers" leaves the hole open.
+
+##### 5.1.6 Re-validation required
+
+Re-run the full 16-clip corpus recording, per clip: keyframe count, observed GOP, `source`, `frames_decoded`, returned centre, resulting window bounds, and — where a strike is hand-labelled — the signed error. **Acceptance: `abs(centre_s − strike_s) ≤ 1.0 s` on every clip carrying a labelled strike, and motion-scan wall time ≤ 2.0 s on every clip.** Then re-measure Defect 2's gap-gate failure rate on correctly-centred windows *before* touching Stage 7 — the §7.1 numbers were taken at stock settings and will move once this lands, even though, as §7.1 establishes with a monkeypatched true strike time, correct centring does **not** by itself fix Stage 7.
+
+**This fix is first in the ordering.** Defects 1 → 2 → 3: the Stage 7 core-window anchor is computed inside a window Stage 5 places, and the Stage 9 candidate list is computed over frames Stage 7 admits. Fixing them in any other order measures each change against an input that is about to change again.
+
 ---
 
 ### Stage 6 — MediaPipe Pose extraction (IMPURE)
 
+> **Status: this section is a specification for work that has not been started.** `backend/app/pose/` contains exactly one file — a 54-byte `__init__.py` holding the docstring `"""Pose extraction boundary (MediaPipe is impure)."""`. There is no `extractor.py`, no `video_io.py`, no `sequence.py`, and `extract_keypoints()` has never existed. **Nothing below is a migration and there is no code to change.** The previous version of this section was written against `mediapipe.solutions.pose`, a legacy API that is absent from the installed package and was never executed against it. Do not go hunting for an implementation to fix.
+>
+> **Installed environment (empirically confirmed, 2026-09-10):** Python 3.13.2, `mediapipe==0.10.35`, `opencv 5.0.0`. `import mediapipe` exposes only `Image`, `ImageFormat`, and `tasks` at top level. `mp.solutions` raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`. Every configuration knob in the old spec — `model_complexity`, `static_image_mode`, `smooth_landmarks`, `min_detection_confidence`, `min_tracking_confidence` — is therefore unavailable as written.
+
 | | |
 |---|---|
-| **Owner** | `backend/app/pose/extractor.py` |
-| **In** | frame generator from Stage 5 |
-| **Out** | `RawPoseSequence` — `landmarks: np.ndarray (T, 33, 4)` float32, `world: np.ndarray (T, 33, 3)` float32, `timestamps_s: np.ndarray (T,)`, `detected: np.ndarray (T,)` bool |
-| **Fails** | `NO_POSE_DETECTED` (< 40 % of frames), `MULTIPLE_SUBJECTS_SUSPECTED` |
+| **Owner** | `backend/app/pose/extractor.py` (IMPURE), with seam assembly in `backend/app/pose/sequence.py` (PURE) |
+| **In** | frame generator from Stage 5 — `Iterable[tuple[timestamp_s: float, frame_rgb: np.ndarray]]`, plus a constructed `PoseExtractor` and `VideoMeta.width_px/height_px` |
+| **Out** | `RawPoseSequence` — `landmarks: np.ndarray (T, 33, 4)` float32, `world: np.ndarray (T, 33, 3)` float32, `timestamps_s: np.ndarray (T,)` float64, `detected: np.ndarray (T,)` bool |
+| **Fails** | `NO_POSE_DETECTED` (pose found in < 40 % of sampled frames); `INTERNAL_ERROR` if the model asset is missing or its SHA-256 does not match the pinned digest |
 
-Configuration, fixed: `model_complexity=1`, `static_image_mode=False`, `smooth_landmarks=False`, `min_detection_confidence=0.5`, `min_tracking_confidence=0.5`.
+**`MULTIPLE_SUBJECTS_SUSPECTED` is removed from this table.** It was never a member of `ErrorCode` (§2.1) so the old table was already inconsistent with the schema, and with `num_poses=1` the condition is *undetectable at this stage by construction* — the API returns at most one person and gives no signal that a second was present. It is replaced by a pure, Stage-7-derived warning string; see **6.6**.
 
-- `model_complexity=1` not `2`: complexity 2 is roughly 2× the cost for a modest landmark-accuracy gain, and our budget is CPU-bound on a shared vCPU.
-- `static_image_mode=False` enables the detector→tracker pipeline, which is both faster and temporally more coherent across a continuous clip.
-- `smooth_landmarks=False` — **we do our own smoothing in the pure layer.** MediaPipe's built-in one-euro filter is an uncontrolled, untestable, stateful transform sitting between the sensor and our math. Disabling it moves 100 % of the filtering into `analysis/smoothing.py` where it is deterministic and unit-tested.
+---
 
-The `Pose` object is created **once per job and closed in a `finally`** — MediaPipe graph construction costs ~300 ms and leaks native memory if not closed. **In v2 the close is also a memory-ordering requirement:** the extractor must be closed *before* Stage 10 opens its decode pass, so that the ~100 MB graph + TFLite arena is released before the ball stage allocates its ~25 MB working set. Peak RSS depends on this ordering (§1.20).
+#### 6.1 Model bundle — choice, provenance, and how it reaches the container
 
-Per-landmark channels: `x, y` normalized to `[0,1]` of image width/height (**y grows downward**), `z` relative depth (same scale as `x`, origin at hip midpoint), `visibility` in `[0,1]`. `world` landmarks are in meters relative to hip midpoint and are used **only** as a cross-check signal, never as a reported measurement (see §5).
+**Chosen bundle: `pose_landmarker_full.task`.**
 
-Budget: **14–22 s** at ~60–90 ms/frame on 0.5 vCPU. This stage is ~65 % of total wall time.
+| Field | Value |
+|---|---|
+| Filename | `pose_landmarker_full.task` |
+| Download URL | `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task` |
+| Size | **9,398,198 bytes (8.96 MiB)** — confirmed by HTTP HEAD, 2026-09-10 |
+| Format | float16 PK-zip task bundle; downloaded, opened, and executed successfully on the dev box |
+| Repo location | `backend/app/pose/models/pose_landmarker_full.task` |
+| Digest | SHA-256 pinned as a module constant in `app/pose/extractor.py`, verified once at application startup |
+
+All three bundles are live at the same URL pattern (`.../pose_landmarker_<name>/float16/latest/<name>.task`) with confirmed sizes: `lite` 5,777,746 B (5.51 MiB), `full` 9,398,198 B (8.96 MiB), `heavy` 30,664,242 B (29.24 MiB).
+
+**Why `full` and not `lite` or `heavy`.** In the Tasks API there is no `model_complexity` parameter — *the bundle you load **is** the complexity setting*. `full` is the direct successor to the old `model_complexity=1`, so this choice preserves the original intent rather than changing it. `heavy` is 29.24 MiB and roughly double the inference cost, which is unaffordable against the timing decision in 6.3 and would also raise the resident footprint that §1.20's peak-RSS claim depends on. `lite` is tempting on cost, but every metric we report is derived from wrist, elbow, shoulder, and hip landmarks, and contact detection is the localisation of a single velocity peak in the wrist channel — the stage least tolerant of landmark noise. `full` is the measured configuration (19.5 ms/frame, 80/80 frames detected); `lite` is not, and substituting it would invalidate the numbers in 6.3.
+
+**Delivery decision: the bundle is vendored into the repository. It is not fetched at build time and it is not fetched at cold start.**
+
+The deciding fact is in the URL itself: the only published path contains **`/latest/`**. That is a mutable pointer, not a versioned artifact. A build-time `curl` would mean Google can replace our pose model, with no commit in our history, on any deploy — silently changing every landmark, every metric, every score, and every frozen golden fixture in `tests/golden/`. That is an unacceptable supply-chain property for a pipeline whose entire testing strategy rests on deterministic reproduction from frozen `PoseSequence` fixtures. Vendoring converts the model from a live dependency into a reviewed, versioned binary.
+
+Weighed against the alternatives:
+
+- **Fetched at cold start — rejected outright, and Cloud Run makes this *worse*, not better.** On the production tier (`min-instances=1`, §1.20.1) cold starts are rare but not rare enough to ignore: every revision deploy and every instance recycle is one. On the **dev/demo tier deployed today** (`min-instances=0`, §1.20.1a) they are *routine* — every idle-then-request transition is a cold start — which strengthens this rejection rather than weakening it. A 9 MB network fetch in the startup path puts Google Storage availability between a new revision and a healthy instance, and Cloud Run's container filesystem is **in-memory** — the fetched 9 MB would be charged against the instance's memory limit on top of the resident copy MediaPipe loads. Rejected.
+- **Fetched at build — rejected for the `/latest/` reason above, and the Cloud Run build model sharpens it.** On Cloud Run the container image *is* the deploy artifact, so a build-time `curl` bakes whatever `/latest/` happened to serve that minute into an otherwise immutable, digest-addressed image — an image that then looks reproducible and is not. Filesystem persistence was never the obstacle on either platform; mutability of the source is.
+- **Vendored — accepted.** 8.96 MiB is comfortably under GitHub's 50 MB per-file advisory and the 100 MB hard limit, so no Git LFS is required. The cost is one 9 MB blob permanently in git history and a slightly larger deploy artifact. That is the correct trade for an artifact whose bytes determine every number the product reports.
+
+**On secrets and checksums (CLAUDE.md compliance).** The URL is public and carries no credential, so nothing here is a secret and nothing here belongs in an environment variable for secrecy reasons. The path is nonetheless resolved through `POSE_MODEL_PATH` (a `Settings` field with the vendored path as default) purely so tests and local runs can point at a different bundle — a configuration knob, not a secret.
+
+The SHA-256 **is** pinned, and the reason is specific: a truncated or LFS-pointer-substituted checkout does not make MediaPipe fail loudly. It can produce a landmarker that loads and emits plausible-looking but wrong landmarks, which this pipeline would then turn into a confident coaching report. Verifying the digest once at startup (≈30 ms over 9 MB) converts that entire class of failure into a refusal to boot. The digest constant must be regenerated and committed in the same commit as any model change, and a test asserts the on-disk file matches it.
+
+---
+
+#### 6.2 Legacy → Tasks API mapping
+
+For anyone reading the superseded spec, this is the complete translation:
+
+| Old (`mp.solutions.pose.Pose`) | New (`PoseLandmarkerOptions`) | Note |
+|---|---|---|
+| `model_complexity=1` | *no such option* — `base_options=BaseOptions(model_asset_path=.../pose_landmarker_full.task)` | Complexity is now the bundle choice (6.1) |
+| `static_image_mode=False` | `running_mode=VisionTaskRunningMode.VIDEO` | Also changes the call from `detect()` to `detect_for_video(image, timestamp_ms)` |
+| `smooth_landmarks=False` | **no equivalent exists, and none can be synthesised** | This is the load-bearing change. See 6.3. |
+| `min_detection_confidence=0.5` | `min_pose_detection_confidence=0.5` | Renamed only |
+| `min_tracking_confidence=0.5` | `min_tracking_confidence=0.5` | Unchanged |
+| *(did not exist)* | `min_pose_presence_confidence=0.5` | New; no legacy counterpart |
+| *(did not exist)* | `num_poses=1` | Previously implicit single-person |
+| `enable_segmentation=False` | `output_segmentation_masks=False` | Renamed |
+| `mp_pose.Pose(...)` | `PoseLandmarker.create_from_options(options)` | Also `create_from_model_path()` for defaults-only construction |
+| `results.pose_landmarks.landmark[i]` | `result.pose_landmarks[0][i]` | Outer index is the person. See 6.5. |
+
+---
+
+#### 6.3 THE DECISION — running mode, and the honest correction to the old purity claim
+
+The previous version of this section rested a load-bearing argument on `smooth_landmarks=False`:
+
+> *"MediaPipe's built-in one-euro filter is an uncontrolled, untestable, stateful transform sitting between the sensor and our math. Disabling it moves 100 % of the filtering into `analysis/smoothing.py` where it is deterministic and unit-tested."*
+
+**That sentence is now false and is deleted.** There is no option that disables the filter in `running_mode=VIDEO`, and the only way to avoid it is to abandon VIDEO mode entirely. Measured on this dev box, same 40 frames, same `full` bundle, tracking `right_wrist` (landmark 16), stateless `detect()` per frame versus sequential `detect_for_video()`:
+
+| Measurement | Value |
+|---|---|
+| Frames where IMAGE and VIDEO agree exactly | **only frame 0 — 0 of 40** |
+| mean abs difference | **0.018775** normalised units (≈ 12 px at 640 px width) |
+| max abs difference | 0.071383 |
+| Trajectory path length, IMAGE | 1.94165 |
+| Trajectory path length, VIDEO | 1.88750 (**2.8 % shorter**) |
+
+A shorter path over identical input is the signature of temporal damping. VIDEO mode reintroduces exactly the transform the old spec set out to exclude.
+
+**Cost of avoiding it** (80 frames, 640×360, dev box):
+
+| mode | construct | per frame | detected | extrapolated to 240 frames |
+|---|---|---|---|---|
+| VIDEO | 111 ms | **19.5 ms** | 80/80 | **4.7 s** |
+| IMAGE | 269 ms | **80.3 ms** | 80/80 | **19.3 s** |
+
+IMAGE is **4.11×** the per-frame cost — a ratio measured on one machine, and platform-independent.
+
+**Calibrating to the deployment target (recomputed for Cloud Run, not carried over from Render).** The superseded figure was a ~3–4× penalty for Render's 0.5 *shared* vCPU. That multiplier described a throttled fraction of a core and does not transfer: on Cloud Run, CPU is an explicit allocation, and §1.20.1 chooses **2 dedicated vCPU**. The remaining gap to this dev box is clock and core count, not contention, so the assumed penalty is **1.5–2.5×** — an assumption, stated as one, and one that further assumes XNNPACK uses both vCPUs.
+
+| | Dev box (measured) | Cloud Run, 2 vCPU (1.5–2.5×) |
+|---|---|---|
+| VIDEO, per frame | 19.5 ms | **29–49 ms** |
+| VIDEO, 240 frames | 4.7 s | **7.0–11.8 s** |
+| IMAGE, per frame | 80.3 ms | **120–200 ms** |
+| IMAGE, 240 frames | 19.3 s | **29–48 s** |
+
+Both columns move, but the ratio that drives the decision below does not.
+
+---
+
+**DECISION: `running_mode=VisionTaskRunningMode.VIDEO`. We accept MediaPipe's internal filtering and reclassify it as part of the sensor.**
+
+The defence, in order of weight:
+
+1. **IMAGE mode does not fit, and the gap is not marginal — this still holds on the faster Cloud Run allocation.** 29–48 s for Stage 6 alone turns the §1.20 total from 14–27 s into roughly **36–63 s**. Cloud Run's 300 s request timeout and the 180 s heartbeat staleness rule both have room for that, so it is survivable in the narrow sense — and note that the argument can no longer lean on a platform timeout at all. What is not survivable is throughput: one worker at `max_workers=1` inside one pinned instance, with `job_queue_max_depth=4`, means the fourth user in the queue waits **~2.5–4 minutes** instead of ~1–2, and `estimated_seconds` would have to be rewritten from 25 to ~50. Paying 4.11× on the stage that is ~60 % of the pipeline, on a continuously billed single instance, to avoid a filter we can characterise, is still not a good trade.
+
+2. **The old purity argument conflated "a filter" with "impurity", and that was a category error.** The seam is `PoseSequence`. Everything upstream of it is the sensor by definition — including a TFLite convolutional network whose weights we cannot inspect, whose behaviour we cannot unit-test, and which is vastly more of a black box than a one-euro filter. Adding a deterministic low-pass stage *inside* that same black box does not cross any boundary this document defends. Concretely, what survives completely intact:
+   - **Determinism.** MediaPipe's VIDEO-mode filter is stateful but deterministic: the same frames with the same timestamps in the same order produce the same landmarks. The golden-fixture strategy (§4.1) is therefore untouched — freeze `PoseSequence` to `.npz` once, and Stages 7–15 remain bit-reproducible in CI with no video, no model, and no network.
+   - **Unit-testability of our math.** Every function in `app/analysis/**` still takes arrays in and returns numbers out, still has no I/O, and is still tested on synthetic keypoints. CLAUDE.md's requirement is about *our* math being pure and tested. It is.
+
+   What is genuinely lost, named precisely: (a) we no longer know the total filter response of the chain, because our Savitzky-Golay filter now sits *in series* with an unknown-parameter causal filter; and (b) per-frame idempotence — `detect()` on frame *k* in isolation no longer reproduces the sequence result, so any future debugging tool must replay the whole sequence from the window start. Both are real. Neither is a purity violation.
+
+3. **IMAGE mode is not a cleaner sensor — it is a noisier one, and the path-length number is evidence for VIDEO, not against it.** IMAGE mode re-runs full detection independently on every frame with no tracker, so its frame-to-frame error is uncorrelated jitter. Integrated path length is **upward-biased under zero-mean noise**: for true steps Δp and noise ε, `E[Σ‖Δp + ε‖] > Σ‖Δp‖` by Jensen, strictly, for any non-degenerate ε. So IMAGE's 2.8 % longer trajectory is *consistent with* noise inflation and cannot be read as more faithful motion capture. The honest reading of the 2.8 % gap is that it is some unknown mixture of real damping (bad) and removed jitter (good), and the data as collected does not separate them. This is precisely why item 1 of 6.7 exists.
+
+4. **The one-euro filter's lag is smallest exactly where we need it smallest.** A one-euro filter is adaptive by design: its cutoff rises with observed speed, so smoothing is heaviest when the subject is near-stationary and lightest at peak velocity. Contact (Stage 9) is localised at and just after the racket-hand speed maximum — the lowest-lag region of the filter's response. **This is a mechanism argument, not a measurement: peak time-shift was not measured.** It is the reason the risk in 6.11 is plausible to clear, not evidence that it has been cleared.
+
+**Rejected alternatives, with their arithmetic:**
+
+- **IMAGE mode with a shortened analysis window.** To fit IMAGE into the existing 14–22 s budget we would need ~60–90 frames, i.e. a 2–3 s window. Stage 5's keyframe motion scan locates the swing only to roughly ±1 s, and a swing spans ~1.5 s; a 3 s window would clip the takeback or the follow-through on a routine capture. A 4 s / 120-frame compromise still costs 29–38 s, about 2× the current budget, for a window that is now marginal. Rejected on both counts.
+- **IMAGE mode at `analysis_fps=20`.** 160 frames × 240–320 ms = 38–51 s, still 2–3×, and it directly contradicts Stage 5's justification for 30 fps (peak-speed estimation degrades noticeably below 30, and contact resolution drops from ±17 ms to ±25 ms). Rejected.
+- **Hybrid: VIDEO for the clip, IMAGE for a narrow band around a coarse contact estimate.** Rejected, and this is the most important rejection because it looks clever. It would splice two different noise regimes into one time series; the central-difference velocity at each splice boundary would be computed across a discontinuity of ~12 px, producing two spurious acceleration spikes flanking exactly the region where Stage 9 hunts for a velocity peak. It would manufacture the artefact it was meant to avoid.
+- **VIDEO mode with our SG window left at 7.** Rejected — see the knock-on edit to Stage 7. Two low-pass stages in series over-smooth, and the stage that pays is peak sharpness in the contact channel.
+
+---
+
+#### 6.4 Configuration, fixed
+
+Every field below is a real member of `PoseLandmarkerOptions` in `mediapipe==0.10.35`, confirmed via `dataclasses.fields`. There are no others.
+
+| Option | Value | One-line defence |
+|---|---|---|
+| `base_options` | `BaseOptions(model_asset_path=<vendored pose_landmarker_full.task>)` | This field *is* the old `model_complexity`; `full` is the measured configuration (6.1). Pass the path, never the bytes — passing bytes would hold a second 9 MB copy resident for the life of the job. |
+| `running_mode` | `VisionTaskRunningMode.VIDEO` | Decided in 6.3: 4.11× cheaper than IMAGE and the only mode that fits §1.20. Requires `detect_for_video(image, timestamp_ms)`. |
+| `num_poses` | `1` | Raising it runs the landmark model once per detected person, roughly doubling per-frame cost on any frame containing a bystander, and it buys nothing: we would still need a subject-selection rule, which is a new untested classifier in the impure layer. Declined; the multi-subject condition becomes a warning instead (6.6). |
+| `min_pose_detection_confidence` | `0.5` | Direct rename of the old `min_detection_confidence`; value carried forward unchanged so the 40 % `NO_POSE_DETECTED` threshold keeps its original meaning. |
+| `min_pose_presence_confidence` | `0.5` | New field with no legacy counterpart. Left at the library default deliberately — we have no data on which to tune it, and inventing a value would be a silent, untestable change to detection rate. Revisit only with measurements from the golden clips. |
+| `min_tracking_confidence` | `0.5` | Unchanged from the legacy spec. In VIDEO mode this governs when the tracker gives up and re-runs full detection; lowering it would let the tracker coast on a lost subject, which is worse than a gap (Stage 7 interpolates gaps ≤ 3 frames but cannot detect a confidently-wrong track). |
+| `output_segmentation_masks` | `False` | We never use a mask. Enabling it allocates a full-resolution float mask per frame — pure waste against a 512 MB container. |
+| `result_callback` | `None` (must be) | `LIVE_STREAM` only; setting it with `running_mode=VIDEO` is a configuration error. Our work is batch and synchronous behind a single-worker executor. |
+
+`smooth_landmarks` is absent from this table because **the option does not exist**. See 6.3.
+
+---
+
+#### 6.5 Result parsing
+
+`detect_for_video()` returns a `PoseLandmarkerResult` with three fields: `pose_landmarks: list[list[NormalizedLandmark]]`, `pose_world_landmarks: list[list[Landmark]]`, and `segmentation_masks: Optional[...]` (always `None` for us).
+
+**The outer index is the person, not the landmark.** Access is `result.pose_landmarks[0][i]` for `i` in `range(33)`. The legacy `results.pose_landmarks.landmark[i]` form does not exist and will `AttributeError`.
+
+Non-detection is signalled by an **empty outer list**, not by `None`. The detection test is therefore `len(result.pose_landmarks) > 0` — and it must be applied to `pose_landmarks` and `pose_world_landmarks` together, since a frame is only usable if both are populated.
+
+Both `NormalizedLandmark` and `Landmark` carry `x, y, z, visibility, presence, name`.
+
+**`visibility` survives and remains our channel 4.** **`presence` is new and is deliberately ignored.** Three reasons, and they are all about not changing the seam for free: (a) Stage 7 step 1's validity gate is specified as mean `visibility` ≥ 0.5 over 12 core landmarks, and every threshold downstream of it is calibrated to that quantity; (b) `presence` answers a different question (is this landmark inside the image at all) from `visibility` (is this landmark unoccluded), and we have no threshold for it and no data to derive one; (c) carrying it would require a fifth channel, which is a seam change. If it is ever adopted it must be a `(T, 33, 5)` seam with an explicit pipeline-version bump and regenerated golden fixtures — not an in-place addition.
+
+**Timestamp handling (new requirement, no legacy analogue).** `detect_for_video()` takes an integer millisecond timestamp and requires it to be **strictly increasing** across the sequence. Our timestamps come from real PTS (Stage 5), so the conversion rule is fixed and explicit:
+
+- `timestamp_ms = int(round((timestamp_s - window_start_s) * 1000.0))`, then clamped to `max(previous_ms + 1, timestamp_ms)` to guarantee strict monotonicity. At a 30 fps target the natural spacing is ~33 ms so the clamp should never fire, but Stage 5's duplicate-frame selection on 24 fps sources makes the guarantee worth enforcing rather than assuming.
+- **The clamped millisecond value is fed to MediaPipe and then discarded.** `PoseSequence.timestamps_s` stores the original full-precision float PTS, unmodified. Every derivative in Stage 7 step 8 continues to use real Δt. Storing the rounded value would inject up to 0.5 ms of quantisation into every velocity.
+- Both the rounding and the clamp are pure functions and live in `app/pose/sequence.py`, not `extractor.py`, so each gets a unit test per CLAUDE.md.
+
+---
+
+#### 6.6 Multiple subjects — resolved as a warning, not an error
+
+With `num_poses=1` the API returns one person and offers no indication that another was present, so `MULTIPLE_SUBJECTS_SUSPECTED` cannot be raised here. It was also never a member of `ErrorCode` (§2.1), so the old Fails row referenced a code that does not exist. **Decision: it is not an `ErrorCode`, it is a warning string, and it is derived in the pure layer.**
+
+The detectable proxy is the symptom that actually matters — MediaPipe silently re-anchoring onto a different person mid-clip, which appears as a discontinuity in the subject's geometry. Stage 7 emits `PoseQuality.flags += ["subject_identity_unstable"]` when either the mid-hip centroid jumps by more than 0.25 TU or the per-frame torso length changes by more than 35 % between consecutive detected frames. This is a pure function of the landmark array, costs nothing, is unit-testable on synthetic keypoints with an injected swap, and fails soft: the analysis still runs, the flag rides along in `PoseQuality`, and the flag depresses Stage 9 confidence rather than killing the job.
+
+---
+
+#### 6.7 Lifecycle, and the memory-ordering requirement (carried forward, confirmed)
+
+The landmarker is created **once per job and closed in a `finally`**, exactly as before. `PoseLandmarker` exposes `close()`, confirmed present on the installed class alongside `detect`, `detect_for_video`, `detect_async`, `create_from_options`, and `create_from_model_path`. `close()` tears down the underlying graph and releases the native TFLite arena, so **the v2 memory-ordering requirement is preserved unchanged**: the extractor must be closed *before* Stage 10 opens its decode pass, so that the graph + arena is released before the ball stage allocates its ~25 MB working set. Peak RSS depends on this ordering (§1.20), and the orchestrator contract (`_collect_pose` fully exits its `with PoseExtractor(...)` block before `_collect_ball` is called, §3) is the mechanism that enforces it.
+
+One deliberate wrapper decision: **`PoseExtractor` owns the context-manager protocol, not MediaPipe's object.** Whether `PoseLandmarker` itself implements `__enter__`/`__exit__` in 0.10.35 was not verified and is irrelevant — our wrapper's `__exit__` calls `PoseLandmarker.close()` unconditionally, which keeps the orchestrator's `with` contract true regardless of what the library offers.
+
+---
+
+#### 6.8 Function signatures — `backend/app/pose/extractor.py`
+
+Contract only; no bodies. **`extract_keypoints` is kept as the public entry point's name**, but its signature changes in one important way: it no longer owns the landmarker's lifecycle. A free function that constructs and closes the landmarker internally would either rebuild the ~100 MB graph per call or hide a process-global singleton, both of which break the once-per-job create/close rule in 6.7 and the memory ordering §1.20 depends on. The lifecycle moves to a class; the function takes the live extractor.
+
+```python
+# backend/app/pose/extractor.py  —  IMPURE (ML model inference, filesystem)
+from collections.abc import Iterable, Iterator
+from pathlib import Path
+from types import TracebackType
+import numpy as np
+
+POSE_MODEL_FILENAME: str = "pose_landmarker_full.task"
+POSE_MODEL_SHA256: str           # pinned digest of the vendored bundle (6.1)
+POSE_MODEL_SIZE_BYTES: int = 9_398_198
+NUM_LANDMARKS: int = 33
+
+def resolve_model_path(configured: Path | None = None) -> Path: ...
+def verify_model_asset(path: Path) -> None: ...
+    # Raises RuntimeError on missing file, size mismatch, or digest mismatch.
+    # Called once at application startup, never per job.
+
+class PoseExtractor:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        num_poses: int = 1,
+        min_pose_detection_confidence: float = 0.5,
+        min_pose_presence_confidence: float = 0.5,
+        min_tracking_confidence: float = 0.5,
+    ) -> None: ...
+    def __enter__(self) -> "PoseExtractor": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+    def close(self) -> None: ...
+    def detect_frame(
+        self, frame_rgb: np.ndarray, timestamp_ms: int
+    ) -> tuple[np.ndarray, np.ndarray, bool]: ...
+        # Returns (landmarks (33,4) float32, world (33,3) float32, detected).
+        # On non-detection returns zero-filled arrays and False.
+
+def extract_keypoints(
+    extractor: PoseExtractor,
+    frames: Iterable[tuple[float, np.ndarray]],
+    *,
+    window_start_s: float,
+    width_px: int,
+    height_px: int,
+    max_frames: int = 240,
+) -> RawPoseSequence: ...
+    # Drives the generator once, streaming. Accumulates per-frame (33,4)/(33,3)
+    # arrays into preallocated (max_frames, ...) buffers, trimmed on exit.
+    # Does NOT construct or close the extractor. Does NOT raise NO_POSE_DETECTED —
+    # it reports `detected`, and the orchestrator applies the 40 % gate.
+```
+
+Pure helpers that belong in `backend/app/pose/sequence.py`, not here, so that each gets its own unit test with synthetic inputs:
+
+```python
+# backend/app/pose/sequence.py  —  PURE (numpy only; mediapipe must not be importable)
+def frame_timestamps_ms(timestamps_s: np.ndarray, window_start_s: float) -> np.ndarray: ...
+    # Rounded, strictly-monotonic int ms for detect_for_video. Never stored on the seam.
+def detection_rate(detected: np.ndarray) -> float: ...
+def build_pose_sequence(raw: RawPoseSequence, width_px: int, height_px: int) -> PoseSequence: ...
+def validate_sequence_invariants(seq: PoseSequence) -> None: ...
+```
+
+---
+
+#### 6.9 THE SEAM IS UNCHANGED — verified channel by channel
+
+**`PoseSequence` is bit-for-bit the same contract as in v1 and v2. Nothing about the seam changes.** This was checked explicitly against the installed API rather than assumed:
+
+| `PoseSequence` field | Shape / dtype | Populated from |
+|---|---|---|
+| `landmarks[t, i, 0]` | float32 | `result.pose_landmarks[0][i].x` — normalized `[0,1]` of image **width** |
+| `landmarks[t, i, 1]` | float32 | `result.pose_landmarks[0][i].y` — normalized `[0,1]` of image **height, y grows downward** |
+| `landmarks[t, i, 2]` | float32 | `result.pose_landmarks[0][i].z` — relative depth, same scale as `x`, origin at hip midpoint |
+| **`landmarks[t, i, 3]`** | float32 | **`result.pose_landmarks[0][i].visibility`** — `[0,1]`. **Channel 4 is `visibility`, confirmed present on `NormalizedLandmark` in 0.10.35.** `presence` is ignored (6.5). |
+| `world[t, i, 0:3]` | float32 | `result.pose_world_landmarks[0][i].x/.y/.z` — metres relative to hip midpoint |
+| `timestamps_s[t]` | float64 | Stage 5's actual PTS, full precision, **unmodified** — not the millisecond value handed to MediaPipe |
+| `detected[t]` | bool | `len(result.pose_landmarks) > 0 and len(result.pose_world_landmarks) > 0` |
+| `width_px`, `height_px` | int | `VideoMeta`, post-rotation, post-downscale (640 px long edge) |
+
+Still `(T, 33, 4)` float32, still `(T, 33, 3)` float32, still `(T,)` float64 timestamps, still `(T,)` bool, still 33 landmarks in BlazePose index order, still frozen, still one-line `.npz`-serializable, still no MediaPipe objects on the far side. `world` landmarks remain a cross-check signal only and are never a reported measurement (§5). The golden-fixture strategy in §4.1 needs no change.
+
+The only thing that changes behind the seam is the *numeric content* of `landmarks` — VIDEO mode's filtering is now baked in. That is a measurement change, not a contract change, and it means **existing golden fixtures must be regenerated** once the extractor exists. There were never any to begin with, so nothing is invalidated today.
+
+---
+
+#### 6.10 Budget
+
+| | Dev box (measured) | Cloud Run 2 vCPU (at the assumed 1.5–2.5× factor, §1.20.1) |
+|---|---|---|
+| Landmarker construction (graph + 9 MB float16 load) | 111 ms | ~0.2–0.3 s, once per job |
+| Per frame, VIDEO mode, 640×360, `full` | **19.5 ms** | **~29–49 ms** |
+| 240 frames | 4.7 s | **~7.0–11.8 s** |
+| Startup digest verification | ~30 ms | ~0.05–0.08 s, once per process (not per job) |
+
+**Stage 6 wall time: 8–13 s**, revised down from 14–22 s — not because anything was re-measured, but because the deployment target changed from a 0.5 shared vCPU to an explicitly allocated 2 vCPU and the scaling assumption was re-derived (6.3). This stage remains the largest single line item at roughly 60 % of total wall time, and §1.20's total becomes **14–27 s**.
+
+**Worst case worth naming:** Stage 5's rotation self-check retries the whole clip at +180° if the detection rate falls below 20 %. That retry is a second full VIDEO pass, so the worst-case Stage 6 is **~16–26 s** and the worst-case job is ~23–41 s. Comfortably inside both the 180 s heartbeat window and Cloud Run's 300 s request timeout, and still reported honestly to the poller, but it should be in §1.20's table rather than implicit.
+
+**Memory — flagged as unverified.** The `~100 MB (graph + TFLite arena)` figure in §1.20 was a v1 estimate for the legacy `solutions` API and has **not** been measured for `PoseLandmarker` with the `full` float16 bundle. A reasoned range is 90–130 MB (9 MB of float16 weights, likely dequantised to float32 working buffers, plus the arena and the graph's intermediate tensors). §1.20's memory-*ordering* requirement is unaffected either way — it is a statement about sequencing, not magnitude — but the absolute number should be replaced with a measured RSS delta as the first thing done once the extractor runs, because the 512 MB headroom calculation depends on it.
+
+---
+
+#### 6.11 The single riskiest assumption in this stage
+
+**Named explicitly: that MediaPipe's VIDEO-mode one-euro filter does not displace the racket-hand velocity peak in time by more than one frame (33 ms).**
+
+Everything downstream leans on this. Stage 9 localises contact as the first frame at or after the speed maximum where speed has dropped ≥ 5 % from peak; Stage 7 step 7 chose Savitzky-Golay specifically because it does not time-shift peaks; Stage 9's `contact_absolute_time_s` feeds the ball measurement window, so a shifted peak mislocates the ball measurement as well as the swing metrics. We have now accepted a causal, adaptive filter upstream of all of it, and **we measured its amplitude effect (2.8 % path-length damping) but not its phase effect.** The mechanism argument in 6.3 item 4 — that one-euro lag is minimised at high speed, which is where contact lives — makes this plausible but does not establish it.
+
+The risk is taken knowingly, and it is bounded by the fact that it is **cheaply falsifiable with the assets we already need**. The acceptance test, which must run before this stage is considered done:
+
+1. On each of the 15 golden clips, extract twice — once in VIDEO mode, once in IMAGE mode — and freeze both `PoseSequence` objects.
+2. Run the full pure pipeline on both and compare `ContactDetection.frame_index`. **Acceptance: agreement within ±1 frame on at least 14 of 15 clips.**
+3. Also compare `peak_hand_speed_tu_s`. VIDEO is expected to read slightly lower (damping); **acceptance: within 5 %.** A larger gap means the SG window retune (Stage 7) was insufficient and the window must drop to 5 or the filter chain must be reconsidered.
+4. Record both results in `tests/golden/` so the comparison is a standing regression, not a one-off.
+
+If step 2 fails, the decision in 6.3 must be reopened — and the fallback is not IMAGE mode at 240 frames (which does not fit), but IMAGE mode at a reduced window with the Stage 5 motion scan tightened to compensate. That is a significantly larger change, which is exactly why this test runs first and runs early.
 
 ---
 
@@ -208,7 +614,8 @@ Stage 6's output, wrapped in a frozen dataclass, is the boundary. **Everything b
 
 Order of operations is fixed and matters:
 
-1. **Gate on visibility.** A frame is valid if the mean `visibility` of the 12 core landmarks (shoulders, elbows, wrists, hips, knees, ankles) ≥ 0.5. Invalid frames become gaps.
+1. **Gate on visibility.** A frame is valid if the mean `visibility` of the 12 core landmarks (shoulders, elbows, wrists, hips, knees, ankles) ≥ 0.5. Invalid frames become gaps. `visibility` is MediaPipe Tasks `NormalizedLandmark.visibility`, channel 4 of the seam; `presence` is deliberately not used (§4.1, Stage 6.5).
+1b. **Subject-continuity check — emits `PoseQuality.flags += ["subject_identity_unstable"]`.** Stage 6 runs with `num_poses=1`, so the API returns one person and gives no signal that a second was present; the old `MULTIPLE_SUBJECTS_SUSPECTED` failure is undetectable at the sensor by construction and has been removed from Stage 6's Fails row (it was never an `ErrorCode` member either — §2.1). The detectable symptom is the one that actually matters: MediaPipe silently re-anchoring onto a **different** person mid-clip, which appears as a geometric discontinuity. Flag the clip when, between consecutive *detected* frames, either the mid-hip centroid jumps by more than **0.25 TU** or the per-frame torso length changes by more than **35 %**. This is a pure function of the landmark array, costs nothing, is unit-testable on synthetic keypoints with an injected subject swap, and **fails soft**: the analysis still runs, the flag rides along in `PoseQuality`, and it depresses Stage 9 confidence rather than killing the job.
 2. **Interpolate gaps ≤ 3 frames** (100 ms) linearly per coordinate. Longest gap > 3 → `usable=False`.
 3. **Aspect correction.** Multiply `x` by `width/height`. Skipping this is the classic silent bug: on a 9:16 portrait clip, one unit of normalized x is 0.56 the pixel distance of one unit of y, and every computed angle is wrong by a view-dependent amount. *(The same trap applies to the calibration points — see Stage 11.1, which is why `scale_from_calibration` operates on true pixels, never on normalized coordinates.)*
 4. **Flip y** so up is positive.
@@ -216,11 +623,117 @@ Order of operations is fixed and matters:
 6. **Scale normalization — torso units.** `torso_px = median_t( |mid_shoulder_t − mid_hip_t| )`. Divide all coordinates by it. One TU = one shoulder-to-hip torso length.
    - Why torso length and not shoulder width or height: shoulder width foreshortens catastrophically as the player turns side-on (it can collapse by 60 % during a takeback), and full height requires reliable ankle and head landmarks simultaneously. Torso length is the most view-stable body segment through a tennis swing and stays visible in every phase.
    - The **median over frames**, not per-frame, so the scale is a single constant per clip — a per-frame scale would inject the torso's own foreshortening into every derived velocity.
-7. **Smoothing — Savitzky-Golay, `window_length=7`, `polyorder=2`,** applied independently per coordinate along the time axis, with edge handling by polynomial fit rather than reflection.
-   - Why SG over a moving average: a moving average attenuates and *time-shifts* peaks. Contact detection is fundamentally the localization of a velocity peak; an algorithm that moves peaks is disqualified. In v2 a shifted contact frame would also mislocate the ball measurement window, so this choice now protects two stages.
-   - Why SG over zero-phase Butterworth (`filtfilt`), the biomechanics standard: SG is a single scipy call with no filter-design step, no phase concerns by construction, and its window is directly interpretable in frames. Window 7 at 30 fps is a 233 ms support, roughly a 6 Hz corner — comfortably above the 3–5 Hz fundamental of a swing and below sensor noise.
+7. **Smoothing — Savitzky-Golay, `window_length=5`, `polyorder=2`,** applied independently per coordinate along the time axis, with edge handling by polynomial fit rather than reflection.
+   - **Why the window dropped from 7 to 5 (changed with the Tasks API migration).** Our SG filter is no longer the only low-pass stage in the chain. MediaPipe's VIDEO-mode one-euro filter now sits ahead of it and **cannot be disabled** — there is no `smooth_landmarks` option in the Tasks API (Stage 6.2, 6.3). Two low-pass stages in series at the original settings over-smooth, and the channel that pays is racket-hand speed, whose peak sharpness *is* the signal Stage 9 consumes. Measured evidence that the upstream filter is real and is damping: identical input, IMAGE vs VIDEO mode, gave a mean landmark difference of 0.018775 normalised units (≈12 px at 640 px) and a **2.8 % shorter wrist trajectory** in VIDEO mode. Window 5 keeps the combined response near the original target instead of stacking on top of it.
+   - Why SG over a moving average: a moving average attenuates and *time-shifts* peaks. Contact detection is fundamentally the localization of a velocity peak; an algorithm that moves peaks is disqualified. In v2 a shifted contact frame would also mislocate the ball measurement window, so this choice protects two stages. **This bullet must no longer be read as a claim that the pipeline contains no peak-shifting filter — as of the Tasks API migration it does, upstream, in the sensor, by necessity (Stage 6.3).** SG remains the right choice for the stage we control, and the combined chain's effect on peak *timing* is the explicit open risk, bounded by the ±1-frame IMAGE-vs-VIDEO acceptance test in Stage 6.11.
+   - Why SG over zero-phase Butterworth (`filtfilt`), the biomechanics standard: SG is a single scipy call with no filter-design step, no phase concerns by construction, and its window is directly interpretable in frames. Window 5 at 30 fps is a **167 ms support, roughly a 9 Hz corner** — still above the 3–5 Hz fundamental of a swing, and now sitting downstream of MediaPipe's own filtering rather than carrying the whole noise-rejection burden alone.
 8. **Derivatives.** Velocity by central difference on smoothed coordinates using **actual Δt** from `timestamps_s`. Acceleration by central difference on velocity. Units: TU/s and TU/s².
 9. **Swing direction sign.** `swing_direction_sign ∈ {−1,+1}` = sign of racket-hand x-displacement from takeback-end to contact. Every signed-x metric is multiplied by it, so "forward" means "toward the target" regardless of which way the player faces the camera.
+
+#### 7.1 DEFECT — the gap gate rejects ordinary footage, and the statistic it uses is the wrong statistic (UNIVERSAL; root cause established, fix planned)
+
+> **Status: root-caused on real footage, fix specified here, no code written.** `normalize_sequence` in `backend/app/analysis/normalize.py`, constant `MAX_GAP_FRAMES = 3`.
+
+**The evidence that determines the shape of the fix.** It is tempting to read this as downstream of Defect 1 — a badly centred window would naturally contain more dead time. **It is not.** With `motion_scan_centre_s` monkeypatched to return the true strike time (3.48 s) so that the window correctly becomes `[0.0, 8.0]`, Stage 7 **still fails**: `longest_gap_frames = 98` against a bound of 3. At stock settings, with the miscentred window, it is 156. Fixing Defect 1 moves the number and does not change the verdict.
+
+Failure rate across the corpus: **3 of 6 forehands (gaps 110, 122, 18) and 2 of 7 serves (gaps 156, 88)** — 5 of 13 clips that reach Stage 7 are rejected as unusable before any analysis happens.
+
+**Cause, as observed.** On the ground-truth clip, valid pose exists only over roughly **2.2–4.7 s**. Before that the player is small in frame or turned away during the pre-toss routine; after it there are ~5 s of post-swing recede and off-frame walking. The 8 s analysis window is sized to guarantee *swing context* — enough lead-in for a takeback and enough tail for a follow-through — and nothing about that sizing obliges the clip to hold a detectable pose across all of it. A whole-window rule of "no gap longer than 3 frames" has essentially **zero tolerance for the dead time that ordinary single-camera footage contains by construction**.
+
+**The root cause is that one constant is doing two incompatible jobs.**
+
+- As an **interpolation limit**, `MAX_GAP_FRAMES = 3` is correct and must not be relaxed. Linear interpolation across more than ~100 ms of a swing fabricates a trajectory, and the fabricated trajectory then flows into every velocity, every phase boundary and every metric the product sells. Step 2 of Stage 7 is right to refuse it.
+- As a **usability verdict**, it is measuring the wrong thing. `longest_gap` is a global worst-case over a window most of which is irrelevant to the analysis. A 6 s hole in the tail of the window, after the player has walked out of frame, says nothing whatever about whether the swing is measurable.
+
+**Is `longest_gap` even the right statistic?** No — and this is the substantive architectural finding, not the threshold. What Stages 9, 12 and 13 actually consume is *a contiguous, densely-tracked run of frames that contains the swing*. The question Stage 7 should answer is therefore **"is there such a run, and does it cover the contact region?"** — a question about **coverage near contact**, not about the worst gap anywhere in the window. A clip can have a perfect 2.5 s run through the strike and a catastrophic `longest_gap`, and that clip is fully analysable. The inverse is also true and matters more: a clip with a good-looking `longest_gap` of 3 but valid frames scattered in alternating holes across the window is *not* analysable for velocity, and the current gate passes it.
+
+**Why this is not a threshold change.** The distance between 98 and 3 is two orders of magnitude. That gap is the tell: no single value of `MAX_GAP_FRAMES` satisfies both roles, because the constant is serving two roles. Raising it to 99 to pass this clip would (a) authorise linear interpolation across 3.3 s of missing swing — fabricating precisely the trajectory the pipeline exists to measure, in direct violation of CLAUDE.md's anti-fabrication stance — and (b) still be a whole-window worst-case statistic, which the next clip with a 6 s dead stretch defeats anyway. **Retuning the constant to pass one clip is the explicit anti-pattern here**, and §9.1 round 3 is this document's standing precedent for what retuning a threshold on this data buys: byte-identical results across a sweep.
+
+##### 7.1.1 The ordering problem, stated before the fix
+
+Anchoring usability to "where the swing is" requires knowing where the swing is. Swing location is Stage 9's output; Stage 9 consumes a `NormalizedSequence`, which is Stage 7's output, which is what the verdict gates. That is a genuine circular dependency and it has to be broken explicitly rather than stepped around. Three ways out were considered:
+
+1. **Run Stage 9 first, on raw landmarks.** Rejected. Stage 9 consumes normalised, origin-shifted, torso-scaled, smoothed coordinates and a `swing_direction_sign`, all of which are Stage 7 products. Running it on raw data is not "Stage 9 early," it is a different algorithm with no validation behind it.
+2. **Emit the sequence unconditionally and move the verdict to the orchestrator, after Stage 9.** Architecturally honest, and it is the runner-up. Rejected as primary for two reasons: it moves a `POSE_QUALITY_TOO_LOW` decision out of the stage that owns `PoseQuality`, and it requires Stage 9 to run over a sequence containing 98-frame holes, where `forward_swing_window_start` and the plateau walk of step 4 traverse absent or fabricated data. Letting the detector run on data the quality stage has already judged unusable inverts the purpose of having a quality stage.
+3. **Anchor on a cheap signal Stage 7 can compute itself. — RECOMMENDED.** Stage 7 already computes per-frame validity in step 1. The anchor needs to be good to ±0.5 s, not to ±1 frame, and a signal that coarse does not need contact detection.
+
+##### 7.1.2 Proposed change — a two-tier verdict
+
+**Tier 1 — interpolation (unchanged).** Gaps of ≤ 3 frames are interpolated linearly, exactly as today. Gaps longer than 3 frames are **not** interpolated; those frames stay marked invalid and are carried forward as a mask rather than being filled. This is a correctness rule about fabrication and it is not being relaxed — only *decoupled* from the verdict.
+
+**Tier 2 — usability, judged over a core sub-window anchored to the swing.**
+
+The anchor is computed without Stage 9:
+
+- `anchor_index` = the centre of the **longest contiguous run of valid frames** in the window. If that run is longer than the core window, refine within it using the frame of maximum summed two-wrist displacement from mid-hip — a scale-free proxy that needs neither handedness nor smoothing. **This is a coarse anchor and must never be described or reused as contact detection.** It exists to place a 2 s box, and it is allowed to be half a second wrong.
+
+Proposed signatures:
+
+```python
+# backend/app/analysis/normalize.py  —  PURE
+
+def longest_valid_run(valid: np.ndarray) -> tuple[int, int]: ...
+
+def core_window_indices(
+    valid: np.ndarray,
+    timestamps_s: np.ndarray,
+    xy: np.ndarray,
+    *,
+    core_window_s: float = CORE_WINDOW_S,
+) -> tuple[int, int]: ...
+
+def core_coverage(valid: np.ndarray, core: tuple[int, int]) -> float: ...
+```
+
+Proposed constants, each with its justification rather than its provenance:
+
+| Constant | Proposed | Justification |
+|---|---|---|
+| `CORE_WINDOW_S` | **2.0 s** (±1.0 s about the anchor) | A swing from takeback-end through follow-through runs ~0.6–1.2 s, and Stage 12 needs all four phases plus margin. 2.0 s is 60 frames at 30 fps — comfortably more than the longest phase structure observed, with room for the accepted Stage 9 `+1` residual. It is also shorter than the ~2.5 s of valid pose measured on the failing ground-truth clip, so that clip passes; **that is a consequence of the sizing, not the reason for it.** |
+| `MIN_CORE_COVERAGE` | **0.90** | 10 % of 60 frames is 6 frames. Because Tier 1 still refuses any single gap over 3, those 6 lost frames must arrive as at least two separate short gaps to get this far; a single 6-frame hole is already caught by `MAX_CORE_GAP_FRAMES` below. The two rules are deliberately redundant in opposite directions — one bounds total loss, the other bounds concentrated loss. |
+| `MAX_CORE_GAP_FRAMES` | **3** | Unchanged bound, newly *scoped*. Inside the core, a gap over 3 frames is still disqualifying, for exactly the fabrication reason Tier 1 gives. Outside the core it is recorded, flagged, and tolerated. |
+
+**Whole-window statistics survive as diagnostics, not as the verdict.** `PoseQuality.longest_gap_frames` keeps its present meaning and stays in the response — it is genuinely informative and existing consumers read it. Add alongside it: `core_window_start_s`, `core_window_end_s`, `core_coverage_fraction`, `longest_core_gap_frames`, and a `dead_time_outside_core` flag raised when the whole-window gap exceeds the bound but the core passes. That flag is what makes the new tolerance auditable: a reviewer can see that the clip was admitted *despite* a 98-frame hole, and where the hole was.
+
+**Contract consequence for downstream stages.** Frames outside the core, and unfilled gaps inside the window, are not trustworthy and must be marked as such rather than silently looking like data. Stage 7 already has the `valid` array; it should be carried on `NormalizedSequence` so Stages 9, 12 and 13 can compose it. Stage 9 already does exactly this kind of composition — `racket_wrist_reliable` ANDs per-landmark visibility across `i-1, i, i+1` — so the mask fits the existing discipline rather than introducing a new one. See `docs/PIPELINE_STAGES_12_14_15.md` §A.5 and §A.6, which already specify how Stage 12 degrades when the data is too thin to segment; **those rules should key off this mask rather than re-deriving validity**, and this section deliberately does not restate them.
+
+**One thing this fix explicitly does not do:** it does not fix Defect 3. On the ground-truth clip the wrongly selected source frame 71 sits at ~2.84 s, inside the 2.2–4.7 s valid run and inside any core window anchored near the strike. Restricting Stage 9's peak search to the core would not have excluded it. The two defects are independent and must be validated independently.
+
+##### 7.1.3 Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| Raise `MAX_GAP_FRAMES` to ~120 | Authorises interpolation across seconds of absent swing — fabrication, and the exact thing CLAUDE.md forbids. Still a whole-window worst-case statistic, so the next clip with a longer dead stretch fails anyway. Passes one clip; fixes nothing. |
+| Keep a whole-window gate but switch it to a **valid-frame fraction** (e.g. ≥ 60 % valid) | Coverage without contiguity is not the signal. A clip 60 % valid in alternating holes is unusable for central-difference velocity; the failing ground-truth clip is ~30 % valid, entirely contiguous, and perfectly analysable. This inverts the correct verdict on both. |
+| Shrink the analysis window to 4 s to reduce dead time | Does not remove dead time, only re-centres it — and it makes the verdict depend on Defect 1's centring being correct, trading one defect's fix for exposure to another's. Also costs Stage 12 its pre-takeback context. |
+| Trim the window down to the longest valid run and analyse only that | Close to the recommendation, and the considered runner-up. Rejected as primary because it makes the analysed window length clip-dependent, which changes the frame counts that every downstream metric, phase boundary and test currently assumes. Anchoring the *verdict* is far cheaper than re-cutting the *window*. Worth revisiting if core-window tuning proves fragile. |
+| Move the verdict to the orchestrator after Stage 9 | Option (2) in §7.1.1 — takes the `PoseQuality` decision away from the stage that owns it and runs the detector over holes. |
+
+##### 7.1.4 Test strategy
+
+**Why the unit suite is green against a defect that rejects 5 of 13 real clips:** the synthetic fixtures in `backend/tests/unit/analysis/synthetic.py` and `synthetic_swing.py` produce sequences that are valid end to end. Real footage is valid in the middle and absent at both ends. The synthetic data cannot express the shape of the failure, so no amount of unit testing was ever going to find it. **Fixing the fixture generator is part of this change, not a follow-up.**
+
+- **New fixture builder** parameterised by `(clip_len_s, valid_run_start_s, valid_run_len_s)`, emitting a `PoseSequence` with invalid frames outside the run. Every test below is built on it.
+- **`backend/tests/unit/analysis/test_normalize.py::test_normalize_sequence_interpolates_short_gaps_and_rejects_long_ones` MUST CHANGE.** It encodes the whole-window rule directly and will fail by design. Split it in two, so that the surviving half is not weakened by the new half: `test_interpolation_still_refuses_gaps_longer_than_three_frames` (Tier 1, semantics unchanged, asserts that long gaps are left unfilled rather than interpolated) and `test_a_long_gap_outside_the_core_window_does_not_make_the_clip_unusable` (Tier 2, new).
+- `test_the_anchor_picks_the_longest_valid_run_when_there_are_two` — two runs of different lengths, assert the core lands on the longer.
+- `test_the_core_window_clamps_at_the_sequence_ends` — anchor near frame 0; the core must not run off the array and must not silently shrink below a floor without saying so.
+- `test_a_four_frame_hole_inside_the_core_makes_the_clip_unusable` — the rule that must still bite.
+- `test_the_same_hole_three_seconds_outside_the_core_is_tolerated_and_flagged` — assert `usable is True` **and** `dead_time_outside_core` in `flags`. Tolerating silently would be a new silent failure replacing an old loud one.
+- `test_core_coverage_below_the_minimum_is_unusable` — scattered short gaps inside the core, each individually legal under Tier 1.
+- `backend/tests/unit/analysis/test_normalize.py::test_normalize_sequence_flags_a_subject_swap_but_stays_usable` is **unaffected** and must stay passing — it is the existing precedent for "flag, do not fail," and this change extends that pattern rather than replacing it.
+- **Purity:** `normalize_sequence` and all new helpers stay pure and I/O-free. `backend/tests/unit/analysis/test_analysis_purity.py` covers this and needs no change, but the new helpers must be inside its scope.
+- **Integration:** `backend/tests/integration/test_pipeline_end_to_end.py::test_default_settings_fail_on_pose_quality` asserts today's failure at stock settings and **must change** — after this fix the ground-truth clip should reach Stage 9. Re-point it at a fixture that genuinely *is* unusable (a hole through the contact region) rather than deleting it; the "clip is honestly rejected" path still needs a test.
+
+##### 7.1.5 Re-validation required
+
+**Land Defect 1 first.** The core anchor is computed inside a window Stage 5 places, so measuring this change against miscentred windows measures the wrong thing.
+
+Re-run the full 16-clip corpus recording, per clip: window bounds, valid-run extents, anchor time, core window, `core_coverage_fraction`, `longest_core_gap_frames`, whole-window `longest_gap_frames`, and the verdict. Acceptance, both halves required:
+
+1. **The 5 currently-failing clips reach Stage 9** (forehands at gaps 110, 122, 18; serves at 156, 88).
+2. **No clip that currently produces a usable sequence becomes unusable.**
+
+And the criterion that is *not* acceptance: **a higher pass rate is not the goal.** A clip with a genuine 4-frame hole through contact must still be rejected, and the corpus run must include at least one such case — synthetic if the corpus does not contain one — to demonstrate the gate still has teeth. A gate that passes everything is not a fix, it is a deletion.
 
 ---
 
@@ -236,6 +749,8 @@ Order of operations is fixed and matters:
 Racket hand = the wrist with the greater score on: integrated path length (Σ‖Δp‖) over the clip, **and** peak radial distance from mid-hip. Confidence = normalized margin between the two wrists, clipped to `[0,1]`. Tie-break: the wrist further from mid-hip at the peak-speed frame.
 
 Two-handed backhands are the known failure case — both wrists move nearly identically. This is *why* `Handedness` is detected separately from grip: two-handedness is decided in Stage 13 by wrist separation, and handedness falls back to the user hint whenever confidence < 0.5. The client always sends `handedness_hint` from the user profile, so this is a fallback that is essentially always available.
+
+> **VALIDATION GAP -- Stage 8's own discrimination does not work on real footage.** Two-handed backhands are no longer the *only* failure case. On real clips (§9.1) confidence stayed in **0.05-0.36** on every clip tested, never reaching the 0.5 override threshold, and the detected hand was **wrong on more than half of a 7-clip batch** of visually-confirmed right-handed players -- after the visibility fix, not before it. The hint path is confirmed working (it correctly overrode wrong detections on `serve_01` and `serve_04`), so the shipped system is correct in practice; but the hint is currently the **primary** signal, not the fallback, and `source="detected"` with `confidence >= 0.5` is not a state real footage has yet produced. A request with no hint, or with a wrong profile hint, has no safety net and fails **silently** -- see the Stage 13 note on handedness-sensitive metrics.
 
 ---
 
@@ -253,15 +768,169 @@ There is no ball landmark at this point in the pipeline, so contact must be infe
 Algorithm, fixed:
 
 1. Compute racket-hand speed `s(t)` in TU/s.
-2. Find the global maximum `t_peak`.
+2. Find the global maximum `t_peak` **over visibility-reliable frames only**. A frame is reliable when the racket wrist's own `visibility` channel clears threshold at `i-1`, `i` and `i+1` -- all three, because velocity is a central difference and a single unseen neighbour corrupts it. Stage 7 step 1 gates on the *mean* visibility of 12 landmarks, which one occluded wrist cannot move far, so a frame can pass Stage 7 while that specific wrist is hallucinated; the resulting one-frame position jump is a velocity spike taller than any real swing in the clip and a bare `argmax` picks it every time. If no frame is reliable the search falls back to the unrestricted `argmax` and the motion gates in step 5 are what say so.
 3. Restrict to the **forward-swing window**: frames after the last local minimum of forward displacement preceding `t_peak`.
-4. **Contact = the first frame at or after `t_peak` where `s` has dropped by ≥ 5 % from its peak** — the deceleration onset. Rationale: in a well-struck ball the hand is still accelerating or at plateau *into* the ball; the abrupt decel is the impact and the start of the arm's braking. Using the raw argmax alone systematically lands 1–2 frames early.
-5. Sanity gates, each of which lowers confidence rather than rejecting: wrist must be forward of mid-hip (`x·swing_direction_sign > 0`), arm near-extended relative to its own clip range, contact not within 4 frames of either clip end.
-6. `prominence_ratio` = peak speed ÷ second-highest well-separated peak. Confidence is a monotone function of this ratio and the sanity gates.
+4. **Contact = the last frame of the peak's sustained-speed plateau.** Walk forward from `t_peak` while `s` stays at or above **45 %** of the peak (`SUSTAINED_SPEED_FRACTION`). If that run reaches **2** frames (`MIN_SUSTAINED_RUN_FRAMES`) it is a genuine plateau and its **last** frame is returned; otherwise the peak was a one-frame spike and the peak itself is returned. The walk is bounded at **4** frames (`MAX_SUSTAINED_RUN_FRAMES`). Rationale: in a well-struck ball the hand is still accelerating or at plateau *into* the ball, and the deceleration onset is the frame the hand stops travelling at *swing* speed -- not the first frame it dips at all. Those coincide only on a smooth curve, and the measured racket-hand curve is not smooth: it routinely loses **15-45 %** of its height in the single frame after a real peak, because Stage 7's Savitzky-Golay window of 5 bleeds a sharp spike into its immediate neighbours by construction. A "dropped by >= X %" rule therefore fires at `t_peak + 1` for every X up to ~50 %, which made the old 5 % rule, in practice, `return peak + 1` -- a sweep from 1.5 % to 10 % produced byte-identical detections on all 7 real test clips, and a measured 2-frame late bias (§9.1). The `min_run` fallback is why a one-frame spike no longer overshoots; the `max_run` bound is why a broad, slowly-decaying peak cannot drag the answer into the follow-through (at 25-30 fps the whole impact-and-brake event is over inside ~150 ms). `max_run` was inert on every real clip measured -- longest observed plateau: 3. If the clip ends before the hand decelerates the last frame is returned, which then trips `contact_near_clip_end` and depresses confidence rather than pretending to know.
+5. Sanity gates, each of which lowers confidence rather than rejecting. The full flag vocabulary is exactly: `wrist_behind_mid_hip` (wrist must be forward of mid-hip, `x·swing_direction_sign > 0`; ×0.6), `arm_not_extended` (arm-to-shoulder reach below 60 % of this clip's own observed range; ×0.8), `contact_near_clip_end` (within 4 frames of either clip end; ×0.7), `subject_identity_unstable` (propagated from `PoseQuality.flags`; ×0.7), `motion_not_sustained` (×0.3, `MOTION_ABSENT_PENALTY`), and `racket_wrist_unobserved` (raised when the reliable-frame share is 0). **`sequence_unusable`** is the single flag on the degenerate return (fewer than 3 frames, or any internal failure -- Stage 9 cannot raise).
+5b. **Motion presence.** The four gates above test static *geometry* only -- where the wrist is, how extended the arm is -- so a motionless player holding a ball satisfies every one of them; this was confirmed on real footage, where a stationary subject scored the highest confidence in its batch (0.766) with zero gates firing. `motion_not_sustained` demands positive, *local* evidence that a swing happened, evaluated at `t_peak` (the leading edge of the event, since a hard genuine swing may legitimately halve in the next frame). Three independent ways to fail, because a fabricated speed event can look healthy on any one alone: (a) the peak does not belong to a run of >= **2** frames (`MIN_MOTION_RUN_FRAMES`) that are both reliable and at >= **50 %** of peak (`MOTION_SPEED_FRACTION`); (b) fewer than **50 %** (`MIN_APPROACH_COVERAGE`) of the **6** frames before the peak (`APPROACH_WINDOW_FRAMES`) were already reliable and above **15 %** of peak (`APPROACH_SPEED_FRACTION`) -- a real swing ramps in, a tracking snap out of a static trophy-hold does not; (c) more than **10 %** (`MAX_HELD_FRACTION`) of the reliable frames within **40** frames (`MOTION_NEIGHBOURHOOD_FRAMES`) have *exactly* zero speed, meaning the coordinate was held (an interpolated gap or a carried-forward detection) rather than tracked. Test (a) alone is self-referential -- it measures the peak against a fraction of itself -- and on the measured batch it is anti-correlated with correctness, which is why (b) and (c) exist and why `MIN_MOTION_RUN_FRAMES` was not simply raised. All comparisons are deliberately biased toward silence: a gate that fires on a good swing costs more than one that stays quiet on a bad one, because below 0.35 the orchestrator downgrades to `partial` and refuses ball speed.
+6. `prominence_ratio` = peak speed ÷ second-highest well-separated peak (separation >= 5 frames; capped at 10.0; rivals are likewise restricted to visibility-reliable frames, since an occlusion spike is not a rival swing). Confidence is a monotone ramp in this ratio between 1.1 and 2.5 into `[0.35, 1.0]`, then **multiplied by the observed fraction** (the share of frames in which the racket-hand velocity was trustworthy at all -- every unobserved frame is a frame that could have held the real contact), then multiplied by one penalty per sanity gate that fired.
 
 `confidence` is surfaced in the response and gates the feedback tone (Stage 16).
 
 **New field: `contact_absolute_time_s`.** `time_s` is measured from `analysis_window_start_s`; Stage 10 seeks into the *original* file and therefore needs an absolute PTS. `contact_absolute_time_s = analysis_window_start_s + time_s` is computed once, here, and carried explicitly. On a 60 s clip with an 8 s window this is the difference between measuring the right 250 ms and measuring nothing — an off-by-a-window bug that would be invisible on the short test clips a developer would naturally use.
+
+#### 9.1 Real-footage validation -- first pass, and what it cost
+
+**This is the first time Stage 9 has been run against real (non-synthetic) footage.** Everything above this subsection had previously been validated only against generated keypoint data, which is smooth, fully visible, and always contains exactly one swing. Three rounds against real clips each found and fixed a genuine bug. Each round's fix was confirmed by **direct visual inspection of the video frames** -- racket-at-ball-strings versus follow-through position, on multiple clips -- not merely by numeric agreement with a reported index.
+
+**Round 1 -- the `visibility` channel was never read.** Neither Stage 8 nor Stage 9 consulted the per-landmark `visibility` that `NormalizedSequence` already carried. Stage 7's frame-level gate only checks *mean* visibility over 12 core landmarks, so a frame passes overall while one specific wrist is individually occluded, and that hallucinated position then received full weight in Stage 8's path-length integration and Stage 9's central-difference velocity. Two distinct failures followed: Stage 8's path-length/radius comparison could be *inverted* by an occluded wrist's spurious displacement, and Stage 9's `argmax` preferred a tracking-glitch spike over the real, lower-speed swing peak. Fixed by introducing per-frame racket-wrist reliability (visible at `i-1`, `i`, `i+1`), restricting the peak search and the prominence rivals to reliable frames, scaling confidence by the observed fraction, and adding optional visibility masking to Stage 8's `path_length` and `peak_radial_distance` with confidence scaled by the worse-observed wrist's coverage.
+
+**Round 2 -- every sanity gate was static geometry.** Wrist-forward-of-hip and arm-extension-relative-to-clip-range are both satisfiable by a motionless player holding a ball. Confirmed on real footage: a stationary subject scored confidence **0.766**, the highest in that batch, with **zero** gates firing, because a single-frame occlusion-driven velocity spike was read as a swing peak. Fixed by adding the motion-presence check described in step 5b, plus `racket_wrist_unobserved` for the case where nothing was observable at all.
+
+**Round 3 -- the deceleration-onset rule was doing nothing.** With rounds 1-2 in place, testing against **5 hand-labelled ground-truth contact events** (Pexels serve footage, ball-on-strings frame, ±1 frame human labelling precision) showed a systematic bias: the old step 4 landed exactly **2 frames late in 4 of 5 cases and 2 frames early in the 5th**. Root cause, empirically confirmed: because real racket-hand speed loses 15-45 % of its height in the frame after any peak, the ">= 5 % below peak" condition was trivially true at `peak + 1` regardless of the threshold's configured value -- a sweep from 1.5 % to 10 % produced **byte-identical** detections on all 7 test clips. The function was, in practice, `return peak + 1`. Replaced with the sustained-plateau walk in step 4 above.
+
+**Accepted residual -- a consistent +1 frame, cause unresolved.** After round 3 the early case corrected to exactly 0 and all four late cases converged to **+1**: detection is one frame after hand-labelled truth on **4 of 5** real events, exact on the 5th. Whether this is a genuine small algorithmic bias or noise inside the ±1-frame precision of the human labels **is not established**, and was explicitly flagged as unresolved by the engineer who found it. **This residual is accepted and documented, not solved and not silently absorbed.** If a future round establishes tighter ground truth and the +1 persists, the recommended next step is **sub-frame interpolation of the speed peak -- not another threshold retune**; round 3 is the standing evidence that retuning a threshold on this curve changes nothing. Downstream consumers of `frame_index` should treat it as carrying a possible systematic `+1` in addition to ordinary noise (see the Stage 12/13 notes on windows narrower than ~4 frames).
+
+**Still open -- Stage 8's independent discrimination is not validated and is weak on real footage.** Even after the round-1 visibility fix, Stage 8's path-length/radial-distance separation stayed at **confidence 0.05-0.36 on every real clip tested** -- never once reaching the 0.5 hint-override threshold -- and it selected the **wrong hand on more than half** of a 7-clip batch of visually-confirmed right-handed players. The system works in practice **only** because Stage 3/the client always supplies `handedness_hint` and Stage 8's design already gives the hint priority below 0.5 confidence. That fallback path *is* validated as functioning: on `serve_01` and `serve_04` the wrong-handed detection was correctly overridden by the hint. **What is not validated is Stage 8's hint-free discrimination.** A user who omits a hint, or whose profile hint is itself wrong, has **no safety net** -- the wrong wrist is then fed to Stage 9's speed curve, to `swing_direction_sign`, and to every handedness-sensitive Stage 13 metric, all of which will produce normal-looking numbers. Treat a present, correct `handedness_hint` as a **precondition** of trusting Stages 9 and 13, not as a convenience.
+
+#### 9.2 DEFECT — Stage 9 computes a candidate-rejection signal and then ignores it (fix planned; severity is serve-specific)
+
+> **Status: diagnosed against hand-labelled ground truth, fix specified here, no code written.** `backend/app/analysis/contact.py`, the `GATE_PENALTIES` application at the end of `detect_contact_frame`.
+
+**The observed failure.** On the ground-truth clip Stage 9 returns **source frame 71 with confidence 0.043**, carrying the flags `arm_not_extended`, `wrist_behind_mid_hip` and `motion_not_sustained` — and returns it anyway. Frame 71 is visually confirmed as mid-raise, with the racket down near the hip. True contact is **frame 87**, at full extension, striking the ball. The system computed three independent signals saying "this cannot be a contact," recorded all three in the response, and used them only to make the wrong answer's confidence small.
+
+**Root cause, in two layers. Both need stating; neither alone explains the failure.**
+
+**(a) Architectural — the gates are post-hoc discounts on a decision already made.** `peak_speed_index` returns a single `argmax`; `find_deceleration_onset` walks it to a contact index; *then* step 5's gates run, and `confidence *= GATE_PENALTIES[flag]` applies. There is only ever one candidate, so a physically implausible one cannot lose — there is nothing for it to lose to. The gates are, structurally, a commentary track on a fixed decision. This is the layer the fix addresses.
+
+**(b) Kinematic — why the `argmax` is wrong on serves in the first place.** The wrist-speed proxy peaks **during the explosive arm drive, roughly 0.6 s before contact.** The racket head's final acceleration into the ball comes from forearm pronation and wrist snap — rotation *about* the wrist — at a moment when the wrist's own translational speed has already fallen. Measured on this clip: **~9–11 units/s at frame 71 versus ~2.6–3.9 at frames 86–88.** The selected frame is not a tracking glitch and not a noise artefact; it is the true global maximum of the quantity Stage 9 measures. The quantity is a proxy, and on a serve the proxy and the target diverge by design.
+
+On forehands, wrist and racket travel together through the hitting zone, so the proxy lands close to contact and this divergence is small. **Severity is therefore serve-specific — but the supported claim is "serves need distinct handling," not "groundstrokes are fine."** Only 3 forehands reached Stage 9 at all, and only 1 of those was cleanly confirmable against a hand label. That is not enough to clear groundstrokes, and this section does not clear them.
+
+This layer is **not** fixed by the change below. Candidate filtering removes an implausible winner; it does not make the wrist-speed proxy a good estimator of racket-head timing on a serve. A proper fix for (b) is a racket-head kinematic proxy — a wrist-to-elbow segment orientation rate, or an elbow-anchored extension velocity — and that is a separate, larger piece of work with its own validation. **Filtering is the correct first move because it converts a confidently wrong answer into either a right one or an honest failure**, which is the property (b) currently lacks.
+
+##### 9.2.1 Proposed change — promote two gates from post-selection discount to pre-selection filter
+
+Proposed signatures:
+
+```python
+# backend/app/analysis/contact.py  —  PURE
+
+#: Gates that EXCLUDE a candidate before selection.
+FILTER_GATES: Final[frozenset[str]] = frozenset({"wrist_behind_mid_hip", "arm_not_extended"})
+
+def candidate_peak_indices(
+    speed: np.ndarray,
+    reliable: np.ndarray,
+    *,
+    window_start: int,
+    separation: int = PEAK_SEPARATION_FRAMES,
+    max_candidates: int = MAX_CANDIDATES,
+) -> list[int]: ...
+
+def candidate_rejection_flags(
+    seq: NormalizedSequence,
+    handedness: Handedness,
+    index: int,
+) -> list[str]: ...
+
+def select_contact_index(
+    seq: NormalizedSequence,
+    handedness: Handedness,
+    speed: np.ndarray,
+    reliable: np.ndarray,
+    *,
+    window_start: int,
+) -> tuple[int | None, list[str], list[tuple[int, list[str]]]]: ...
+```
+
+The third element of `select_contact_index`'s return is the **audit trail**: every candidate considered and why it was rejected. It is not decoration — the re-validation in §9.2.5 cannot be performed without it, and a filter whose rejections are invisible is how a rejection-all rate becomes a mystery instead of a measurement.
+
+Algorithm:
+
+1. **Enumerate candidates instead of taking one `argmax`.** All local maxima of `s(t)` over visibility-reliable frames within the forward-swing window, separated by at least `PEAK_SEPARATION_FRAMES` frames, ordered by descending speed, capped at `MAX_CANDIDATES` (proposed **5**). **Reuse the separation constant that step 6's prominence calculation already defines (≥ 5 frames)** — one constant, not two with the same meaning drifting apart.
+2. **Walk each candidate through the existing plateau rule of step 4** to get the index that candidate would actually return. The filter is applied to the *returned* frame, not the peak. Applying it to the peak would check a frame the function is not going to return, and the plateau walk moves the answer by up to 4 frames.
+3. **Apply the filter set.** The first candidate passing every gate in `FILTER_GATES` wins. Deduplicate: two candidates whose plateau walks converge on the same index are one candidate.
+4. **The remaining gates continue to discount confidence exactly as today**, applied to the winner. No change to `GATE_PENALTIES` values.
+5. **If no candidate passes**, return the degenerate detection described in §9.2.3.
+
+##### 9.2.2 Which gates filter, which only penalise — and why
+
+| Flag | Role | Reasoning |
+|---|---|---|
+| `wrist_behind_mid_hip` | **FILTER** | `x · swing_direction_sign > 0` is a statement about physical possibility, not about quality: a ball cannot be struck forward with the hand behind the hips. It is also the gate with the least threshold content in it — it compares against zero, so there is no tuned constant to be wrong about. |
+| `arm_not_extended` | **FILTER, with a guard** | Clip-relative (60 % of the clip's own observed reach range), which makes it robust to body size and camera distance but *dependent on the clip containing a genuine extension*. On a mishit or a practice swing the range collapses and "60 % of nothing" is meaningless. **Keep `ARM_EXTENSION_MIN_RATIO = 0.60` for filtering, but require the clip's observed reach range to exceed an absolute floor (`ARM_RANGE_MIN_TU`, order 0.15 TU — roughly a tenth of an arm length, to be SET FROM CORPUS MEASUREMENT, not guessed) before the filter is permitted to reject.** Below that floor it degrades to a penalty. A filter that rejects on a degenerate denominator converts a low-confidence answer into a job failure for zero information gain. |
+| `contact_near_clip_end` | **PENALISE only** | A real contact genuinely can occur within 4 frames of a clip edge — the user trimmed the clip, or started recording late. Filtering it would reject *correct* answers, which is the one failure mode a filter must not have. Its ×0.7 discount already says the right thing. |
+| `motion_not_sustained` | **PENALISE only, for now** | The most powerful gate (×0.3) and the most composite — three independent sub-tests (step 5b a/b/c), of which **(a) is self-referential and was measured anti-correlated with correctness** on the real batch. Promoting a composite whose strongest component is known to be anti-correlated is how you build a filter that rejects good swings. Revisit only after each sub-test's precision has been measured *separately* against labelled contacts. Noted honestly: this flag fired on frame 71 and would have helped here. That is one clip, and it is not enough to license it. |
+| `subject_identity_unstable` | **PENALISE** | A property of the *clip*, not of the *candidate*. It takes the same value for every candidate and therefore has no discriminating power by construction — filtering on it would reject all candidates or none. |
+| `racket_wrist_unobserved` | **PENALISE** | Already the terminal case; nothing was observable, so there is nothing to filter between. |
+
+##### 9.2.3 What happens when the filter rejects every candidate
+
+**The recommendation is to return nothing honestly.** `CONTACT_NOT_FOUND` already exists as an `ErrorCode` member (`backend/app/models/enums.py:188`) and is currently unreachable; this change is what reaches it.
+
+**Say the cost plainly: this raises the job-failure rate.** On the current corpus it will convert some silently-wrong analyses into visible failures, and a user who today gets a plausible-looking scorecard will instead get an error. That is the correct trade, and the reason is specific rather than a general preference for honesty: a wrong contact frame does not stay local. It sets Stage 12's phase boundaries, therefore every Stage 13 metric, therefore Stage 14's shot type, Stage 15's score and Stage 16's coaching text — all of which come out looking entirely normal and are entirely wrong. A `contact_not_found` is locally diagnosable and locally honest. A wrong frame is neither.
+
+Two constraints on how it is returned:
+
+1. **Stage 9 still cannot raise.** That is its contract (the Fails row above) and it is not being changed. The degenerate return is a `ContactDetection` with `confidence = 0.0` and a new sanity flag `contact_not_found`, distinct from the existing `sequence_unusable` (which means "fewer than 3 frames or internal failure," a different condition). **The orchestrator** maps that flag to `ErrorCode.CONTACT_NOT_FOUND`. That mapping belongs in `docs/PIPELINE_STAGES_12_14_15.md` §E.2 (`ErrorCode` per stage) and interacts with §E.3 (skippable stages) and §E.4 (`complete` vs `partial`); **it must be amended there, not duplicated here.**
+2. **Pre-commit to a rate before measuring it.** Run the filter over the 16-clip corpus and record the all-rejected rate. **If it exceeds ~20 %, the filter is too strict and `ARM_RANGE_MIN_TU` is the first thing to revisit, not the last.** Writing the number down in advance is what stops it being rationalised afterwards.
+
+##### 9.2.4 Interaction with the accepted `+1` frame residual — the binding design constraint
+
+§9.1 records an accepted, unresolved **`+1` frame** residual: detection lands one frame after hand-labelled truth on 4 of 5 real events. The filter runs on the plateau-walked index, so that residual sits **inside** the quantity being filtered. A filter that evaluates the true contact frame one frame late, at a moment when the arm has begun to fold or the wrist has begun to cross back, would reject the correct answer — and a filter that rejects correct answers is strictly worse than the defect it replaces.
+
+**Therefore: a candidate is rejected only if it fails the gate at `i-1`, `i` **and** `i+1` — all three.** This mirrors the three-frame rule already used by `racket_wrist_reliable` in step 2, so it is the existing discipline rather than a new one, and it makes the filter tolerant of exactly the ±1 uncertainty the document already admits to carrying. A one-frame dip below the extension threshold at the true contact frame cannot reject it.
+
+**This is the single most important constraint on the change** and the test named for it in §9.2.5 is the one that must not be allowed to go soft.
+
+##### 9.2.5 Why this is an algorithm change and not a threshold change
+
+No value of any existing constant produces the right answer. Confidence on frame 71 was already **0.043** — well below the 0.35 threshold at which the orchestrator downgrades to `partial` and refuses ball speed — and the pipeline returned frame 71 regardless, because confidence gates the *tone* (Stage 16) and *ball speed* (Stage 11), never the *selection*. Driving every penalty to 0.0 would change `confidence` to 0.0 and leave `frame_index = 71` untouched. **The thing that is missing is a second candidate, and no constant creates one.** This is the same lesson as §9.1 round 3, arriving from a different direction.
+
+##### 9.2.6 Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| Make low confidence fail the job instead of downgrading it | Frame 71 scored 0.043 and was returned; a confidence floor would turn it into a failure without ever finding frame 87. It converts wrong answers into failures but never into right ones. |
+| Search for the *second* peak when gates fire on the first | A special case of candidate enumeration with a hard-coded depth of 2 and no ordering rule. The general form costs no more and is testable. |
+| Replace the wrist-speed proxy with a racket-head proxy now | The correct long-term fix for root cause (b), and out of scope here. It is a new signal requiring its own ground-truth validation, and it does not remove the need for plausibility filtering. Sequence it after this change, with §9.2.7's extended ground truth in place to measure it against. |
+| Filter on all six flags | Rejects correct answers via `contact_near_clip_end`, and filters on `subject_identity_unstable`, which cannot discriminate between candidates at all. |
+| Restrict the peak search to Stage 7's new core window (Defect 2) | Would not have helped: frame 71 sits at ~2.84 s, inside the 2.2–4.7 s valid run and inside any core window anchored near the strike. Stated here because the two defects look related and are not. |
+
+##### 9.2.7 Test strategy
+
+**Unit — `backend/tests/unit/analysis/test_contact.py`:**
+
+- **MUST CHANGE — `test_gate_wrist_behind_mid_hip_lowers_confidence` and `test_gate_arm_not_extended_lowers_confidence`.** Both assert the contract this change reverses, and both will fail. Replace with `test_a_candidate_with_the_wrist_behind_mid_hip_is_not_selected` and `test_a_candidate_with_an_unextended_arm_is_not_selected`, each built on a synthetic sequence carrying **two** speed peaks where the taller one is implausible — the shape the current fixtures cannot express.
+- **MUST NOT CHANGE — `test_gate_contact_near_clip_end_lowers_confidence` and `test_gate_subject_identity_unstable_lowers_confidence`.** These two staying green is the deliberate asymmetry of §9.2.2, and the tests are the durable record of it. If a later change makes them fail, the asymmetry has been lost.
+- `test_the_correct_frame_is_not_rejected_by_a_one_frame_dip` — the §9.2.4 constraint, expressed directly: a sequence whose true contact frame momentarily dips below the extension threshold must still be selected.
+- `test_all_candidates_rejected_returns_contact_not_found` — assert `confidence == 0.0`, the `contact_not_found` flag present, and **that Stage 9 did not raise**.
+- `test_candidate_enumeration_respects_separation_and_cap`.
+- `test_a_degenerate_arm_range_demotes_the_filter_to_a_penalty` — the `ARM_RANGE_MIN_TU` guard.
+- `test_the_audit_trail_records_every_rejected_candidate`.
+
+**Unit — `backend/tests/unit/analysis/test_defect_regressions.py`** is the right home for a **serve-shaped regression fixture**: a synthetic serve whose wrist-speed peak precedes true contact by ~0.6 s, where the earlier peak fails arm extension and the later, slower peak passes. This fixture does not exist today, and `synthetic_swing.py` produces a single peak that *coincides* with contact — which is precisely why the unit suite is green against a defect visible on every serve. **Building the fixture is part of the change.**
+
+**Integration — `backend/tests/integration/test_pipeline_end_to_end.py`:**
+
+- **`test_contact_matches_the_ground_truth_band` is currently marked `@pytest.mark.xfail(strict=True)`** (line 275), with a reason naming this defect. When this fix lands, that test **passes** — and under `strict=True` a passing xfail is an `XPASS`, which **FAILS the suite**. **Removing the `xfail` marker is a required step of this change, in the same commit.** It is not a follow-up, not a cleanup, and not optional: leaving it in place turns a successful fix into a red build, and the natural reaction to a red build is to doubt the fix.
+- `test_contact_is_reported_with_its_confidence_and_flags` (line 263) currently asserts `"sequence_unusable" not in contact.sanity_flags`. It should gain `"contact_not_found" not in contact.sanity_flags`, so that a regression into blanket rejection is caught by the same assertion that catches degenerate returns.
+
+##### 9.2.8 Re-validation required — §9.1's validation does not transfer
+
+Stage 9 was declared stable in §9.1 after three rounds against real footage. **That validation does not carry over to this change, and the reasons are specific:**
+
+- It used **hand-centred windows** — the analysis window was placed by hand, not by Stage 5's motion scan. Defect 1 (§5.1) is the record of what Stage 5 actually produces, so §9.1's Stage 9 was validated on inputs the shipped system does not generate.
+- It was **serve-light in the sense that matters**: 5 hand-labelled ground-truth events, and only 3 forehands ever reached Stage 9 with a single one cleanly confirmable. The validation set cannot distinguish "works on groundstrokes" from "was never meaningfully tested on groundstrokes."
+- Candidate enumeration changes the *shape* of the output, not just its value. A stage validated as a one-candidate `argmax` has not been validated as a filtered ranked selection.
+
+Required, in this order:
+
+1. **Re-run the 5 existing hand-labelled ground-truth events.** The `+1` residual must be **unchanged**. This change must not move answers that are already correct, and this is the regression gate for that.
+2. **Extend ground truth to ≥ 8 serves and ≥ 8 forehands**, ball-on-strings labelled at ±1 frame, **on Stage-5-placed windows** — after Defects 1 and 2 land, since both change which frames Stage 9 is given.
+3. **Record per clip:** the full candidate list, which candidates were filtered and on which flags, the selected index, and the signed distance to truth. Acceptance, all three required: **no correct answer newly rejected (hard requirement, no exceptions);** the serve error band narrowed from ~15 frames to within ±2; and the all-rejected rate below the ~20 % pre-committed in §9.2.3.
+4. **Re-run Stage 8's handedness measurement alongside.** The candidate list is computed on the racket-hand speed curve, so a wrong hand changes every candidate. §9.1's still-open finding — Stage 8 confidence 0.05–0.36 on real footage, wrong hand on more than half a 7-clip batch — is not a new risk introduced here, but **this change sharpens the dependency**: previously a wrong hand produced a wrong frame, and now it can additionally produce a spurious `contact_not_found`. Treat a present, correct `handedness_hint` as a precondition of interpreting these results.
 
 ---
 
@@ -275,6 +944,12 @@ Algorithm, fixed:
 | **Fails** | Never fails the job. Every failure path yields `BallTrack = None` and a `BallSpeedUnavailableReason`. Hard wall-clock deadline of 6 s → `detection_timeout`. |
 
 Skipped entirely when `ball_speed_calibration` is absent, when `contact.confidence < 0.35`, or when `PoseQuality.estimated_camera_view ∈ {front, behind}` (§10.5).
+
+> **KNOWN GAP — the camera-view gate is not yet functional.** Camera-view estimation fell outside the nine ordered steps of Stage 7 as specified, so `estimate_camera_view()` was never built; the implemented Stage 7 (`backend/app/analysis/normalize.py`) hardcodes `PoseQuality.estimated_camera_view = CameraView.UNKNOWN`. `UNKNOWN` matches none of `front`, `behind`, or `oblique`, so **every decision gated on this field is currently inert**: this skip condition, §10.6 mitigation 2, and both camera-view rows of the §11.4 cap table never fire.
+>
+> **What this means for trusting ball speed.** §10.6's residual error of ±10–15 % is stated *for a compliant capture*, and it assumes the non-compliant captures were rejected by this gate. With the gate inert they are not rejected: a `front` or `behind` capture — the `θ ≈ 90°` geometry §10.6 itself calls unmeasurable — passes straight through Stages 10–11 and produces a confidently wrong mph value instead of `null` + `camera_view_unsuitable`. Ball speed therefore currently fails *silently and plausibly* rather than *loudly and locally*, which is precisely the failure mode §5.1 relied on to rank it second.
+>
+> **Closing the gap** requires implementing camera-view estimation in Stage 7 to the definition already given in §5's concrete-fallback discussion: classify from the ratio of projected shoulder width to torso length — near 0.9–1.1 facing the camera, collapsing below ~0.5 side-on. The unit test for it is already specified in the §4 purity/test table (`estimate_camera_view`, skeleton projected at yaw 0/30/60/90, assert bucket boundaries). **Until that lands, Stage 10/11 ball-speed gating cannot be trusted and a speed figure must not be surfaced as authoritative.** No threshold or decision in §10/§11 changes when it lands; the gates simply begin to fire.
 
 There is **no learned detector here**. We have no labelled tennis-ball dataset, no budget to collect one, and shipping an untrained or off-the-shelf COCO detector for a 6 px object would be worse than classical CV in both accuracy and honesty. This is background subtraction, HSV thresholding, and contour filtering — three deterministic operations whose parameters are written down below and whose behaviour is unit-testable on programmatically rendered frames.
 
@@ -439,7 +1114,7 @@ A second, separate term is the **height of the ball above the court plane**. Thi
 
    `BASELINE_SINGLES_WIDTH` (8.23 m) and `BASELINE_DOUBLES_WIDTH` (10.97 m) are constant-depth only from behind or in front — and those are exactly the views where `θ ≈ 90°` and speed is unmeasurable. They exist in the enum for future use and are currently rejected by the view gate below.
 
-2. **Require a roughly perpendicular camera view.** `PoseQuality.estimated_camera_view` already exists (Stage 7). Ball speed is **refused outright** (`camera_view_unsuitable`) for `front` and `behind`, and **capped at `low` confidence** for `oblique`. The capture UI additionally instructs: phone level (not tilted down more than ~10°), 5–10 m to the side, and *hit down the line* — i.e. parallel to the near sideline, which is the `θ ≈ 0` condition.
+2. **Require a roughly perpendicular camera view.** `PoseQuality.estimated_camera_view` exists as a schema field but is **hardcoded to `UNKNOWN` in the implemented Stage 7, so this mitigation is not currently in force** — see the KNOWN GAP note under Stage 10's skip conditions. As designed (and as it will behave once Stage 7's camera-view estimation is built), ball speed is **refused outright** (`camera_view_unsuitable`) for `front` and `behind`, and **capped at `low` confidence** for `oblique`. The capture UI additionally instructs: phone level (not tilted down more than ~10°), 5–10 m to the side, and *hit down the line* — i.e. parallel to the near sideline, which is the `θ ≈ 0` condition.
 
 3. **Restrict the measurement window to the trajectory segment nearest the calibration plane.** The 0.25 s window (§11.2) bounds total travel to ≤ 7.5 m at 30 m/s. The ball is closest to the calibration geometry immediately after contact and diverges monotonically; truncating early is the single cheapest way to bound the `Z_cal/Z_ball` term.
 
@@ -545,8 +1220,8 @@ Confidence is **derived from the number of accepted, associated detections** `n`
 
 | Condition | Effect |
 |---|---|
-| `estimated_camera_view ∈ {front, behind}` | `null` — `camera_view_unsuitable` |
-| `estimated_camera_view == oblique` | cap `low` |
+| `estimated_camera_view ∈ {front, behind}` | `null` — `camera_view_unsuitable` — **currently unreachable: field hardcoded to `UNKNOWN`, see KNOWN GAP under Stage 10's skip conditions** |
+| `estimated_camera_view == oblique` | cap `low` — **currently unreachable, same gap** |
 | `blob_size_drift_ratio` ∈ [0.60, 0.75) ∪ (1.33, 1.67] | cap `low` |
 | `blob_size_drift_ratio` outside [0.60, 1.67] | `null` — `depth_drift_exceeded` |
 | `reference == CUSTOM` (user-typed distance) | cap `medium` |
@@ -643,6 +1318,36 @@ Each metric carries a `view_sensitive: bool`. This flag is the load-bearing miti
 
 ---
 
+
+> **KNOWN GAP — `UNKNOWN` handedness zeroes all 18 metrics, including the four
+> that do not need a racket hand.** When Stage 8 returns
+> `Handedness.UNKNOWN`, `racket_wrist_index()` raises `UnknownHandednessError`
+> (correctly — it refuses to default to the right wrist), Stage 13's
+> never-raises wrapper catches it, and the return is a bare `SwingMetrics()`
+> with every field `None`. Stage 15 then produces a scorecard with no
+> measurable metric and `overall_score = None`, and Stage 17 has nothing to
+> narrate. Verified behaviour, not inference: the warning attached is the
+> INTERNAL-FAILURE one (`"swing metric computation failed internally
+> (UnknownHandednessError: ...)"`), so an unresolved racket hand is currently
+> reported to operators as a bug rather than as an unmeasurable clip.
+>
+> Four of the eighteen do not reference a racket hand at all and could still be
+> measured: `shoulder_turn_deg`, `hip_rotation_deg`, `head_stillness_tu` and
+> `wrist_separation_at_contact_tu` — they are computed from the shoulder line,
+> the hip line, the nose and BOTH wrists symmetrically
+> (`backend/app/analysis/metrics.py`). A clip that cannot be attributed to a
+> hand is therefore reported as entirely unmeasurable when roughly a quarter of
+> the metric set is in fact available, and the user is shown nothing rather
+> than a narrower, honest analysis.
+>
+> **Tracked, NOT fixed.** The fix is a handedness-independent metric subset
+> computed before the racket-hand branch, plus rubric bands for it; it is a
+> Stage 13/15 change with its own unit tests, not a loosened guard, and it must
+> not be closed by defaulting `UNKNOWN` to the right hand — which is precisely
+> the silent behaviour `racket_wrist_index()` already exhibits and which Stage
+> 14 goes out of its way to refuse.
+
+
 ### Stage 14 — Shot-type inference from technique (PURE)
 
 | | |
@@ -667,6 +1372,33 @@ Discriminating features, in evaluation order:
 Output includes `class_scores: dict[str, float]` summing to 1.0 and `evidence: list[str]` — human-readable deterministic strings such as `"wrist separation 0.21 TU < 0.35 threshold → two-handed"`. **The evidence strings are generated by Python, not Gemini**, and are what Gemini is later asked to *paraphrase* rather than derive.
 
 If `top_score < 0.45` or the margin to second place is `< 0.15` → `unknown`. An `unknown` result is not a failure: scoring falls back to a shot-type-agnostic rubric subset and the feedback becomes general.
+
+> **KNOWN GAP — topspin and slice cannot be separated when handedness is weak.**
+> As implemented (`backend/app/analysis/shot_type.py`), the spin axis (rule 4) is
+> gated on the forehand/backhand axis (rule 3) having fired: only the forehand
+> classes carry a spin qualifier, so if no side was established, neither
+> `forehand_topspin` nor `forehand_slice` receives any spin evidence. Rule 3 in
+> turn contributes **nothing** when `handedness.confidence < 0.5` with
+> `source == detected`, or when handedness is `unknown` — the deliberate
+> suppression described in the Stage 14 design (Part B.2), added because
+> `racket_wrist_index()` silently maps `UNKNOWN` to the RIGHT wrist.
+>
+> **Why this matters more than it reads:** weak handedness is the COMMON case,
+> not the edge case. Stage 8 measures 0.05–0.36 confidence on real footage
+> (§9.1 / Stage 8 validation), so on an ordinary uncalibrated upload the
+> pipeline cannot tell a topspin drive from a slice at all — and, because both
+> forehand classes then tie at the same score, the 0.15 margin gate sends the
+> result to `unknown` rather than to a spin-free forehand. Observed on the
+> vendored clip: `shot_type = unknown`, `confidence = 0.20`, with the evidence
+> strings `"handedness confidence 0.43 < 0.5 with no user hint; the
+> forehand/backhand axis contributed nothing"` and `"the shot was not
+> identified as a forehand; the topspin/slice axis contributed nothing"`.
+>
+> **Tracked, NOT fixed.** Closing it means either a handedness signal strong
+> enough to trust without a hint, or a spin axis that does not depend on which
+> side the shot came from. Do not close it by ungating rule 4: the spin bands
+> in the rubric are per-shot-type, and a spin call on an unidentified side has
+> nothing to be scored against.
 
 ---
 
@@ -851,43 +1583,243 @@ Warm instance, 12 s source clip at 60 fps, 240 sampled pose frames, calibration 
 
 | Stage | Wall time | Peak added RSS |
 |---|---|---|
-| Storage download (streamed) | 1–3 s | ~2 MB |
+| Model asset digest verification (startup, once per process — **not** per job) | ~0.1 s | ~0 MB (streamed hash) |
+| Storage download (streamed to a temp file) | 1–3 s | ~2 MB of Python heap — **plus up to 50 MiB of the temp file itself**, because Cloud Run's container filesystem is in-memory (§1.20.1) |
 | Keyframe motion scan (clips > 10 s only) | 0.2–0.8 s | ~3 MB |
 | Decode + rotate + sample @ 640 px | 2–4 s | ~5 MB (one frame at a time) |
-| MediaPipe extraction | **14–22 s** | **~100 MB** (graph + TFLite arena) |
-| — extractor closed; ~100 MB released — | | |
+| `PoseLandmarker` construction (graph + 9 MB float16 bundle load) | ~0.35–0.5 s | included in the row below |
+| MediaPipe extraction (VIDEO mode, 240 frames) | **8–13 s** | **~90–130 MB — UNVERIFIED** (graph + TFLite arena) |
+| — extractor closed; the 90–130 MB released — | | |
 | Pure kinematics (Stages 7–9) | < 80 ms | < 1 MB (`(240,33,4)` f32 ≈ 127 KB) |
 | Ball frame pass: seek + decode ~0.9 s of video @ 1280 px | 0.5–1.1 s | ~5.5 MB (2 working frames) |
 | Background median (15 × 1280×720 grayscale) | 0.20–0.30 s | ~14 MB (ring, transient) + 0.9 MB (result) |
-| Ball detection, per-frame CV (~16–45 processed frames) | 0.5–1.4 s | ~6 MB (masks, contours) |
+| Ball detection, per-frame CV (~16–45 processed frames) | 0.3–0.8 s | ~6 MB (masks, contours) |
 | Speed calculation | < 5 ms | negligible |
 | Pure analysis (Stages 12–15) | < 120 ms | < 1 MB |
 | Gemini | 1.5–4 s | negligible |
 | Persist | 0.2–0.5 s | negligible |
-| **Total warm, calibrated** | **~21–37 s** | **~110 MB above baseline** |
-| **Total warm, uncalibrated** | **~20–35 s** | **~110 MB above baseline** |
+| **Total warm, calibrated** | **~14–27 s** | **~110 MB above baseline, + up to 50 MiB in-memory temp file** |
+| **Total warm, uncalibrated** | **~13–25 s** | **~110 MB above baseline, + up to 50 MiB in-memory temp file** |
 
-**Per-frame CV cost breakdown** at 1280×720, 0.5 shared vCPU: absdiff + threshold ~2 ms, morphology open+close ~3 ms, HSV convert + two threshold branches ~4 ms, `findContours` + feature extraction ~2 ms ≈ **11 ms/frame**. At 60 fps the 0.25 s window plus coasting margin is ~18 processed frames ≈ 0.2 s; the upper bound in the table covers 1280×960 portrait framing and a longer keyframe seek.
+**Per-frame CV cost breakdown** at 1280×720, **2 dedicated vCPU** (§1.20.1; the superseded figures were for Render's 0.5 shared vCPU and were scaled down by the same 1.5–2.5× re-derivation as Stage 6): absdiff + threshold ~1 ms, morphology open+close ~1.5 ms, HSV convert + two threshold branches ~2 ms, `findContours` + feature extraction ~1 ms ≈ **5–6 ms/frame**. At 60 fps the 0.25 s window plus coasting margin is ~18 processed frames ≈ 0.1 s; the table's band (now **0.3–0.8 s**) is dominated by the keyframe seek and 1280×960 portrait framing rather than by the per-frame arithmetic. The 6 s hard deadline below is unchanged and is now a very wide guard.
 
-**The memory claim, and the ordering requirement it depends on.** Peak added RSS is **unchanged from v1 at ~110 MB**, despite adding a whole new stage, for one reason only: the ball stage's ~25 MB working set is allocated **strictly after** MediaPipe's ~100 MB graph is released. If an implementer runs ball detection before closing the extractor — or holds the extractor open "in case of a retry" — peak goes to ~135 MB and the OOM headroom narrows. This is why Stage 6 specifies the close as a memory-ordering requirement and why the orchestrator's structure (`_collect_pose` returns and its `with` block exits before `_collect_ball` is called) is part of the contract, not an implementation detail.
+**Basis of the MediaPipe wall-time figure.** 8–13 s is not a guess, but it rests on one platform assumption that changed. Measured on a dev box (Python 3.13.2, `mediapipe==0.10.35`, `pose_landmarker_full.task`, VIDEO mode, 640×360): **19.5 ms/frame**, 111 ms construction, 80/80 frames detected. The superseded figure scaled that by an assumed 3–4× penalty for Render's 0.5 *shared* vCPU, giving ~60–80 ms/frame and 14–19 s. **That multiplier is retired with the platform**: it described a throttled fraction of a core, and §1.20.1 deploys on an explicit **2 dedicated vCPU** allocation where the remaining gap to the dev box is clock and core count, not contention. The re-derived penalty is **1.5–2.5×** — an assumption, stated as one, which additionally assumes XNNPACK uses both vCPUs — giving ~29–49 ms/frame and **~7.0–11.8 s for 240 frames**. The same measurement in IMAGE mode was 80.3 ms/frame (4.11×, a platform-independent ratio), which would put this row at ~29–48 s; Stage 6.3 records why VIDEO mode was chosen and what was given up. **The first measurement taken on a real Cloud Run revision replaces the 1.5–2.5× factor with a measured one**; it is the same discipline the RSS table below demands.
 
-**Baseline RSS did increase, and that is the real memory cost of this feature.** Adding OpenCV raises the container's idle footprint:
+**Worst case: the rotation self-check doubles this stage.** Stage 5 retries the whole clip at +180° if the pose detection rate falls below 20 %. That retry is a **second full VIDEO-mode extraction pass**, so worst-case Stage 6 is **~16–26 s** and the worst-case warm job is **~23–41 s**. That fits inside the 180 s `heartbeat_at` staleness window with wide margin and also inside Cloud Run's 300 s request timeout. **The timeout observation is now informational, not load-bearing**: the async job model is justified by single-instance serialization and client-network decoupling (Stage 1), not by a platform timeout, so this worst case is bounded by the heartbeat window alone. `estimated_seconds` will read low on a clip that takes this path, and that is accepted rather than hidden.
 
-| | v1 baseline | v2 baseline |
+**The peak-memory claim, and the ordering requirement it depends on.** The ball stage's ~25 MB working set is allocated **strictly after** the pose graph is released. If an implementer runs ball detection before closing the extractor — or holds the extractor open "in case of a retry" — the two add instead of overlapping and the OOM headroom narrows by the full ~25 MB. This is why Stage 6.7 specifies the close as a memory-ordering requirement and why the orchestrator's structure (`_collect_pose` fully exits its `with PoseExtractor(...)` block before `_collect_ball` is called) is part of the contract, not an implementation detail. **The ordering requirement is a statement about sequencing and holds regardless of the absolute magnitudes below.**
+
+**Baseline RSS — rebudgeted, and the numbers are worse than v2 assumed. Every figure in this table is an ESTIMATE; none has been measured.**
+
+The v2 table claimed `Python + FastAPI + numpy + PyAV + MediaPipe | ~150 MB`. That figure was never measurable, because **MediaPipe was never installed** — it was not in `requirements.txt` and `app/pose/` was empty. Installing it brings a transitive dependency set that v2 did not budget for at all (`matplotlib`, `pillow`, `sounddevice`, and friends are pulled in by `mediapipe==0.10.35` and are all imported eagerly by `mediapipe.tasks.python.vision`, so they are resident, not merely on disk):
+
+| Component | Estimated resident | Note |
 |---|---|---|
-| Python + FastAPI + numpy + PyAV + MediaPipe | ~150 MB | ~150 MB |
-| `opencv-python-headless` | — | **+55–75 MB** |
-| **Idle total** | ~150 MB | **~210–225 MB** |
-| Idle + peak job | ~260 MB | **~320–335 MB** |
-| Headroom on 512 MB | ~250 MB | **~175–190 MB** |
+| Python 3.13 + FastAPI + pydantic + numpy + PyAV | ~110–140 MB | unchanged in kind from v1; re-measure |
+| `opencv-python-headless` | +55–75 MB | see the wheel-variant decision below |
+| `mediapipe` native graph libs + protobuf + flatbuffers + absl-py, at import | +40–60 MB | before any landmarker is constructed |
+| `matplotlib` + `pillow` + `contourpy`/`fonttools`/`kiwisolver`, at import | **+35–55 MB** | **pure dead weight — we never plot anything** |
+| `sounddevice` + `cffi` (+ bundled PortAudio) | +5–10 MB | **pure dead weight — we never touch audio** |
+| **Idle total (estimate)** | **~245–340 MB** | |
+| Peak added by a job (pose graph dominates) | +90–130 MB | ball stage's 25 MB overlaps, not adds |
+| **Idle + peak job (estimate)** | **~335–470 MB** | |
+| Stage 4 temp video file | **+ up to 50 MiB** | **New on Cloud Run:** the container filesystem is in-memory, so the downloaded clip counts against the memory limit for the whole job (it must survive until after Stage 11 — see the temp-file lifetime decision in Stage 1). Did not apply on Render's disk-backed ephemeral filesystem. |
+| **Idle + peak job + temp file (estimate)** | **~385–520 MB** | |
+| **Headroom on the chosen 2 GiB allocation (§1.20.1)** | **~1.5–1.7 GB** | |
 
-**`opencv-python-headless` is a hard requirement in `requirements.txt`, not a preference.** The full `opencv-python` wheel pulls GTK, Qt, and X11 shared objects that are dead weight in a container and add roughly 40–60 MB of resident mapping for functionality we never call. The headroom drop from ~250 MB to ~180 MB is the honest cost of this feature; it is still comfortable at `job_queue_max_depth = 4` with a single worker, but it is the reason the queue depth must not be raised and the reason `max_workers` must stay at 1.
+**This risk is resolved by platform choice, and the resolution should be stated plainly rather than left as a standing worry.** The superseded text called a 512 MB container "a live risk" with ~40 MB of pessimistic headroom. That framing was correct for Render, where 512 MB was a *tier* and escaping it meant a paid plan migration. On Cloud Run, memory is an explicit per-revision argument (default 512 MiB, maximum 32 GiB, coupled to the CPU count — at `--cpu=2` anything up to 8 GiB is legal). §1.20.1 allocates **2 GiB**, roughly 4× the pessimistic ~520 MB figure above including the in-memory temp file. **The OOM risk is therefore closed for the MVP**, and "the next tier up" is a one-flag change costing single-digit dollars per month, not a migration.
+
+Three things still follow, and only the third changed in force:
+
+1. **Measure before trusting this table.** The first task after `extractor.py` exists is to record actual RSS at three points — idle after import, peak during extraction, and after `close()` — and replace the estimates with measured numbers. This is now about knowing the system, not about surviving it.
+2. **The memory-ordering requirement stands regardless of headroom.** Closing the extractor before the ball stage allocates is still part of the contract (Stage 6.7). A 2 GiB allocation makes violating it survivable, which is exactly why it must stay enforced by structure rather than by luck.
+3. `max_workers` stays at **1** and `job_queue_max_depth` stays at **4** — but the *reason* has changed. These are no longer an OOM guard. `max_workers=1` is now about CPU serialization on a 2 vCPU instance and about the single-instance pinning in §1.20.1; the depth cap is about bounding the wait a queued user is asked to accept. Queue depth was never a memory lever (queued jobs hold only a request body) and is even less of one now.
+
+**On the OpenCV wheel variant.** v2 asserted that `opencv-python-headless` was "a hard requirement in `requirements.txt`, not a preference." That assertion was never true of the file — `requirements.txt` pinned the non-headless `opencv-python>=4.9` — and it cannot be satisfied by pinning alone, because `mediapipe==0.10.35` hard-declares a dependency on the **differently-named** distribution `opencv-contrib-python`. Verified by `pip install --dry-run --report`: pip sees no conflict between the two distribution names and installs **both**, each shipping a `cv2/` package to the same path, leaving which one wins install-order dependent and effectively unspecified. The reasoning for wanting headless still stands (the GUI variants map GTK/Qt/X11 shared objects we never call), so the fix is a build-step substitution rather than a pin; it is specified in `backend/requirements.txt` and summarised in §3's deviations list.
 
 **Wall-clock guard.** Ball detection carries a hard 6 s deadline enforced in the orchestrator. On exceed, the stage abandons, returns `detection_timeout`, and the job continues to Gemini normally. A pathological clip cannot turn a 25 s job into a 90 s job.
 
 **Long-clip note.** A 60 s intake clip does not change the pose or ball budgets — the analysis window is still 8 s and the ball window is still 0.25 s. It adds only the keyframe motion scan (0.2–0.8 s) and a larger download (up to ~2.5 s at the 50 MB cap). The 60 s cap costs roughly one second of wall time, which is why it is affordable.
 
-`estimated_seconds` in the 202 response is `25 + (3 if calibrated else 0) + 2 × queue_depth`, rounded up. Cold start adds 30–60 s.
+`estimated_seconds` in the 202 response is `25 + (3 if calibrated else 0) + 2 × queue_depth`, rounded up. **The 25 s base is deliberately left unchanged even though the warm budget fell to 14–27 s**, and that is a decision, not an oversight: 25 s now sits at the top of the warm band rather than in its middle, so the estimate absorbs a cold start, a slow Supabase download, or a Gemini call at the top of its 1.5–4 s range without ever reading low on the common path. An estimate that over-promises is a worse bug than one that pads. Cold start adds roughly 10–25 s (container start, imports, and the one-time 9 MB digest verification), and **the padding must now carry that cost as the common case, not the exception.** On the production tier `min-instances=1` (§1.20.1) would make cold starts rare — revision deploys and instance recycles only. **That flag is not deployed.** The tier actually running is `--min-instances=0` (§1.20.1a), so the service scales to zero whenever idle and **every idle-then-request transition is a cold start: routine, not rare, and accepted at this stage as a known UX cost rather than treated as a bug.** The 10–25 s estimate itself is unchanged — only its expected frequency is — which is precisely the scenario the 25 s base was padded for: on a cold-start job the honest total is ~24–52 s, `estimated_seconds` will read low, and that is accepted and visible rather than hidden. Re-tightening this base becomes appropriate only if and when the production tier is adopted (trigger conditions in §1.20.1a). The base is the **VIDEO-mode** figure; had Stage 6.3 chosen IMAGE mode it would have to read ~50, which is a large part of why it did not.
+
+#### §1.20.1 Deployment: container on Google Cloud Run
+
+**Decided: the service deploys to Google Cloud Run as a container, from source via Cloud Build, as a single pinned instance.** Render is superseded entirely; a future reader should treat every Render-specific figure in this document's history as dead, not renamed. There is exactly one deploy path: the Dockerfile and the `gcloud run deploy` invocation below.
+
+> **READ §1.20.1a BEFORE TRUSTING ANY FLAG LIST IN THIS SUBSECTION.** This subsection documents **two** configurations of the same service, and only one of them is deployed:
+> - **Production tier (~$100/month, the target, NOT currently deployed):** adds `--no-cpu-throttling` and `--min-instances=1`. Decisions 1 and 2 below derive *why those flags are required for full correctness* and that derivation is still valid and deliberately retained — it is the target to revisit, not a mistake to erase.
+> - **Dev/demo tier ($0/month, CURRENTLY DEPLOYED):** default CPU throttling, `--min-instances=0`. This is what the `gcloud run deploy` invocation and flag table below actually show, because they must match reality. §1.20.1a states plainly what is given up, exactly what breaks under real concurrent traffic, and the explicit trigger conditions for upgrading to the production tier.
+>
+> The relationship is: **dev tier now, production tier later, same document.** Neither supersedes the other unconditionally. Where a decision below says a flag is "not optional", read it as "not optional for the production tier / once there is real traffic" — §1.20.1a is the record of why running without it is tolerable *only* in the pre-user stage.
+
+**Why a container — and why the `libportaudio2` reasoning transfers unchanged.** This is worth saying explicitly rather than assuming, because the superseded text justified Docker partly by Render's fixed native-runtime toolset, and that argument is gone (Cloud Run has no native runtime; a container image is the only deploy artifact, so Docker is mandatory by platform rather than chosen). **The `libportaudio2` requirement, however, was never platform-derived — it is host-OS-derived, and that is why it survives the move.** `mediapipe.tasks.python.vision` imports `sounddevice` eagerly at import time (a transitive `mediapipe==0.10.35` dependency; see the eager-import note in the baseline-RSS rebudget above). Per `sounddevice`'s own documentation, PortAudio ships inside the wheel **only on Windows and macOS**; on Linux the wheel dynamically loads the system `libportaudio2`. The deciding fact is therefore "the runtime is Linux", not "the host is Render" — so it holds identically inside a `python:3.13-slim` image on Cloud Run, on Render, on a local Docker run, or on any other Linux target. Without the library, `import mediapipe.tasks.python.vision` raises `OSError` **at the first job, not at build time**: a green deploy, a passing startup probe, and a failure on first real traffic.
+
+**The two-step `--no-deps` install is likewise platform-independent and unchanged.** Its reason is a pip dependency-resolution fact about `mediapipe==0.10.35` hard-declaring `opencv-contrib-python` while we require `opencv-python-headless` (full derivation in `backend/requirements.txt` and `backend/requirements-mediapipe.txt`). Nothing about that depends on the host. What changes is only *where the two steps run*: they were a Render Build Command, then `RUN` layers, and they remain `RUN` layers. **Neither requirements file needs any edit for this migration.**
+
+**Not a Python-version problem.** Verified separately by pip dry-run and by inspecting the wheel: `mediapipe==0.10.35` ships **no CPython-ABI extension module**; its native layer is a single C shared library (`mediapipe/tasks/c/libmediapipe.so`) loaded through `ctypes.CDLL`. Python 3.13 compatibility is not at risk and is not the reason for any decision here. (That `ctypes` boundary has a second consequence used in Stage 1: the GIL is released during inference, so the ASGI loop can serve polls concurrently — which is what makes the second vCPU below useful rather than decorative.)
+
+##### The four Cloud Run decisions
+
+**1. CPU allocation mode: `--no-cpu-throttling` (CPU always allocated). Not optional on the production tier — and deliberately absent on the dev tier deployed today (§1.20.1a).**
+
+Cloud Run's **default** is "CPU is only allocated during request processing": between requests, the instance's CPU is throttled to near zero. Google's own documentation is explicit that background threads, async tasks, and timers essentially freeze between requests — a worker pulling from an in-process queue stops making progress whenever no HTTP request is in flight. **That default would silently break this pipeline's core design.** The job runner is an in-process `ThreadPoolExecutor(max_workers=1)` that starts work *after* the `202` has already been returned (Stage 1, Stage 3), plus a periodic `heartbeat_at` sweep. Under the default, the analysis would freeze the instant the triggering request completed and resume only when some unrelated request happened to arrive — producing jobs that appear to run for minutes, heartbeats that stall and trip the 180 s staleness rule, and `WORKER_LOST` failures with no bug in our code to find. This is a correctness requirement, not a performance tuning knob.
+
+**Cost consequence, stated plainly — and this cost is exactly why the flag is not deployed yet.** `--no-cpu-throttling` bills for the instance's entire lifetime rather than only during request handling, at instance-based rates (~25 % lower per vCPU-second and ~20 % lower per GiB-second than request-based rates). Combined with `--min-instances=1` below, this is a **fixed monthly cost independent of traffic**: at tier-1 pricing ($0.000018/vCPU-s, $0.000002/GiB-s), 2 vCPU + 2 GiB running continuously for a 30-day month is 2 × 2,592,000 × 0.000018 + 2 × 2,592,000 × 0.000002 ≈ **$104/month**, about **$100** net of the monthly free allowance. The free tier does not meaningfully apply to an always-on instance — 180,000 vCPU-seconds is consumed in roughly a day. This is the price of the async job model on this platform at production quality. **It is not accepted for a service with zero users: ~$100/month buys correctness guarantees that nothing is currently exercising, so both billing-model flags are reverted for now and this paragraph describes the tier to return to, not the tier running (§1.20.1a).** The one lever, recorded so it is not rediscovered as an open question: `--cpu=1` costs ~$57/month, and is rejected below.
+
+**2. Instance count: `--max-instances=1` always; `--min-instances=1` on the production tier only (`--min-instances=0` is what is deployed today — §1.20.1a).**
+
+Cloud Run autoscales horizontally by default, and the default maximum should be treated as effectively unbounded. Render's single fixed instance gave this design an invariant for free that Cloud Run does not: **that one process is the sole source of truth for in-flight work.** A second instance would mean two independent `ThreadPoolExecutor`s, two independent queue-depth counters (so `429 QUEUE_FULL` would admit up to 2× `job_queue_max_depth`), and two heartbeat sweepers racing over the same `analysis_jobs` rows. That is a correctness defect, not a scaling inefficiency.
+
+- `--max-instances=1` restores the invariant. It is load-bearing and must not be raised to "handle more traffic" without first moving the admission guard and the staleness sweep into the database.
+- `--min-instances=1` is the separate and equally necessary half **for the production tier, and it is the flag deliberately reverted on the dev tier.** With `min-instances=0`, Cloud Run judges an instance idle on *request* activity, not on background work, so an instance running a post-`202` analysis with no open request is a scale-down candidate. `--no-cpu-throttling` keeps the CPU alive for the instance's lifetime; it does not extend that lifetime. `min-instances=1` guarantees one instance is always kept running, which is what actually protects an in-flight job; it is also the only thing that fully removes the scale-from-zero transition in which a brief two-instance overlap is possible at all. It also removes cold starts from the common path (see `estimated_seconds` above). **Deployed today: `--min-instances=0`. The consequences — routine cold starts, the throttling freeze window, and the residual scale-event overlap — are enumerated and accepted in §1.20.1a, together with the conditions that make this revert stop being acceptable.**
+
+**The better long-term resolution, named but deliberately not built for the MVP:** make the guard cross-instance — replace the in-process depth counter with `SELECT count(*) FROM analysis_jobs WHERE status IN ('queued','running')` as an admission check, and give the staleness sweep a database advisory lock so exactly one sweeper runs. That would make `max-instances > 1` safe and turn this from a pinned single instance into a real horizontally scaled service. It is the correct next step after the MVP ships; it is not a prerequisite for it.
+
+**3. CPU and memory: `--cpu=2 --memory=2Gi`.**
+
+Cloud Run couples the two — at 2 vCPU, memory may be anything up to 8 GiB; 1 vCPU caps at 4 GiB; 0.5 vCPU caps at 1 GiB. The allocation is chosen against the figures in the rebudget table above, not by eyeballing.
+
+*Memory — why 2 GiB and why that is not waste.* Pessimistic idle + peak job is ~470 MB, plus **up to 50 MiB for the Stage 4 temp video, because Cloud Run's container filesystem is in-memory** — a constraint Render's disk-backed ephemeral filesystem did not impose, and one that matters here because the temp file must survive until after Stage 11 (Stage 10 performs a second decode pass over it). Call it ~520 MB pessimistic. 2 GiB is ~4× that. The default 512 MiB would not fit at the pessimistic end at all; 1 GiB would leave only ~2× headroom against numbers **none of which has been measured**, which is thin margin for a fragmenting Python heap. 4 GiB would be waste, because nothing in this pipeline can grow past roughly 600 MB by construction: `max_workers=1` caps concurrent jobs at one, Stage 5's generator holds one frame at a time rather than 166 MB of buffered frames, Stage 4 never `.read()`s the file into memory, and the 50 MiB upload cap bounds the temp file. The delta from 512 MiB to 2 GiB is 1.5 GiB × 2,592,000 s × $0.000002 ≈ **$7.80/month** — cheap insurance on unmeasured estimates, and the single flag to change once real RSS numbers exist.
+
+*CPU — why 2 and not 1.* 2 vCPU is the more expensive half of the bill (~$93 of the ~$104) so it needs a real defence. Three reasons, in order: (a) `max-instances=1` means this one instance serves both the inference worker and *every* poll, JWT verification, and health request from *every* concurrent user — with the GIL released inside the native inference call, a second vCPU gives the ASGI loop an actual core to answer 2-second polls from up to five queued users instead of contending with a saturated one; (b) MediaPipe's XNNPACK delegate can use both vCPUs, which is where the 1.5–2.5× factor (and therefore the 8–13 s Stage 6 figure) comes from — `--cpu=1` would not merely be slower to serve, it would roughly double per-frame inference time and push Stage 6 back toward the superseded 14–22 s; (c) the ~$47/month saved by `--cpu=1` buys a service that is slower on its single most expensive stage while one pinned instance absorbs all traffic. Rejected. If real measurements show XNNPACK does not scale to the second thread, `--cpu=1` becomes correct and the Stage 6 figures revert — that is the one thing the first production measurement should check.
+
+**4. Request timeout: `--timeout=300` (the default, set explicitly).**
+
+Cloud Run's default is 300 s, configurable to 3600 s. **This retires Render's ~100 s edge timeout as an architectural constraint**, and Stage 1's execution-model decision has been re-derived accordingly — async-job-plus-polling stays, but on single-instance serialization and client-network-decoupling grounds, not because a synchronous request would be cut off. It no longer needs to be large: with the job running in the background, the `POST /v1/analyses` request returns its `202` in well under a second, and `GET /v1/analyses/{id}` returns immediately. 300 s is therefore generous headroom for a path that should never approach it, and it is written into the flags explicitly so that a future reader sees a decision rather than a default. Raising it would be a symptom of having accidentally reintroduced synchronous analysis.
+
+##### Dockerfile
+
+Deploy configuration, not application logic:
+
+```dockerfile
+FROM python:3.13-slim
+
+# mediapipe.tasks.python.vision -> sounddevice -> libportaudio2.
+# Linux wheels do not bundle PortAudio (Windows/macOS wheels do). Host-OS fact,
+# not a platform fact: required on any Linux runtime, Cloud Run included.
+# --no-install-recommends because libportaudio2's recommends pull ALSA tooling
+# we never call; the apt lists are dead weight in the final layer.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libportaudio2 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY backend/requirements.txt backend/requirements-mediapipe.txt ./backend/
+
+# Two steps, in this order. Reasoning lives in the requirements files, not here:
+#   backend/requirements.txt            (why mediapipe is absent; deps hand-enumerated)
+#   backend/requirements-mediapipe.txt  (why --no-deps and why an exact pin)
+# Platform-independent: this is a pip resolution fact, unchanged by the move
+# from Render to Cloud Run.
+RUN pip install --no-cache-dir -r backend/requirements.txt
+RUN pip install --no-deps --no-cache-dir -r backend/requirements-mediapipe.txt
+
+COPY backend/ ./backend/
+
+# Cloud Run injects $PORT (8080). Shell form so $PORT expands.
+# --workers 1 IS LOAD-BEARING: a second uvicorn worker is a second process with
+# its own ThreadPoolExecutor and its own queue-depth counter inside one
+# container -- the identical correctness defect that --max-instances=1 exists
+# to prevent. Concurrency comes from the async event loop, never from workers.
+ENV PYTHONUNBUFFERED=1
+CMD exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1
+```
+
+**Flagged gap, not fixed here:** `backend/requirements.txt` currently lists `pydantic` but neither `fastapi` nor `uvicorn`, so the image above would not start as written. That is a pre-existing omission in the requirements file, independent of this migration, and it needs its own edit.
+
+##### Deploy invocation
+
+`gcloud run deploy --source` is chosen over a hand-built image deliberately: Cloud Run requires `linux/amd64`, and building locally on a Windows or Apple-Silicon dev box is a well-known way to ship an unrunnable image. Cloud Build produces amd64 natively, which removes the trap rather than documenting it.
+
+```bash
+# DEV/DEMO TIER -- this is what is actually deployed today ($0/month, see §1.20.1a).
+# Note what is ABSENT and absent on purpose: --no-cpu-throttling and --min-instances=1.
+# Default CPU throttling applies (CPU allocated only during request processing), and
+# --min-instances=0 lets the service scale to zero when idle.
+gcloud run deploy tennisform-api \
+  --source=. \
+  --region=us-central1 \
+  --execution-environment=gen2 \
+  --cpu=2 \
+  --memory=2Gi \
+  --min-instances=0 \
+  --max-instances=1 \
+  --concurrency=20 \
+  --timeout=300 \
+  --port=8080 \
+  --allow-unauthenticated \
+  --set-env-vars=SUPABASE_URL=https://<project>.supabase.co,POSE_MODEL_PATH=/app/backend/app/pose/models/pose_landmarker_full.task \
+  --set-secrets=SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,GEMINI_API_KEY=gemini-api-key:latest
+```
+
+Flag-by-flag, for the non-obvious ones:
+
+| Flag | Why |
+|---|---|
+| `--execution-environment=gen2` | Full Linux compatibility for MediaPipe's `ctypes`-loaded `.so` and PyAV's native decoders. Gen1's restricted syscall surface is not worth debugging. Gen2 also sets the 512 MiB memory floor, which is below our 2 GiB anyway. |
+| *(`--no-cpu-throttling` — **deliberately absent, dev tier**)* | Decision 1 explains why the production tier requires it: without it the post-`202` background job freezes between requests. **Not set today** because it is a fixed ~$100/month billing-model change on a service with no users. Default CPU throttling is in effect. The failure it prevents requires a job to sit mid-analysis with no request in flight and no traffic to revive it — see §1.20.1a for why that is a tolerable testing-stage annoyance rather than a silent production failure, and for the trigger to add the flag back. |
+| `--min-instances=0 --max-instances=1` | Decision 2, dev tier. `--max-instances=1` is unchanged and still load-bearing for the single-worker invariant — it must not be raised. **`--min-instances=1` is deliberately absent**: `0` scales to zero when idle, which is what makes this tier $0/month, at the cost of routine cold starts (§1.20 `estimated_seconds`) and a residual brief two-instance overlap during a scale event (§1.20.1a). Production tier restores `--min-instances=1`. |
+| `--concurrency=20` | Bounds simultaneous work on the ASGI loop. Five job slots (1 running + 4 queued) polling every 2 s generate nowhere near 20 in-flight requests, so this never rejects legitimate traffic; it caps how many ES256 JWT verifications can pile onto the serving core at once while inference runs. The real admission control is `429 QUEUE_FULL` at depth 4, in application code. |
+| `--allow-unauthenticated` | Authentication is application-level (Supabase ES256 JWT, Stage 2). Cloud Run IAM would reject the mobile client's tokens, which are not Google identities. Every route is guarded by Stage 2; there is no unauthenticated surface other than health. |
+| `--set-secrets` | Secret Manager, per CLAUDE.md's no-hardcoded-secrets rule. `SUPABASE_URL` and `POSE_MODEL_PATH` are non-secret configuration and stay as plain env vars; the model path is a test/local-override knob (Stage 6.1), not a secret. |
+
+##### What this does not change
+
+The container boundary affects what is present on the filesystem, not Python-level resident memory: the RSS estimates and the measure-before-committing requirement above stand. The install *order* is unchanged. The vendored model bundle decision (Stage 6.1) is unchanged and its reasoning is actually strengthened here, since the image is the deploy artifact. `max_workers=1` and `job_queue_max_depth=4` are unchanged in value, though their justification moved from OOM protection to CPU serialization and queue-wait bounding.
+
+##### §1.20.1a Current deployment tier: development/demo ($0/month) — deliberately inferior, explicitly temporary
+
+**This is the configuration actually deployed. It is deliberately, knowingly inferior to the ~$100/month production configuration documented in Decisions 1–4 above, and it is temporary.** Nothing above is retracted or wrong; the production tier remains the target and its derivation is retained in full precisely so that re-adopting it is a two-flag change with the reasoning already written. A future reader must not read §1.20.1 as "the config" and this as a footnote: **§1.20.1a supersedes §1.20.1's flag list for as long as the trigger conditions below remain unmet, and §1.20.1 resumes authority the moment any of them is met.**
+
+The reverted flags, exactly:
+
+| Flag | Production tier (§1.20.1, target) | Dev tier (deployed today) |
+|---|---|---|
+| CPU allocation | `--no-cpu-throttling` (CPU always allocated) | **omitted** → Cloud Run default: CPU allocated **only during request processing** |
+| Minimum instances | `--min-instances=1` | **`--min-instances=0`** → scales to zero when idle |
+| `--cpu=2 --memory=2Gi --max-instances=1 --timeout=300` | unchanged | **unchanged — not part of this revert.** Sizing and the single-instance cap cost nothing while scaled to zero, and `--max-instances=1` is needed the moment there is any traffic at all. |
+
+**Why this is defensible now rather than a regression being papered over.** Both correctness problems Decisions 1 and 2 identified require their failure condition to *actually occur* to matter, and neither condition is reachable by a single developer testing serially with no users. This project has no users; it must stay at $0/month until there is something worth demoing.
+
+**What breaks under real concurrent traffic on this tier — named precisely, using the mechanisms already derived above, not restated vaguely:**
+
+1. **The CPU-throttling background-job freeze (Decision 1's mechanism).** A job handed to the in-process `ThreadPoolExecutor(max_workers=1)` *after* the `202` has already been returned (Stage 1, Stage 3) can stall mid-analysis the instant its triggering request completes, because under default throttling the instance's CPU is throttled to near zero between requests. It resumes only when some unrelated request happens to arrive. A long enough stall lets `heartbeat_at` go stale past the **180 s** rule, and the poller is then told `failed` with `ErrorCode.WORKER_LOST` — **a real failure with no bug in the code to find.** Why it is tolerable today: the client polls every 2 s while a job is in flight, and each poll *is* a request, which reallocates CPU; so in the normal single-user path the job is revived long before 180 s elapses. The exposure is a client that stops polling (app backgrounded, phone sleeps, network drops) while a job is mid-analysis and nothing else is hitting the service. During solo/manual testing that either does not happen or is noticed immediately by the person doing the testing. It is an acceptable testing-stage annoyance, not a silent production failure.
+2. **The autoscaling race (Decision 2's mechanism).** `--min-instances=0` means the service scales to zero, so an idle-then-suddenly-busy period can in principle start a second instance before scale-down of the first has settled. Two instances means two independent `ThreadPoolExecutor`s, **two independent in-process queue-depth counters** (so `429 QUEUE_FULL` would admit up to 2× `job_queue_max_depth`) and **two heartbeat sweepers** racing over the same `analysis_jobs` rows. **State plainly: `--max-instances=1` bounds this to "at most a brief overlap during a scale event" — it does not make it impossible.** Only pinning `--min-instances=1`, the reverted flag, removed the scale-from-zero transition in which the overlap can occur at all. Why it is tolerable today: the race requires genuine concurrent load to make Cloud Run want a second instance in the first place, and nothing forces a scale-up while the sole developer tests one clip at a time. In practice `min-instances=0, max-instances=1` with no real traffic essentially never runs two instances simultaneously.
+3. **Cold starts are now routine, and that is a cost, not a bug.** Every idle-then-request transition is a cold start (~10–25 s: container start, eager MediaPipe imports, one-time 9 MB model digest verification). §1.20's `estimated_seconds` base of 25 s was already padded partly to absorb exactly this, so the number needs no change — only its framing, which is corrected in §1.20. Accepted at this stage.
+
+**Explicit trigger conditions for upgrading to the production tier.** Re-add `--no-cpu-throttling` and `--min-instances=1` (i.e. return to §1.20.1's invocation verbatim) when **any one** of the following becomes true — these are checkable facts, not a mood:
+
+- **T1.** The service is demoed to **more than one person at once**, or to anyone who will use it from their own phone while someone else is also using it. (A single-viewer screen-share demo does not trigger this.)
+- **T2.** The service is handed to **any real beta user** — anyone outside the developer, on their own device, using it unsupervised.
+- **T3.** **Any** `WORKER_LOST` failure is observed that is not explained by a deliberate restart, a revision deploy, or a known OOM. One unexplained occurrence is the trigger; do not wait for a "rate".
+- **T4.** The service is listed publicly, linked in a store listing, or pointed at by anything a stranger can reach.
+- **T5.** More than ~500 analyses are run in a calendar month (see the free-tier bound below — this is also the point where the $0 claim stops being safe).
+
+Upgrading is a redeploy with two flags added and no code change. **Do not treat any of these triggers as "probably fine, will do it later": T1–T4 are precisely the conditions under which mechanisms 1 and 2 stop being hypothetical.**
+
+**Cost consequence, stated as concretely as the ~$100/month production figure.** At `--min-instances=0` with default CPU throttling, billing is request-based and only while requests are being processed:
+
+- **Idle cost: ~$0.** Scaled to zero means no instance, therefore no vCPU-second and no GiB-second billing. There is no fixed monthly floor on this tier.
+- **Active cost is bounded by Cloud Run's always-free allocation: 2,000,000 requests/month, 360,000 vCPU-seconds/month, 180,000 GiB-seconds/month.**
+- **Does solo testing stay inside that? Yes, by a wide margin.** Take a pessimistic analysis: ~50 s of billed instance time (25 s cold start + ~27 s warm job, rounded up), at `--cpu=2 --memory=2Gi` → ~100 vCPU-s and ~100 GiB-s per analysis, plus a few dozen 2-second polls whose cost is already inside that window. **The binding limit is GiB-seconds: 180,000 ÷ 100 ≈ 1,800 analyses/month.** vCPU-seconds allow 360,000 ÷ 100 ≈ 3,600; requests are irrelevant at this scale (a million-fold headroom). A single developer testing heavily runs tens, not thousands, of analyses per month, so the realistic figure is **$0/month**.
+- **The condition under which it would not be free:** sustained use past roughly **1,800 analyses/month** (~60/day), or adding a background keep-alive/cron ping that prevents scale-to-zero — a warm-ping every minute would bill ~43,200 instance-seconds/month of otherwise-zero cost and defeats the entire point of this tier. **Do not add a keep-alive ping to "fix" cold starts on this tier; that is a half-priced, half-correct version of the production tier. Either accept the cold starts or upgrade properly.** Past ~1,800 analyses/month, overage is billed at the same tier-1 rates ($0.000018/vCPU-s, $0.000002/GiB-s) and T5 says to upgrade rather than drift.
+
+##### The single riskiest assumption in this subsection
+
+**There are two, one per tier, because two configurations are documented here and only one is deployed. Do not read the production-tier assumption as load-bearing for what is currently running — it is not, because its config is not running.**
+
+**Dev/demo tier (§1.20.1a) — CURRENTLY DEPLOYED. Riskiest assumption: that no real concurrent user reaches this service before the tier is upgraded.** Everything that makes default CPU throttling and `--min-instances=0` survivable reduces to that one bet. Mechanism 1 (the post-`202` freeze tripping the 180 s `heartbeat_at` rule into a spurious `WORKER_LOST`) needs a job to sit mid-analysis with nothing polling it; mechanism 2 (two in-process queue counters and two heartbeat sweepers) needs enough concurrent load for Cloud Run to want a second instance. Both are gated on traffic this service does not have.
+
+Evidence it holds, such as it is: there are **zero** users today, the service is not publicly linked, and all testing is serial and manual by one developer who observes each run. The 2-second client poll cadence additionally keeps CPU reallocated for the duration of any job someone is actually watching, which is the only job that exists at this stage.
+
+**What falsifies it, and it is falsifiable cheaply:** any of triggers **T1–T5** in §1.20.1a. **T3 in particular — a single unexplained `WORKER_LOST` — is the metric that falsifies this assumption**, and the honest response is to add the two flags, not to reason about whether that one occurrence was unlucky. The risk is deliberately accepted because the cost of being wrong is a retryable error with a real error code during a demo (never a spinner that never resolves — `analysis_jobs` is still the source of truth), while the cost of being over-cautious is ~$100/month for a service with no users.
+
+**Production tier (§1.20.1 Decisions 1–2) — NOT CURRENTLY DEPLOYED; this is the assumption to re-validate when it is. Named explicitly: that `--no-cpu-throttling` plus `--min-instances=1 --max-instances=1` keeps one long-lived instance alive long enough for an in-process background job to finish after its triggering request has already returned `202`.**
+
+Evidence it holds: CPU-always-allocated is documented to keep CPU available for the instance's lifetime rather than only during request processing, which is precisely the freeze this design must avoid; and `min-instances` is documented to keep instances running and warm rather than scaling to zero. Together these address the two known mechanisms that would kill a background job. **This reasoning is unchanged and still believed correct — it is simply dormant, because the flags it describes are not set today.**
+
+What is *not* guaranteed, and is accepted: Cloud Run can still replace an instance — revision rollout, infrastructure maintenance, or an instance exceeding its memory limit. Any of those kills an in-flight job. This is already handled and handled honestly: `analysis_jobs` is the source of truth, not process memory, and a `running` job whose `heartbeat_at` is older than 180 s is reported to the poller as `failed` with `ErrorCode.WORKER_LOST` (Stage 1), which the client may retry. So the failure mode is a retryable error with a real error code, never a spinner that never resolves. The assumption being made is about *frequency*, not about correctness: that instance replacement is rare enough that `WORKER_LOST` stays an edge case rather than a routine user experience. **That frequency is the thing to watch in production, and `WORKER_LOST` rate is the metric that falsifies this assumption if it is wrong.**
 
 ---
 
@@ -1044,6 +1976,8 @@ class ErrorCode(StrEnum):
 ```
 
 Note that **no ball-detection outcome is an `ErrorCode`.** `ErrorCode` fails the job; ball speed never fails the job. The only ball-related `ErrorCode` is `CALIBRATION_INVALID`, raised synchronously at Stage 3 for a malformed calibration block — everything discoverable only at job time is a `BallSpeedUnavailableReason`.
+
+**Resolved discrepancy, recorded so it is not rediscovered: `MULTIPLE_SUBJECTS_SUSPECTED` was never a member of this enum.** The pre-migration Stage 6 Fails row listed it as though it were, so that row referenced a code the schema did not define. It is now gone from Stage 6 entirely, for a second and independent reason: with `num_poses=1` the Tasks API returns at most one person and offers no signal that another was present, making the condition undetectable at the sensor. The replacement is a pure, Stage-7-derived warning string, `subject_identity_unstable`, carried in `PoseQuality.flags` (Stage 6.6, Stage 7 step 1b). **No enum member is added and none is removed by the Tasks API migration.**
 
 ### 2.2 Request models
 
@@ -1207,7 +2141,18 @@ class PoseQuality(BaseModel):
     torso_scale_px: float = Field(description="Median shoulder-to-hip length in pixels. Defines 1 TU.")
     estimated_camera_view: CameraView
     usable: bool
-    flags: list[str] = Field(default_factory=list, description="e.g. 'ankles_not_visible'.")
+    flags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Closed vocabulary, part of the contract -- clients may branch on these. "
+            "'ankles_not_visible' | 'wrists_low_visibility' | 'subject_identity_unstable' | "
+            "'rotation_retry_applied'. 'subject_identity_unstable' replaces the removed "
+            "MULTIPLE_SUBJECTS_SUSPECTED ErrorCode: with num_poses=1 the sensor cannot "
+            "report a second person, so the detectable symptom -- a mid-clip re-anchor onto "
+            "a different subject -- is derived in the pure layer instead. It never fails "
+            "the job; it depresses Stage 9 confidence."
+        ),
+    )
 
 class HandednessResult(BaseModel):
     handedness: Handedness
@@ -1215,11 +2160,17 @@ class HandednessResult(BaseModel):
     source: HandednessSource
     racket_hand_path_length_tu: float | None = Field(default=None)
     off_hand_path_length_tu: float | None = Field(default=None)
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Free-text, NOT a closed vocabulary -- do not branch on these. "
+                    "Records incomplete wrist visibility and the coverage scaling applied, "
+                    "path/radius criterion disagreement, and hint-over-detection override.",
+    )
 
 class ContactDetection(BaseModel):
     frame_index: int = Field(description="Index into the 30 fps sampled sequence.")
     time_s: float = Field(description="Seconds from analysis_window_start_s.")
-    absolute_time_s: float = Field(
+    contact_absolute_time_s: float = Field(
         description="analysis_window_start_s + time_s. ABSOLUTE PTS in the source file. This is "
                     "what the ball-detection seek uses; on a long clip with an 8 s window, "
                     "confusing it with time_s measures the wrong 250 ms.",
@@ -1229,6 +2180,13 @@ class ContactDetection(BaseModel):
     peak_frame_index: int
     prominence_ratio: float = Field(description="Primary peak / next distinct peak. Higher = less ambiguous.")
     method: str = Field(default="peak_speed_decel_onset_v1")
+    sanity_flags: list[str] = Field(
+        default_factory=list,
+        description="Closed vocabulary: 'wrist_behind_mid_hip' | 'arm_not_extended' | "
+                    "'contact_near_clip_end' | 'subject_identity_unstable' | "
+                    "'motion_not_sustained' | 'racket_wrist_unobserved' | 'sequence_unusable'. "
+                    "Each lowers confidence; none rejects.",
+    )
 
 class SwingPhase(BaseModel):
     name: SwingPhaseName
@@ -1508,13 +2466,15 @@ Three layers enforce whole numbers, and each catches a different failure:
     "usable": true, "flags": ["left_ankle_low_visibility"]
   },
   "handedness": {
-    "handedness": "right", "confidence": 0.91, "source": "detected",
-    "racket_hand_path_length_tu": 7.83, "off_hand_path_length_tu": 2.41
+    "handedness": "right", "confidence": 0.31, "source": "user_hint",
+    "racket_hand_path_length_tu": 7.83, "off_hand_path_length_tu": 2.41,
+    "warnings": ["low separation (confidence 0.31 < 0.5); user hint right applied over detection left"]
   },
   "contact": {
-    "frame_index": 96, "time_s": 3.20, "absolute_time_s": 3.20, "confidence": 0.74,
-    "peak_hand_speed_tu_s": 11.62, "peak_frame_index": 95,
-    "prominence_ratio": 2.34, "method": "peak_speed_decel_onset_v1"
+    "frame_index": 96, "time_s": 3.20, "contact_absolute_time_s": 3.20, "confidence": 0.74,
+    "peak_hand_speed_tu_s": 11.62, "peak_frame_index": 94,
+    "prominence_ratio": 2.34, "method": "peak_speed_decel_onset_v1",
+    "sanity_flags": []
   },
   "phases": {
     "phases": [
@@ -1725,6 +2685,8 @@ backend/
       video_io.py
       extractor.py
       sequence.py
+      models/                 # VENDORED BINARY ASSET — not a Python package, no __init__.py
+        pose_landmarker_full.task   # 9,398,198 bytes, SHA-256 pinned in extractor.py
     ball/                     # NEW in v2
       __init__.py
       params.py               # PURE   — detector constants, court dimensions
@@ -1781,6 +2743,8 @@ backend/
 - `app/config.py`, `app/errors.py`, `app/deps.py` — added in v1. Settings via `pydantic-settings`, the `ErrorCode` taxonomy, FastAPI dependency wiring.
 - `app/models/internal.py` — **planned; not present on disk.** `backend/app/models/` currently contains only `__init__.py`, `enums.py` and `feedback.py`. When built, it is the intended home for internal dataclasses (`PoseSequence`, `NormalizedSequence`, `KinematicCore`, `AnalysisCore`, `CalibrationScale`) that are not part of the HTTP contract. It is **not** the home of the ball value objects: `BallTrack`, `BallCandidate`, `ContourFeatures` and `BallDetectionResult` ship in `app/ball/track.py` and stay there permanently, for the reason given in §3.1 under `BALL_PURITY_EDGE_ONE_WAY`. `CalibrationScale` is not implemented anywhere yet.
 - **`app/ball/` — added in v2.** Justified below.
+- **`app/pose/models/` — added with the Tasks API migration.** A directory holding exactly one vendored binary: `pose_landmarker_full.task`, 9,398,198 bytes, SHA-256 pinned as a constant in `extractor.py` and verified once at startup. It is **not** a Python package and must not contain an `__init__.py`. Vendored rather than downloaded because the only published URL for the bundle contains `/latest/` — a mutable pointer that would let an upstream refresh silently change every landmark, every metric, and every frozen golden fixture with no commit in our history (Stage 6.1).
+- **`backend/requirements-mediapipe.txt` — added with the Tasks API migration.** A second requirements file existing solely so `mediapipe==0.10.35` can be installed with `--no-deps`, which a plain `requirements.txt` line cannot express. The reason is a dependency-name collision that no pin can fix: `mediapipe` hard-declares `opencv-contrib-python` while this project requires `opencv-python-headless`, and because those are different distribution names pip installs **both**, leaving which `cv2/` wins unspecified. Full specification in `backend/requirements.txt` and §1.20.
 
 ### 3.1 Where ball detection lives, and why it is not in `analysis/`
 
@@ -1802,7 +2766,7 @@ This introduces a third purity class, which is named and defined rather than lef
 |---|---|---|---|
 | **PURE** | Deterministic; no I/O, no network, no model, no clock, no cv2. Arrays and scalars in, arrays and scalars out. | `numpy`, `scipy`, stdlib math, `app.models` | `app/analysis/**`, `app/ball/geometry.py`, `app/ball/track.py`, `app/ball/sequence.py`, `app/ball/params.py`, `app/pose/sequence.py`, `app/pose/landmarks.py` |
 | **PURE-CV** | Deterministic; no I/O, no network, no model weights, no clock. Array in, array or dataclass out. Depends on OpenCV as an *image-processing library only*. | `numpy`, `cv2`, `app.models`, `app.ball.track` | `app/ball/detector.py` — **and nothing else, ever** |
-| **IMPURE** | Anything touching the filesystem, network, a decoder, a model, or the clock. | anything | `api/**`, `pose/video_io.py`, `pose/extractor.py`, `ball/frames.py`, `feedback/gemini_client.py`, `feedback/service.py`, `services/**` |
+| **IMPURE** | Anything touching the filesystem, network, a decoder, a model, or the clock. | anything | `api/**`, `pose/video_io.py`, `pose/extractor.py` (ML inference **+ filesystem, for the vendored model asset**), `ball/frames.py`, `feedback/gemini_client.py`, `feedback/service.py`, `services/**` |
 
 `PURE-CV` is not a loophole. It carries the same testability guarantee that CLAUDE.md actually cares about: **every function in `ball/detector.py` is unit-testable with synthetic, programmatically generated inputs — no video files, no network, no model** (§4.5). What it gives up is only the ability to live under `app/analysis/`, and the purity test is extended, not weakened, to enforce that:
 
@@ -1810,6 +2774,7 @@ This introduces a third purity class, which is named and defined rather than lef
 - `app/ball/geometry.py`, `track.py`, `sequence.py`, `params.py` — same banned list as `analysis/`, including `cv2` and `av`.
 - `app/ball/detector.py` — banned list is everything except `numpy`, `cv2`, `app.models`, and `app.ball.track`. Specifically banned: `av`, `pathlib`, `open`, `socket`, `httpx`, `supabase`, `mediapipe`, `app.services`, `time`.
 - `app/ball/frames.py` — the only file in `app/ball/` permitted to import `av` or touch the filesystem. It is the exact analogue of `pose/video_io.py`.
+- `app/pose/sequence.py`, `app/pose/landmarks.py` — listed PURE above, and the banned list must say so explicitly: **`mediapipe` is banned from both**, alongside the same list applied to `app/analysis/**`. This was a real gap — `mediapipe` was banned from `app/analysis/**` but from nothing under `app/pose/`, which is exactly the hole through which someone builds the seam object with `mp.tasks` imported into the pure module. `app/pose/extractor.py` is the only file in the repository permitted to import `mediapipe`.
 
 **Invariant `BALL_PURITY_EDGE_ONE_WAY` — the dependency edge inside `app/ball/` points one way only.**
 
@@ -1971,6 +2936,82 @@ class Settings(BaseSettings):
     ball_speed_max_mph: int = 160
 
 def get_settings() -> Settings: ...
+```
+
+#### `app/pose/extractor.py` — **IMPURE — PLANNED, DOES NOT EXIST** (MediaPipe Tasks + filesystem)
+
+The MediaPipe boundary. `backend/app/pose/` currently contains only a 54-byte `__init__.py`; nothing below is implemented. `extract_keypoints` keeps its name from the original Stage 6 spec, but **no longer owns the landmarker's lifecycle** — a free function that constructed and closed the landmarker internally would either rebuild the ~100 MB graph per call or hide a process-global singleton, both of which break the once-per-job rule in Stage 6.7 and the memory ordering §1.20 depends on. The lifecycle moves to a class; the function takes the live extractor.
+
+```python
+POSE_MODEL_FILENAME: str = "pose_landmarker_full.task"
+POSE_MODEL_SHA256: str           # pinned digest of the vendored bundle (Stage 6.1)
+POSE_MODEL_SIZE_BYTES: int = 9_398_198
+NUM_LANDMARKS: int = 33
+
+def resolve_model_path(configured: Path | None = None) -> Path: ...
+def verify_model_asset(path: Path) -> None: ...
+    # Raises RuntimeError on missing file, size mismatch, or digest mismatch.
+    # Called ONCE at application startup, never per job. A truncated or
+    # LFS-pointer-substituted checkout does not make MediaPipe fail loudly --
+    # it can yield a landmarker that loads and emits plausible but wrong
+    # landmarks. This turns that class of failure into a refusal to boot.
+
+class PoseExtractor:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        num_poses: int = 1,
+        min_pose_detection_confidence: float = 0.5,
+        min_pose_presence_confidence: float = 0.5,
+        min_tracking_confidence: float = 0.5,
+    ) -> None: ...
+    def __enter__(self) -> "PoseExtractor": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+    def close(self) -> None: ...
+    def detect_frame(
+        self, frame_rgb: np.ndarray, timestamp_ms: int
+    ) -> tuple[np.ndarray, np.ndarray, bool]: ...
+        # Returns (landmarks (33,4) float32, world (33,3) float32, detected).
+        # On non-detection returns zero-filled arrays and False.
+
+def extract_keypoints(
+    extractor: PoseExtractor,
+    frames: Iterable[tuple[float, np.ndarray]],
+    *,
+    window_start_s: float,
+    width_px: int,
+    height_px: int,
+    max_frames: int = 240,
+) -> RawPoseSequence: ...
+    # Drives the Stage 5 generator exactly once, streaming. Accumulates into
+    # preallocated (max_frames, ...) buffers, trimmed on exit. Does NOT
+    # construct or close the extractor. Does NOT raise NO_POSE_DETECTED --
+    # it reports `detected`, and the orchestrator applies the 40 % gate.
+```
+
+`PoseExtractor` owns the context-manager protocol, **not** MediaPipe's object. Whether `PoseLandmarker` itself implements `__enter__`/`__exit__` in 0.10.35 is unverified and irrelevant: our `__exit__` calls `PoseLandmarker.close()` unconditionally, which keeps the orchestrator's `with` contract true regardless of what the library offers.
+
+#### `app/pose/sequence.py` — **PURE — PLANNED, DOES NOT EXIST** (numpy only; `mediapipe` banned)
+
+Seam assembly. The millisecond-timestamp derivation lives here rather than in `extractor.py` specifically so that it is pure and gets its own unit test, per CLAUDE.md.
+
+```python
+def frame_timestamps_ms(timestamps_s: np.ndarray, window_start_s: float) -> np.ndarray: ...
+    # int ms relative to window start, rounded, then clamped to strictly
+    # increasing. `detect_for_video()` REQUIRES strict monotonicity. At a 30 fps
+    # target the natural spacing is ~33 ms so the clamp should never fire, but
+    # Stage 5's duplicate-frame selection on 24 fps sources makes the guarantee
+    # worth enforcing rather than assuming. The returned values are fed to
+    # MediaPipe and DISCARDED -- they never reach PoseSequence.timestamps_s.
+def detection_rate(detected: np.ndarray) -> float: ...
+def build_pose_sequence(raw: RawPoseSequence, width_px: int, height_px: int) -> PoseSequence: ...
+def validate_sequence_invariants(seq: PoseSequence) -> None: ...
 ```
 
 #### `app/ball/params.py` — **PURE — PLANNED, DOES NOT EXIST**
@@ -2377,12 +3418,20 @@ backend/tests/
   fixtures/
     synthetic.py                  # PROGRAMMATIC swing generators (no video files)
     ball_synthetic.py             # NEW -- programmatic frame + track generators
-    golden/                       # frozen PoseSequence .npz from 15 real clips
+    golden/                       # frozen PoseSequence .npz from 15 real clips.
+                                  #   TWO fixtures per clip: <clip>_video.npz and
+                                  #   <clip>_image.npz, to support the Stage 6.11
+                                  #   IMAGE-vs-VIDEO acceptance test as a STANDING
+                                  #   regression rather than a one-off check.
+                                  #   All must be regenerated when the model bundle
+                                  #   or the running mode changes.
     golden_ball/                  # NEW -- frozen BallTrack .npz from the same clips
   unit/
     pose/
       test_landmarks.py
       test_sequence.py
+      test_sequence_timestamps_ms.py   # NEW -- monotonicity clamp, duplicate-PTS input
+      test_model_asset_digest.py       # NEW -- vendored .task size + SHA-256 pin
       test_video_io_rotation.py
       test_video_io_motion_scan.py    # NEW -- keyframe window location
     ball/                             # NEW
@@ -2455,6 +3504,11 @@ class PoseSequence:
 
 Produced by `app/pose/sequence.build_pose_sequence()`, consumed by `app/analysis/pipeline.analyze_kinematics()`. It is plain numpy plus two ints — no file handles, no clients, no MediaPipe objects, no lazy iterators. It serializes to `.npz` in one line, which is what makes the golden-fixture strategy possible: capture 15 real clips once, freeze their `PoseSequence` to disk, and every subsequent regression test of the entire analysis pipeline runs in CI in milliseconds with no video, no model, and no network.
 
+**This definition survived the MediaPipe Tasks API migration unchanged** (Stage 6.9, where each channel is walked to the Tasks field that populates it). Two points are now part of the contract rather than left implicit:
+
+- **Channel 4 of `landmarks` is MediaPipe Tasks `NormalizedLandmark.visibility`**, confirmed present on the installed `mediapipe==0.10.35`. `NormalizedLandmark.presence`, which is new in the Tasks API and has no legacy counterpart, is **deliberately excluded**: it answers a different question (is the landmark inside the image at all) from `visibility` (is the landmark unoccluded), we have no threshold for it, and Stage 7 step 1's validity gate is calibrated to `visibility`. Adopting it would mean a `(T, 33, 5)` seam, a pipeline-version bump, and regenerated golden fixtures — never an in-place addition.
+- **`timestamps_s` holds full-precision PTS**, float64, as recorded by Stage 5. It is never the rounded integer milliseconds that `detect_for_video()` requires; that value is derived, passed to MediaPipe, and discarded (Stage 6.5). Storing the rounded value would inject up to 0.5 ms of quantisation into every velocity in Stage 7 step 8.
+
 ### 4.2 The second seam — `BallTrack` (new in v2)
 
 **Impure/PURE-CV ball detection ends and pure computation begins at `BallTrack`**, defined in §3.2 with the same rigor as `PoseSequence`: plain numpy arrays plus scalars, frozen, `.npz`-serializable, no handles, no cv2 objects, no iterators.
@@ -2479,7 +3533,9 @@ Unchanged from v1: `FeedbackPayload` (pure dict, built from `AnalysisCore`) goes
 | 5a | Keyframe motion scan | `pose/video_io.py` | IMPURE | Filesystem, libav |
 | 5b | Decode + rotate + sample | `pose/video_io.py` | IMPURE | Filesystem, libav |
 | 5c | Rotation matrix math | `pose/video_io.read_rotation_degrees` | PURE | Pure parse of side data |
-| 6 | MediaPipe inference | `pose/extractor.py` | IMPURE | **ML model inference** |
+| 6 | MediaPipe Tasks `PoseLandmarker` inference (VIDEO mode) | `pose/extractor.py` | IMPURE | **ML model inference + filesystem** (reads the vendored `.task` bundle) |
+| 6b | Model asset digest verification | `pose/extractor.verify_model_asset` | IMPURE | Filesystem read; startup only |
+| 6c | Millisecond timestamp derivation | `pose/sequence.frame_timestamps_ms` | PURE | Rounding + monotonicity clamp on an array |
 | — | **`build_pose_sequence` — SEAM 1** | `pose/sequence.py` | PURE | Array assembly + invariants |
 | 7a | Gap detection + interpolation | `analysis/smoothing.py` | PURE | |
 | 7b | Savitzky-Golay smoothing | `analysis/smoothing.py` | PURE | |
@@ -2523,6 +3579,7 @@ Unchanged from v1: `FeedbackPayload` (pure dict, built from `AnalysisCore`) goes
 |---|---|
 | `app/analysis/**` | `mediapipe`, `av`, **`cv2`**, `httpx`, `requests`, `supabase`, `google.generativeai`, `os` (beyond `os.PathLike` typing), `pathlib`, `open`, `socket`, `time`, `app.services`, `app.pose.extractor`, `app.pose.video_io`, `app.ball.frames`, `app.ball.detector` |
 | `app/ball/geometry.py`, `track.py`, `sequence.py`, `params.py` | same list as `app/analysis/**` |
+| **`app/pose/sequence.py`, `app/pose/landmarks.py`** | same list as `app/analysis/**`, and **`mediapipe` in particular**. `app/pose/extractor.py` is the only module in the repository permitted to import `mediapipe`; the seam builder must be testable and runnable with MediaPipe absent from the environment entirely. |
 | `app/ball/detector.py` | everything except `numpy`, `cv2`, `dataclasses`, `math`, `app.models`, `app.ball.params` — explicitly banned: `av`, `pathlib`, `open`, `socket`, `httpx`, `supabase`, `mediapipe`, `time`, `app.services` |
 
 Documentation about purity decays; a failing test does not. The `cv2` ban on `app/analysis/**` is the specific thing that stops this feature from eroding the boundary over time — without it, "ball detection needs OpenCV" would eventually become "the metrics module imports cv2 for one convenience function."
@@ -2536,7 +3593,11 @@ CLAUDE.md: *"Every math function in the analysis pipeline gets a unit test with 
 | Function | Synthetic test approach |
 |---|---|
 | `interpolate_gaps` | Known linear ramp with punched holes; assert exact recovery; assert gap > 3 rejected |
-| `savgol_smooth` | Sine + Gaussian noise; assert amplitude and **peak index** preserved within 1 frame; assert a moving average fails the same test (guards the design choice) |
+| `savgol_smooth` | Sine + Gaussian noise; assert amplitude and **peak index** preserved within 1 frame; assert a moving average fails the same test (guards the design choice). **Window is now 5, not 7** (Stage 7 step 7) — the test must pin the window explicitly so a silent revert is caught. |
+| `frame_timestamps_ms` | Ascending float PTS → ascending int ms; **duplicate/near-duplicate PTS must still yield strictly increasing ms** (the `detect_for_video` requirement); assert the returned ms are never written back into `PoseSequence.timestamps_s` |
+| `detection_rate` | Synthetic boolean arrays at the 40 % boundary; assert the `NO_POSE_DETECTED` gate fires at `< 0.40` and not at `0.40` |
+| `subject_identity_unstable` detection | Synthetic two-subject swing with an injected mid-clip swap (centroid jump > 0.25 TU, torso-length change > 35 %); assert the flag is raised, assert `usable` stays `True`, assert Stage 9 confidence is depressed |
+| `verify_model_asset` | Vendored `.task` matches `POSE_MODEL_SIZE_BYTES` (9,398,198) and `POSE_MODEL_SHA256`; truncated and zero-byte copies each raise. **No network.** |
 | `apply_aspect_correction` | 9:16 frame with a known 45° segment; assert corrected angle is 45°, uncorrected is not |
 | `torso_scale` | Fixed-length synthetic torso; assert exact; assert per-frame foreshortening does not change the median |
 | `to_body_frame` | Translate the whole skeleton by an arbitrary offset; assert output is bit-identical |
@@ -2548,7 +3609,9 @@ CLAUDE.md: *"Every math function in the analysis pipeline gets a unit test with 
 | `fit_line_angle_deg`, `rms_residual_from_line` | Points on an exact line → residual 0.0, angle exact; add known scatter → known RMS |
 | `peak_prominence_ratio` | Two-peak signal with controlled ratio |
 | `detect_handedness` | `synthetic_swing(handedness=RIGHT)` → RIGHT with confidence > 0.8; mirrored → LEFT; two-handed → low confidence + hint honored |
-| `racket_hand_speed`, `find_deceleration_onset` | Triangular speed profile with a known apex; assert onset lands at the 5 % drop frame |
+| `racket_hand_speed`, `find_deceleration_onset` | Triangular speed profile with a known apex. Assert: a plateau >= 2 frames above `SUSTAINED_SPEED_FRACTION` (0.45) of peak returns the plateau's LAST frame; a one-frame spike returns the peak itself, not `peak + 1`; a slow decay is bounded at `MAX_SUSTAINED_RUN_FRAMES` (4); a clip ending mid-plateau returns the last frame. **Pin all three constants explicitly** -- the retired 5 %-drop rule was, on a real speed curve, indistinguishable from `return peak + 1` for every threshold value, so a silent revert would not show up in a fixture that only checks the answer is "near the peak". |
+| `racket_wrist_reliable`, `observed_fraction` | Synthetic sequence with one wrist landmark's `visibility` punched below threshold at frame k; assert k-1, k, k+1 are all marked unreliable (central-difference support), assert `peak_speed_index` skips an injected spike at k, assert `observed_fraction` drops proportionally |
+| `sustained_motion_frames`, `approach_motion_coverage`, `held_landmark_fraction` | Static-subject sequence with one injected single-frame spike -> `motion_not_sustained` fires and confidence falls below `CONFIDENCE_FLOOR`; a real synthetic swing -> does not fire. Each of the three sub-tests must fail independently on a stream that passes the other two |
 | `detect_contact_frame` | `contact_at_s=2.5` → frame 75 ± 1 at 30 fps; noise sweep; double-peak clip → prominence drops and confidence falls |
 | `segment_phases` | Assert contiguity, ordering, no overlap, coverage == T; degenerate clip → zero-duration phase, no exception |
 | `compute_tempo_ratio` | Known phase durations |
@@ -2672,6 +3735,17 @@ Two properties make these fixtures worth the code they cost:
 
 The `median_step_speed_px_s` and `apply_confidence_caps` tests deserve emphasis: they assert *design properties*, not just outputs. "The median survives one bad association" and "a cap can only lower confidence" are the two claims this feature's honesty rests on, and both are directly executable.
 
+#### 4.5.4 Contract tests against the installed MediaPipe (new)
+
+These are the only tests that require `mediapipe` to be installed, which is why they live in `tests/contract/` and are skipped when it is absent. They exist because Stage 6 is written against an empirically verified API surface, and the previous version of Stage 6 was written against an API that did not exist in the installed package and was never executed — the failure mode this whole group is designed to prevent.
+
+| Test | What it asserts | Why it must exist |
+|---|---|---|
+| `test_mediapipe_options_fields` | `dataclasses.fields(PoseLandmarkerOptions)` names exactly `base_options`, `running_mode`, `num_poses`, `min_pose_detection_confidence`, `min_pose_presence_confidence`, `min_tracking_confidence`, `output_segmentation_masks`, `result_callback` | A version bump that adds, removes, or renames a knob invalidates Stage 6.4's config table. Fails loudly at CI instead of quietly at runtime. |
+| `test_mediapipe_result_shape` | `result.pose_landmarks` is `list[list[...]]`; non-detection is an **empty outer list**, not `None`; `NormalizedLandmark` still carries `visibility` | `visibility` is channel 4 of the seam (§4.1). If it ever disappears, the seam is broken and every Stage 7 threshold is meaningless. |
+| `test_mediapipe_dependency_set` | mediapipe's declared `Requires-Dist` matches the hand-enumerated list in `requirements.txt`, and `opencv-contrib-python` is **not installed** | The `--no-deps` install pins us to a private dependency list. This converts "breaks on upgrade" from a surprise into a CI failure. |
+| `test_contact_image_vs_video` | Over 15 golden clips: `ContactDetection.frame_index` agrees within **±1 frame on ≥14 of 15**; `peak_hand_speed_tu_s` agrees within **5 %** | **Stage 6.11's acceptance test — the riskiest assumption in the pose path.** Failure reopens the running-mode decision in Stage 6.3. |
+
 ---
 
 ## 5. The Single Riskiest Technical Assumption
@@ -2684,7 +3758,7 @@ This is still the riskiest because everything downstream is *conditionally* corr
 
 **Why it is nonetheless workable for an MVP.** Three pieces of evidence. First, markerless single-camera pose estimation has been repeatedly validated against marker-based motion capture, and the consistent finding is that **sagittal-plane joint angles are recovered to within roughly high-single-digit degrees when the camera is approximately perpendicular to the plane of motion, and degrade sharply off-plane.** The error is not random — it is a systematic function of view angle, which means it can be *gated* rather than merely tolerated. Second, the design already front-loads the mitigation: the metric set was deliberately weighted toward **ratio and relative quantities** — shoulder-hip separation (a difference of two co-projected lines, so first-order projection effects cancel), contact height ratio (normalized against the player's own shoulder height), tempo ratio (pure timing, projection-invariant), balance sway and head stillness (torso-normalized displacement), and the *sign* of swing path angle. These are structurally more view-stable than absolute joint angles, and every one of the fragile absolute angles is already tagged `view_sensitive: true` in the schema. Third, MediaPipe's `world_landmarks` output gives a metric 3D estimate that, while too noisy to report, is a usable second opinion for detecting when the 2D projection has gone bad.
 
-**Concrete fallback.** Enforce the camera view instead of tolerating it. `estimate_camera_view()` already runs in Stage 7 and classifies view from the ratio of projected shoulder width to torso length (near 0.9–1.1 facing the camera, collapsing below ~0.5 side-on). If the detected view falls outside the tolerance band for the rubric, the response degrades to `status: "partial"`, **all `view_sensitive` metrics are set to `None`**, their weights are renormalized away, and the client shows a "reshoot from the side" prompt with a framing overlay. The user gets four to six view-invariant metrics and honest, narrower feedback rather than fifteen metrics of which several are fiction. The `view_sensitive` flag and the `None`-propagation-with-weight-renormalization machinery are in the schema and the scoring functions specifically so this fallback is a configuration change, not a rewrite.
+**Concrete fallback.** Enforce the camera view instead of tolerating it. `estimate_camera_view()` is *specified* to run in Stage 7 and to classify view from the ratio of projected shoulder width to torso length (near 0.9–1.1 facing the camera, collapsing below ~0.5 side-on) — **but it is not yet implemented and the field is hardcoded to `UNKNOWN`, so this fallback is currently unavailable; see the KNOWN GAP note under Stage 10's skip conditions.** If the detected view falls outside the tolerance band for the rubric, the response degrades to `status: "partial"`, **all `view_sensitive` metrics are set to `None`**, their weights are renormalized away, and the client shows a "reshoot from the side" prompt with a framing overlay. The user gets four to six view-invariant metrics and honest, narrower feedback rather than fifteen metrics of which several are fiction. The `view_sensitive` flag and the `None`-propagation-with-weight-renormalization machinery are in the schema and the scoring functions specifically so this fallback is a configuration change, not a rewrite.
 
 **Cheap early validation — do this before writing any metric code.** One player, one phone, half a day. Record the same three shot types from five camera positions (side-on, 30° off, 45° off, behind, front), and record three repetitions at each position so swing-to-swing variance can be separated from camera-induced variance. Run Stages 5–6 once offline, freeze the fifteen resulting `PoseSequence` objects to `.npz` in `tests/fixtures/golden/`, then compute, for each candidate metric, the coefficient of variation across camera positions for the *same* swing. **Ship only the metrics whose across-camera CV is under 10 % and whose across-camera variance is smaller than their across-repetition variance** — the second condition is the one that matters, because a metric that varies more with the camera than with the actual swing is measuring the camera. This costs no backend, no deployment, and no Gemini calls, and it produces the golden fixtures the regression suite needs anyway. In parallel, `synthetic_swing(camera_yaw_deg=...)` lets the same sensitivity be probed analytically in CI on day one, with no camera at all.
 
@@ -2729,14 +3803,24 @@ Not specified in detail (this document is backend-scoped), but the following Flu
 | Stage 4 | Temp-file deletion moved to after Stage 11. |
 | Stage 5 | Intake cap 12 s → **60 s**; keyframe motion scan added for clips > 10 s. |
 | Stage 6 | Extractor close is now a memory-ordering requirement, not just hygiene. |
-| Stage 9 | `absolute_time_s` added to `ContactDetection`. |
+| Stage 9 | `contact_absolute_time_s` added to `ContactDetection`. Briefly documented under two names — `absolute_time_s` in §2.3 and the example response body, `contact_absolute_time_s` in the Stage 9/10 prose. **`contact_absolute_time_s` is the name that shipped**; it is what `backend/app/models/responses.py` and `backend/app/analysis/contact.py` implement, and this document has been aligned to the code rather than the reverse. The reconciliation is internal-only: no Flutter code under `frontend/lib/` parses the `contact` block under either name, so there is no wire-compatibility constraint to honour. |
 | **Stage 10** | **New — ball detection (classical CV, native fps, `CAL_SPACE`).** |
 | **Stage 11** | **New — speed calculation (median step, calibrated scale).** §11.5 sets capture-rate policy: 30 fps supported and expected, `medium` is the normal ceiling, 60 fps never forced. |
+| **Known gap** | `PoseQuality.estimated_camera_view` is hardcoded to `CameraView.UNKNOWN` in the implemented Stage 7 (camera-view estimation was outside Stage 7's nine ordered steps and was not built). Every gate that reads it is therefore inert: Stage 10's skip condition, §10.6 mitigation 2, the two camera-view rows of §11.4, and §5's concrete fallback. Consequence: a `front`/`behind` capture yields a confidently wrong speed instead of `null` + `camera_view_unsuitable`. **Must close before Stage 10/11 ball-speed gating can be trusted** — implement per §5's ratio definition (projected shoulder width ÷ torso length; 0.9–1.1 facing, < ~0.5 side-on). No threshold or decision changes. |
+| **Known gap** | **Stage 14's spin axis is unreachable under weak handedness.** Rule 4 (topspin vs slice) only scores the two forehand classes, and rule 3 (forehand vs backhand) contributes nothing when handedness confidence is below 0.5 with no user hint, or is `unknown`. Since Stage 8 measures 0.05–0.36 confidence on real footage, the common uncalibrated upload cannot be classified for spin at all and lands on `unknown`. See the KNOWN GAP note under Stage 14. **Not fixed.** |
+| **Known gap** | **`UNKNOWN` handedness makes all 18 Stage 13 metrics `None`.** Four of them — `shoulder_turn_deg`, `hip_rotation_deg`, `head_stillness_tu`, `wrist_separation_at_contact_tu` — need no racket hand and could still be measured, so a clip whose handedness is unresolved is reported as wholly unmeasurable when about a quarter of the metric set is available. See the KNOWN GAP note under Stage 13. **Not fixed.** |
 | Stages 10–17 (v1) | Renumbered to 12–19. |
 | §2 | `CourtReference`, `BallSpeedConfidence`, `BallSpeedUnavailableReason`, `BallDetectionTier`, `NormalizedPoint`, `BallSpeedCalibration`, `CalibrationEcho`, `BallDetectionSummary`, `BallSpeedResult` added; `MetricUnit` deliberately unchanged. |
 | §3 | `app/ball/` package added; `analysis/speed.py` added; `analyze()` split into `analyze_kinematics()` + `analyze_swing()`. |
 | §4 | Second seam `BallTrack` defined; `PURE-CV` class defined; purity test extended, `cv2` banned from `app/analysis/**`. |
 | §5 | Re-evaluated; unchanged, with the ball-speed risk named explicitly as runner-up. |
-| §1.20 | Rebudgeted; baseline RSS up ~60–75 MB from OpenCV; peak added RSS unchanged at ~110 MB. |
+| §1.20 | Rebudgeted; baseline RSS up ~60–75 MB from OpenCV; peak added RSS unchanged at ~110 MB. **Re-derived for Cloud Run:** the 3–4× Render-0.5-shared-vCPU penalty is retired for an assumed 1.5–2.5× on 2 dedicated vCPU, so Stage 6 is 8–13 s (was 14–22 s) and the warm total is 14–27 s (was 21–37 s); per-frame CV scaled the same way; a new line item budgets the Stage 4 temp video against memory because Cloud Run's filesystem is in-memory; the "512 MB may not fit" risk is closed by allocating 2 GiB; `estimated_seconds` base deliberately held at 25 as padding. **Cold-start framing corrected for the dev tier (§1.20.1a): with `--min-instances=0` deployed, cold starts are ROUTINE, not rare — every idle-then-request transition is one. The 10–25 s estimate is unchanged; only its expected frequency is. A cold-start job totals ~24–52 s, so `estimated_seconds` will read low on it, accepted and visible.** |
+| §1.20.1 | **New, then fully re-derived.** Deploy target is **Google Cloud Run** (container from source via Cloud Build), not Render — Render is superseded, not renamed. Decisions: `--cpu=2 --memory=2Gi`; **`--no-cpu-throttling`**, required for correctness because the default throttles CPU between requests and would freeze the post-`202` background job; **`--min-instances=1 --max-instances=1`**, required because horizontal autoscaling would duplicate the in-process executor, the queue-depth counter, and the heartbeat sweeper (cross-instance DB-backed guards noted as the post-MVP fix); `--timeout=300`. The `libportaudio2` and `--no-deps` mediapipe reasoning is confirmed **host-OS-derived, not platform-derived**, and transfers unchanged — neither requirements file is edited. Cost stated: ~$100/month fixed. **This entire configuration is RETAINED as documented-but-NOT-deployed — it is the production target, see the row below.** |
+| **§1.20.1a** | **New — and this is the tier actually deployed.** The two **billing-model** flags are **reverted**: `--no-cpu-throttling` removed (→ Cloud Run default CPU throttling) and `--min-instances=1` → **`--min-instances=0`** (scales to zero). `--cpu=2 --memory=2Gi --max-instances=1 --timeout=300` **unchanged** — sizing and the single-instance cap are not billing-model changes and cost nothing at zero scale. Reason: **no users, $0/month until there is something to demo.** Both correctness problems §1.20.1 identified need their failure condition to actually occur: the post-`202` freeze needs a job un-polled mid-analysis (2 s client polls reallocate CPU), and the autoscaling race needs real concurrent load. `--max-instances=1` bounds the race to **"at most a brief overlap during a scale event", not "impossible"** — only `--min-instances=1` removed the scale-from-zero transition. Cold starts are now **routine and accepted**, absorbed by the already-padded 25 s `estimated_seconds` base. Cost: **~$0 idle; inside Cloud Run's always-free allocation** (2 M requests, 360,000 vCPU-s, 180,000 GiB-s per month) up to **~1,800 analyses/month** (GiB-seconds is the binding limit). Explicit revisit triggers **T1–T5**: >1 concurrent demo viewer, any real beta user, **any** unexplained `WORKER_LOST`, any public listing, or >500 analyses/month. Dev tier's own riskiest assumption named: **that no real concurrent user arrives before the tier is upgraded.** |
+| **Stage 1** | **Execution-model decision re-derived for Cloud Run.** Async-job-plus-polling **stays**, but the Render ~100 s edge-timeout justification is retired (Cloud Run's 300 s default would have fit the job synchronously). New grounds: single-pinned-instance serialization must be observable to the client, and a dropped mobile connection must not destroy completed CPU work. The single-instance assumption is now stated explicitly rather than inherited from the platform. **Then tier-qualified for §1.20.1a:** the bullets now rest on `--max-instances=1` (set on **both** tiers) rather than on `min-instances = max-instances = 1`; "continuously billed instance" is corrected to "single pinned instance"; the `--cpu=2` reasoning is noted as tier-independent; and the single-instance-assumption paragraph now states that the bound is **absolute** on the production tier but **"at most a brief overlap during a scale event"** on the deployed dev tier. No bullet still reads as though `--no-cpu-throttling`/`--min-instances=1` are in effect. |
 | §17 | Numeric guard extended with the conditional `mph` binding rule. |
 | Rubric | **Unchanged.** `rubric_version` stays `rubric_v1`. |
+| **DEFECT — Stage 5** | **The keyframe motion scan mis-centres the analysis window. UNIVERSAL, highest priority, fix planned in §5.1, NOT implemented.** `motion_scan_centre_s` returns the PTS of the **later** keyframe of the highest-energy consecutive pair, so its resolution is the GOP interval and it discards where inside the winning bucket the motion occurred. The Stage 5 bullet assumed ~1 keyframe per 1–2 s; **measured across the whole 16-clip corpus: 3–6 keyframes per clip, GOP 3.03–4.17 s, 16 of 16 clips at GOP ≥ 3.0 s.** Worked example (`serve_vertical_10340710.mp4`, 10.4 s, 25 fps): keyframes `[0.0, 3.04, 6.08, 9.12]`, energies `12.64 / 15.48 / 8.21`; the argmax correctly picks the middle bucket and returns its **end** (6.08 s) while the true strike is 3.44–3.52 s, giving window `[2.08, 10.08]` — **centre 2.6 s past the swing**, and surviving only because the clip-end clamp happened to bite. Fix: retain the full keyframe profile, then refine inside the winning bucket (widened by half a GOP each side) with a bounded dense decode of ≤ 48 sampled frames, **returning the midpoint of the highest-energy adjacent pair and never an interval endpoint**; the sparse-keyframe fallback (GOP ≥ 2.0 s) is the same primitive over a wider span, and a single-keyframe clip degrades to a whole-clip dense scan at `duration/48` stride plus a `motion_scan_coarse` flag rather than to today's silent head-of-clip guess. Return type widens to `MotionScanResult` so the caller can tell a located swing from a bucket boundary. Cost: §1.20's motion-scan row **0.2–0.8 s → 0.5–1.7 s**, warm total ~14–27 s → ~14–28 s, clips > 10 s only. **Not a threshold change** — widening the window is the only threshold-shaped option and costs 4–7 s of MediaPipe (~70 % of budget, linear in frames). **Corpus caveat recorded honestly in §5.1.3:** the corpus is all uniformly-encoded Pexels stock footage and phone video typically uses much shorter GOPs, so incidence on real uploads is unknown and probably lower — but the backend cannot control the uploader's encoder and **the failure is silent**, which is what justifies the fix. **Not fixed.** |
+| **DEFECT — Stage 7** | **The gap gate rejects ordinary footage, and `longest_gap` is the wrong statistic. UNIVERSAL, root-caused in §7.1, fix planned, NOT implemented.** `normalize_sequence`, `MAX_GAP_FRAMES = 3`. **This is not merely downstream of the Stage 5 defect:** with `motion_scan_centre_s` monkeypatched to the true strike time (3.48 s) the window correctly becomes `[0.0, 8.0]` and Stage 7 **still fails**, `longest_gap_frames = 98` against a bound of 3 (156 at stock settings). Failure rate **3 of 6 forehands (110, 122, 18) and 2 of 7 serves (156, 88)** — 5 of 13 clips rejected before any analysis. Cause: valid pose exists only ~2.2–4.7 s of the clip (player small or turned away pre-toss, ~5 s of post-swing recede after), and a whole-window "no gap > 3 frames" rule has essentially zero tolerance for the dead time ordinary single-camera footage contains by construction. **Root cause is one constant doing two incompatible jobs**: correct as an *interpolation limit* (interpolating across > 100 ms fabricates the trajectory the product measures — CLAUDE.md forbids it) and wrong as a *usability verdict*. **98 vs 3 is two orders of magnitude; retuning the constant is the explicit anti-pattern.** Fix: two tiers — Tier 1 keeps the 3-frame interpolation cap unchanged, leaving longer gaps unfilled as a mask; Tier 2 judges usability over a **2.0 s core sub-window anchored to the centre of the longest contiguous valid run** (refined within it by summed two-wrist displacement — a coarse anchor, never to be reused as contact detection), requiring `MIN_CORE_COVERAGE = 0.90` and `MAX_CORE_GAP_FRAMES = 3` *scoped to the core*. Whole-window `longest_gap_frames` survives as a **diagnostic**, joined by `core_coverage_fraction`, `longest_core_gap_frames` and a `dead_time_outside_core` flag so the new tolerance is auditable. The chicken-and-egg (anchoring needs swing location, which is Stage 9, which needs Stage 7) is broken by anchoring on Stage 7's own per-frame validity rather than by reordering the stages; the runner-up — moving the verdict to the orchestrator after Stage 9 — is rejected in §7.1.1 for taking the `PoseQuality` decision away from the stage that owns it and running the detector over 98-frame holes. Carries the `valid` mask onto `NormalizedSequence`; `docs/PIPELINE_STAGES_12_14_15.md` §A.5/§A.6 should key their thin-data degradation off that mask rather than re-deriving validity. **Explicitly does not fix the Stage 9 defect** — frame 71 sits at ~2.84 s, inside the valid run and inside any core window. **Not fixed.** |
+| **DEFECT — Stage 9** | **Candidate-rejection signal is computed and then ignored. Fix planned in §9.2, NOT implemented.** `contact.py` computes `arm_not_extended`, `wrist_behind_mid_hip`, `contact_near_clip_end` and `motion_not_sustained` and uses them **only to discount confidence after a candidate has already won**, via `GATE_PENALTIES`; nothing prevents a physically implausible candidate from being selected, because `peak_speed_index` produces exactly one candidate and there is nothing for it to lose to. Observed: on the ground-truth clip Stage 9 returns **source frame 71 at confidence 0.043** flagged `arm_not_extended` + `wrist_behind_mid_hip` + `motion_not_sustained` — visually confirmed mid-raise with the racket down near the hip — while true contact is **frame 87** at full extension. **Root cause has two layers.** (a) Architectural, and the one this fix addresses: the gates are a commentary track on a fixed decision. (b) Kinematic: on serves the wrist-speed proxy peaks during the explosive arm drive **~0.6 s before contact**, because the racket head's final acceleration comes from forearm pronation and wrist snap while the wrist's own translational speed has already fallen (**~9–11 units/s at frame 71 vs ~2.6–3.9 at frames 86–88**); on forehands wrist and racket travel together so the proxy lands close. **Severity is serve-specific, but the supported claim is "serves need distinct handling", NOT "groundstrokes are fine"** — only 3 forehands reached Stage 9 and only 1 was cleanly confirmable. Layer (b) is not fixed here; a racket-head proxy is separate, larger work. Fix: enumerate candidates (local maxima over reliable frames in the forward-swing window, separation reusing the existing ≥ 5-frame prominence constant, cap 5), plateau-walk each, and **move `wrist_behind_mid_hip` and `arm_not_extended` to PRE-selection filtering** — the first candidate passing both wins. `contact_near_clip_end` stays a penalty only (a real contact can legitimately occur near a clip edge, so filtering it would reject correct answers); `motion_not_sustained` stays a penalty only (composite, ×0.3, and its strongest sub-test was measured **anti-correlated** with correctness); `subject_identity_unstable` cannot discriminate between candidates by construction. `arm_not_extended` gains an `ARM_RANGE_MIN_TU` floor so a degenerate clip-relative range demotes the filter back to a penalty. **The `+1` residual is the binding constraint:** the filter runs on the plateau-walked index, so a candidate is rejected only if it fails at `i-1`, `i` **and** `i+1` — mirroring `racket_wrist_reliable` — so the accepted one-frame bias cannot reject the correct frame. **When every candidate is rejected, return nothing honestly:** `ErrorCode.CONTACT_NOT_FOUND` exists and is currently unreachable; Stage 9 still never raises, returning `confidence = 0.0` plus a new `contact_not_found` flag that the orchestrator maps (amend `docs/PIPELINE_STAGES_12_14_15.md` §E.2/§E.3/§E.4, do not duplicate). **This raises the job-failure rate, stated plainly** — justified because a wrong contact frame propagates silently through Stages 12–16 and comes out looking normal, with a pre-committed revisit trigger if the all-rejected rate exceeds ~20 %. **Not a threshold change:** confidence was already 0.043, below the 0.35 partial threshold, and was returned anyway — confidence gates tone and ball speed, never selection, so driving penalties to 0.0 leaves `frame_index = 71` untouched; what is missing is a second candidate and no constant creates one. **`backend/tests/integration/test_pipeline_end_to_end.py::test_contact_matches_the_ground_truth_band` is `xfail(strict=True)` and will XPASS — i.e. FAIL the suite — the moment this lands; removing the marker is a required step of the same commit.** `test_gate_wrist_behind_mid_hip_lowers_confidence` and `test_gate_arm_not_extended_lowers_confidence` must change; `test_gate_contact_near_clip_end_lowers_confidence` and `test_gate_subject_identity_unstable_lowers_confidence` must NOT. **Re-validation: §9.1's "stable" verdict does not transfer** — it used hand-centred windows (not Stage 5's motion scan) and was serve-light, so §9.2.8 requires re-running the 5 existing labelled events with the `+1` residual unchanged, then extending ground truth to ≥ 8 serves and ≥ 8 forehands on Stage-5-placed windows after Defects 1 and 2 land. **Not fixed.** |
+| **Defect ordering** | The three defect fixes above are sequenced **Stage 5 → Stage 7 → Stage 9** and the order is load-bearing, not cosmetic: Stage 7's core-window anchor is computed inside a window Stage 5 places, and Stage 9's candidate list is computed over frames Stage 7 admits. Fixing them in any other order measures each change against an input that is about to change again, and re-validates nothing. |

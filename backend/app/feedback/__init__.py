@@ -11,8 +11,8 @@ from app.feedback.references import (
     Deviation,
     DeviationDirection,
     ReferenceRange,
-    ReferenceShotType,
     compare_to_reference,
+    reference_ranges_for,
 )
 
 __all__ = [
@@ -22,8 +22,8 @@ __all__ = [
     "GeminiClient",
     "GoogleGenAIClient",
     "ReferenceRange",
-    "ReferenceShotType",
     "compare_to_reference",
     "generate_feedback",
+    "reference_ranges_for",
     "should_skip_gemini",
 ]

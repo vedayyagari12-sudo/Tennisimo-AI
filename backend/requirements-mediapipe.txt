@@ -1,0 +1,14 @@
+# Installed SEPARATELY and with --no-deps:
+#     pip install --no-deps -r requirements-mediapipe.txt
+#
+# Never add a second package to this file, and never install it without
+# --no-deps. Its only purpose is to keep mediapipe's hard-declared
+# `opencv-contrib-python` dependency from being resolved, so that
+# `opencv-python-headless` from requirements.txt is the single cv2 provider.
+# Full reasoning: backend/requirements.txt, PIPELINE.md 1.20.
+#
+# EXACT pin, not a range. The Tasks API field list that PIPELINE.md Stage 6 is
+# written against was verified against this exact version via
+# dataclasses.fields(PoseLandmarkerOptions). Bumping it requires re-verifying
+# that field list and re-deriving the dependency set in requirements.txt.
+mediapipe==0.10.35

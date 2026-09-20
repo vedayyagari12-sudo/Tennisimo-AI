@@ -18,3 +18,7 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+markers = [
+    "slow: runs real MediaPipe inference and a real decode. Deselect with -m 'not slow'.",
+    "gemini_live: calls the real Gemini API. Opt-in; requires GEMINI_API_KEY in the environment.",
+]

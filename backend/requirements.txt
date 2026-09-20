@@ -1,13 +1,108 @@
-# Runtime deps.
+# Runtime deps. Python 3.13 (see CLAUDE.md).
+#
+# INSTALL ORDER IS NOT OPTIONAL. This file does not install mediapipe.
+# Use, in this order:
+#     pip install -r requirements.txt
+#     pip install --no-deps -r requirements-mediapipe.txt
+# The reason is documented at the bottom of this file and in PIPELINE.md §1.20.
+#
 # The Gemini SDK is deliberately NOT listed: the client is injected behind the
 # GeminiClient protocol in app/feedback/gemini.py, and the concrete Google SDK
 # implementation imports the SDK lazily at call time.
 pydantic>=2.6
 
-# Ball detection (app/pose/ball_detector.py). cv2 is used only as an
-# image-processing library over arrays, never as a demuxer.
-numpy>=2.2
-opencv-python>=4.9
+# --- ASGI / web layer -----------------------------------------------------
+# The ASGI framework and the server that runs it. PIPELINE.md §1.20.1's
+# Dockerfile start command is
+# `uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1`,
+# so both are RUNTIME deps, not dev extras -- the container cannot boot without
+# them. `pydantic` above is the request/response model layer FastAPI validates
+# against (CLAUDE.md: Pydantic models for all request/response bodies).
+fastapi>=0.135,<1.0
+# `[standard]`, NOT bare uvicorn -- this was decided, not defaulted. The extra
+# pulls uvloop + httptools (faster event loop and HTTP parser) and also
+# websockets + watchfiles. Deciding factor is §0's async job model: the event
+# loop must keep answering `GET /jobs/{id}` polls while a CPU-bound MediaPipe
+# job occupies the single ThreadPoolExecutor worker, and uvloop is precisely
+# that responsiveness margin. Cost is single-digit MB against the ~1.5-1.7 GB
+# headroom §1.20's rebudget leaves on the chosen 2 GiB allocation, so the RSS
+# budget does not object here the way it did to the OpenCV GUI wheels below.
+# Dead weight, named as plainly as matplotlib is: `websockets` (we expose no
+# WebSocket endpoints) and `watchfiles` (reload only; the production start
+# command passes no --reload). Both are small; if the budget ever tightens,
+# bare `uvicorn` is the fallback and costs only loop/parser throughput.
+uvicorn[standard]>=0.42,<1.0
 
-# Dev / test
+# --- Auth (PIPELINE.md Stage 2) -------------------------------------------
+# The [crypto] extra is NOT optional: it pulls `cryptography`, without which
+# PyJWT cannot verify ES256 at all -- it raises
+# NotImplementedError("Algorithm 'ES256' could not be found") at decode time,
+# which looks like a token problem and is not. PyJWKClient also lives here.
+# Pin range matches the version resolved in this environment (PyJWT 2.10.1,
+# cryptography 49.0.0, both already installed).
+PyJWT[crypto]>=2.10,<3.0
+
+# --- Supabase transport ---------------------------------------------------
+# `supabase-py` is DELIBERATELY ABSENT. DATABASE_SETUP.md Part 5.2 item 3 asked
+# for this to be decided rather than defaulted: the backend makes a signed-
+# upload-URL creation, an object HEAD, a streamed download and a handful of
+# PostgREST queries -- all plain HTTPS. The SDK's value is convenience; its
+# cost is a dependency tree over the single most security-sensitive credential
+# in the system. Decision: httpx only. Listed explicitly because
+# app/services/*.py now `import httpx` directly, and depending on a transitive
+# dependency of fastapi/uvicorn is how a working service breaks on a minor
+# upstream bump.
+httpx>=0.28,<1.0
+
+# --- Pose + ball numerics -------------------------------------------------
+# cv2 is used only as an image-processing library over arrays, never as a
+# demuxer. PyAV owns all decoding (PIPELINE.md Stage 5).
+numpy>=2.2
+scipy>=1.13
+av>=12.0
+
+# HEADLESS, deliberately. The GUI wheels map GTK/Qt/X11 shared objects we never
+# call, for roughly 40-60 MB of dead resident mapping. This pin REPLACES the
+# previous `opencv-python>=4.9`, which contradicted PIPELINE.md §1.20's stated
+# requirement for the headless variant.
+opencv-python-headless>=4.9,<6
+
+# --- mediapipe's real runtime dependencies, enumerated by hand -------------
+# Installed here because mediapipe itself goes in with --no-deps (below).
+# `import mediapipe.tasks.python.vision` pulls cv2, matplotlib AND sounddevice
+# into sys.modules at import time, so none of these is lazily optional --
+# omitting any of them turns into an ImportError at the first job, not a
+# smaller container. They are budgeted as resident in §1.20.
+absl-py>=2.1
+certifi>=2024.2.2
+flatbuffers>=24.3.25
+matplotlib>=3.8          # DEAD WEIGHT: we never plot. Required at import time.
+sounddevice>=0.5         # DEAD WEIGHT: we never touch audio. Required at import time.
+
+# --- Dev / test -----------------------------------------------------------
 pytest>=8.0
+
+# -------------------------------------------------------------------------
+# WHY mediapipe IS NOT IN THIS FILE
+#
+# Verified with `pip install --dry-run --ignore-installed --report`:
+# mediapipe==0.10.35 hard-declares `opencv-contrib-python` in its metadata
+# (Requires: absl-py, certifi, flatbuffers, matplotlib, numpy,
+# opencv-contrib-python, sounddevice). `opencv-contrib-python` and
+# `opencv-python-headless` are DIFFERENT DISTRIBUTION NAMES, so pip sees no
+# conflict and installs BOTH -- confirmed: opencv-contrib-python==5.0.0.93 and
+# opencv-python-headless==5.0.0.93 together, 25 packages total. Both ship a
+# `cv2/` package to the same site-packages path, so which one wins is
+# install-order dependent and effectively unspecified.
+#
+# Pinning does not fix this and ORDERING DOES NOT FIX IT EITHER -- that was
+# tested directly, with the headless pin listed above mediapipe, and both
+# variants still resolved. A nondeterministic cv2 sitting upstream of a
+# reported mph number is unacceptable, so mediapipe is installed --no-deps
+# with its real deps enumerated above and headless substituted for contrib.
+#
+# COST OF THIS APPROACH, stated plainly: the list above is mediapipe's private
+# dependency set. A version bump can change it silently. Therefore mediapipe is
+# pinned with `==`, never `>=`, and any bump requires re-deriving the list via
+# `pip install --dry-run --report` and updating this file in the same commit.
+# There is a CI check for this (PIPELINE.md §4.5).

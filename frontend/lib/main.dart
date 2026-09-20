@@ -6,11 +6,11 @@ import 'screens/login_screen.dart';
 import 'screens/record_screen.dart';
 
 /// REPLACE ME: the Supabase project URL, e.g. `https://your-ref.supabase.co`
-const String supabaseUrl = 'https://replace-me.supabase.co';
+const String supabaseUrl = 'https://qrjpheqayeudazcrqxpl.supabase.co';
 
 /// REPLACE ME: the Supabase anon / publishable key. This is the only key that
 /// may ever live in the client. Never put the service-role key here.
-const String supabasePublishableKey = 'REPLACE_ME_SUPABASE_PUBLISHABLE_KEY';
+const String supabasePublishableKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFyanBoZXFheWV1ZGF6Y3JxeHBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgwNzgyODcsImV4cCI6MjEwMzY1NDI4N30.VKGzCKDUYba6Uxb23kUkzDwpIZLsYqiQ9nKQhl5JPAs';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
