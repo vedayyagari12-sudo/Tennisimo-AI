@@ -48,7 +48,10 @@ class PoseQuality(BaseModel):
         description=(
             "Closed vocabulary, part of the contract -- clients may branch on these. "
             "'ankles_not_visible' | 'wrists_low_visibility' | 'subject_identity_unstable' | "
-            "'rotation_retry_applied'. 'subject_identity_unstable' never fails the job; it "
+            "'rotation_retry_applied' | 'motion_scan_coarse'. 'motion_scan_coarse' means Stage "
+            "5 located the analysis window with a whole-clip dense scan at a stride wider than "
+            "0.5 s, so the window is coarsely centred. 'subject_identity_unstable' never fails "
+            "the job; it "
             "depresses Stage 9 confidence."
         ),
     )

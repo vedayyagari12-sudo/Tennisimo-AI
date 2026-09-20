@@ -106,7 +106,11 @@ def test_generator_yields_absolute_pts_not_window_relative(clip: Path) -> None:
 
     timestamps = [pts for pts, _ in stream.frames]
     assert timestamps, "the window produced no frames"
-    assert timestamps[0] >= stream.analysis_window_start_s
+    # The sampler picks the frame NEAREST each target, so the first sample may
+    # sit a fraction of a frame interval before the window start. That never
+    # showed before Defect 1 was fixed only because the window start was then a
+    # keyframe PTS verbatim; a refined centre is a midpoint between two frames.
+    assert timestamps[0] >= stream.analysis_window_start_s - 1.0 / 25.0
     assert timestamps == sorted(timestamps)
     assert timestamps[0] == pytest.approx(stream.analysis_window_start_s, abs=1.0 / 25.0)
     # The decisive one: NOT relative to the window.

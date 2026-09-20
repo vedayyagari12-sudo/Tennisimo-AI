@@ -10,12 +10,16 @@ background precisely so a swap shows up.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import av
 import numpy as np
 import numpy.typing as npt
+
+#: ``(frame_index, frame_count, width, height) -> (x, y)``.
+CentreFn = Callable[[int, int, int, int], tuple[int, int]]
 
 #: Optic yellow, as RGB. Chosen so the R and B channels are far apart: swapping
 #: them moves the HSV hue right out of the ball detector's yellow gate.
@@ -56,6 +60,39 @@ def ball_centre_at(frame_index: int, frame_count: int, width: int, height: int) 
     return x, y
 
 
+def step_centre_at(
+    *,
+    move_start_s: float,
+    move_duration_s: float,
+    fps: int,
+    width: int,
+    height: int,
+) -> CentreFn:
+    """A ball parked at A, moving to B over ``move_duration_s``, then parked at B.
+
+    A *displaced step*, not a there-and-back burst, and that distinction is the
+    whole point: the keyframe pass compares I-frames, so an event that returns
+    the scene to its starting state leaves consecutive keyframes identical and
+    every bucket energy at zero. A permanent displacement is what makes the
+    bucket containing the event win pass 1, while the event's true instant stays
+    strictly inside that bucket for pass 2 to find.
+    """
+    start_index = move_start_s * fps
+    move_frames = max(1.0, move_duration_s * fps)
+    first = (width // 4, height // 2)
+    last = (3 * width // 4, height // 2)
+
+    def centre(frame_index: int, frame_count: int, _w: int, _h: int) -> tuple[int, int]:
+        progress = (frame_index - start_index) / move_frames
+        progress = min(1.0, max(0.0, progress))
+        return (
+            int(first[0] + progress * (last[0] - first[0])),
+            int(first[1] + progress * (last[1] - first[1])),
+        )
+
+    return centre
+
+
 def write_clip(
     path: Path,
     *,
@@ -63,8 +100,16 @@ def write_clip(
     width: int = 160,
     height: int = 96,
     fps: int = 25,
+    gop_size: int | None = None,
+    centre_fn: CentreFn = ball_centre_at,
 ) -> Path:
-    """Encode a synthetic clip and return its path. H.264, yuv420p, no audio."""
+    """Encode a synthetic clip and return its path. H.264, yuv420p, no audio.
+
+    ``gop_size`` FORCES the keyframe interval (scene-cut insertion disabled), so
+    a test that cares about keyframe spacing states it as an input rather than
+    inheriting whatever x264 chose. ``centre_fn`` lets a test place the motion at
+    a known instant.
+    """
     container = av.open(str(path), mode="w")
     try:
         stream = container.add_stream("libx264", rate=fps)
@@ -73,8 +118,18 @@ def write_clip(
         stream.pix_fmt = "yuv420p"
         # Lossless-ish: the colour assertions need the hue to survive encoding.
         stream.options = {"crf": "0", "preset": "ultrafast", "tune": "zerolatency"}
+        if gop_size is not None:
+            stream.codec_context.gop_size = gop_size
+            # keyint_min + sc_threshold=0: without both, x264 inserts keyframes
+            # on scene cuts and the forced spacing is not actually forced.
+            stream.options = {
+                **stream.options,
+                "g": str(gop_size),
+                "keyint_min": str(gop_size),
+                "sc_threshold": "0",
+            }
         for index in range(frame_count):
-            rgb = paint_frame(width, height, ball_centre_at(index, frame_count, width, height))
+            rgb = paint_frame(width, height, centre_fn(index, frame_count, width, height))
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
             for packet in stream.encode(frame):
                 container.mux(packet)
@@ -98,8 +153,10 @@ __all__ = [
     "BACKGROUND_RGB",
     "BALL_RADIUS_PX",
     "BALL_RGB",
+    "CentreFn",
     "ball_centre_at",
     "dominant_ball_pixel",
     "paint_frame",
+    "step_centre_at",
     "write_clip",
 ]

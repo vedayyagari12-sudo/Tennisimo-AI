@@ -84,7 +84,7 @@ from app.pose.extractor import (
     verify_model_asset,
 )
 from app.pose.sequence import build_pose_sequence, detection_rate
-from app.pose.video_io import VideoDecodeError, open_pose_stream
+from app.pose.video_io import MOTION_SCAN_COARSE_FLAG, VideoDecodeError, open_pose_stream
 from app.services.orchestrator import JobContext, JobFailure
 from app.services.repository import AnalysisRow
 
@@ -422,6 +422,10 @@ def run_analysis_job(
         # -- Stages 7-9 and 12-15: the pure core -------------------------
         with timer.measure("analysis"):
             seq, quality = normalize_sequence(pose_sequence)
+            if stream.motion_scan_coarse and MOTION_SCAN_COARSE_FLAG not in quality.flags:
+                # A degraded window-location path must cost something visible in
+                # the response, not only in the logs (PIPELINE.md 5.1.1).
+                quality.flags.append(MOTION_SCAN_COARSE_FLAG)
             if not quality.usable:
                 raise JobFailure(ErrorCode.POSE_QUALITY_TOO_LOW, stage="normalize")
             if SUBJECT_IDENTITY_UNSTABLE in quality.flags:

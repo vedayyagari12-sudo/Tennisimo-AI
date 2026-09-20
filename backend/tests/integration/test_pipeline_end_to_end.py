@@ -65,17 +65,36 @@ CONTACT_TOLERANCE_S: float = 2.0 / 25.0
 #: in order to exercise Stages 8-18 on real footage. Nothing else is patched.
 RELAXED_MAX_GAP_FRAMES: int = 8
 
-#: Cap on sampled frames, set through Settings like any operator would. The
-#: motion scan places the window at 2.08 s; 80 frames at 30 fps covers
-#: [2.08, 4.72] s, which contains the ground-truth contact at ~3.44 s and
-#: excludes the tail of the clip where the player is no longer trackable.
+#: Cap on sampled frames, set through Settings like any operator would.
 SAMPLED_FRAME_CAP: int = 80
+
+#: Analysis window for the two real runs, also set through Settings. Stage 5 now
+#: centres the window on the strike (measured 3.38 s against a ground truth of
+#: 3.44-3.52 s), so narrowing the window keeps it CENTRED there: 2.67 s is
+#: exactly ``SAMPLED_FRAME_CAP`` frames at 30 fps and covers roughly
+#: [2.05, 4.71] s -- the span over which this clip holds a trackable pose.
+#:
+#: Before Defect 1 (PIPELINE.md 5.1) was fixed, the same span was reached BY
+#: ACCIDENT: the scan returned its winning bucket's end, 6.08 s, the 8 s window
+#: clamped to [2.08, 10.08], and the 80-frame cap truncated it from the start.
+#: The cap can only truncate a window's TAIL, so with a correctly centred window
+#: it no longer doubles as a window-narrowing knob. Stating the width is the
+#: honest version of what that accident was doing.
+RUN_ANALYSIS_WINDOW_S: float = SAMPLED_FRAME_CAP / 30.0
 
 FAKE_ENV: dict[str, str] = {
     "SUPABASE_URL": "https://fake-project.supabase.invalid",
     "SUPABASE_SERVICE_ROLE_KEY": "fake-service-role-key-not-a-secret",
     "GEMINI_API_KEY": "fake-gemini-key-not-a-secret",
     "MAX_ANALYSIS_FRAMES": str(SAMPLED_FRAME_CAP),
+}
+
+#: What the two REAL runs use. Kept separate from ``FAKE_ENV`` so that
+#: ``test_default_settings_fail_on_pose_quality`` keeps testing stock Stage 5
+#: settings.
+RUN_ENV: dict[str, str] = {
+    **FAKE_ENV,
+    "ANALYSIS_WINDOW_SECONDS": f"{RUN_ANALYSIS_WINDOW_S:.4f}",
 }
 
 #: A fixture Gemini response. Deliberately number-free: the numeric guard
@@ -178,7 +197,7 @@ def completed_run() -> Iterator[dict[str, Any]]:
     """Run the pipeline ONCE for the whole module. Real MediaPipe is not cheap."""
     repository = RecordingRepository()
     storage = ClipStorage()
-    settings = Settings(env=FAKE_ENV)
+    settings = Settings(env=RUN_ENV)
     client = ReplayGeminiClient()
 
     original = pipeline_module.normalize_sequence
@@ -206,12 +225,17 @@ def test_default_settings_fail_on_pose_quality() -> None:
     """DEFECT PIN, not an aspiration.
 
     With stock settings the vendored clip does not produce an analysis at all:
-    the motion scan centres an 8 s window at 2.08 s, the player stops being
-    trackable at about 4.85 s, and the resulting 156-frame gap trips Stage 7's
-    3-frame ``max_gap_frames`` bound. The job fails CLEANLY -- a ``JobFailure``
-    carrying ``pose_quality_too_low`` -- rather than crashing, and that clean
-    failure is what this test pins. Change it when the gate or the window
-    placement changes, not by loosening the assertion.
+    the motion scan centres an 8 s window on the strike at ~3.38 s, which clamps
+    to [0.0, 8.0]; the player is not trackable before ~2.2 s or after ~4.7 s,
+    and the resulting long gap trips Stage 7's 3-frame ``max_gap_frames`` bound.
+    The job fails CLEANLY -- a ``JobFailure`` carrying ``pose_quality_too_low``
+    -- rather than crashing, and that clean failure is what this test pins.
+
+    Correct centring does NOT fix this and was never expected to: PIPELINE.md
+    7.1 establishes with a monkeypatched true strike time that Stage 7 still
+    fails on a correctly centred window. Fixing Defect 1 moved the gap figure
+    (156 -> 98 per 7.1) and did not change the verdict. Change this test when
+    the gate changes -- Defect 2 -- not by loosening the assertion.
     """
     repository = RecordingRepository()
     settings = Settings(env={k: v for k, v in FAKE_ENV.items() if k != "MAX_ANALYSIS_FRAMES"})
@@ -241,17 +265,29 @@ def test_run_persists_a_validatable_analysis(completed_run: dict[str, Any]) -> N
 def test_stage_5_window_is_absolute_and_covers_the_strike(
     completed_run: dict[str, Any],
 ) -> None:
-    """The Stage 5/6 seam did not pre-subtract the window start.
+    """The Stage 5/6 seam did not pre-subtract the window start, AND the window
+    is CENTRED on the strike rather than merely containing it.
 
     ``contact_absolute_time_s`` is an absolute PTS in the source file, so it
     must be at or after ``analysis_window_start_s``. If the generator had
     yielded window-relative timestamps, ``extract_keypoints`` would have
     subtracted the start a second time and this would sit near zero.
+
+    The centring assertion is the one that would have failed before Defect 1
+    (PIPELINE.md 5.1) was fixed: "covers the strike" passed happily with the
+    window centre 2.6 s past it, because the clamp at the clip end dragged the
+    window back far enough to keep the strike inside. That was luck, and a test
+    that only asserts coverage leaves the hole open.
     """
     response: AnalysisResponse = completed_run["response"]
     video = response.video
 
     assert video.analysis_window_start_s > 0.0, "the motion scan should have moved the window"
+    strike_s = sum(GROUND_TRUTH_CONTACT_S) / 2.0
+    window_centre_s = (video.analysis_window_start_s + video.analysis_window_end_s) / 2.0
+    assert abs(window_centre_s - strike_s) <= 1.0, (
+        f"window centred at {window_centre_s:.2f}s, strike at {strike_s:.2f}s"
+    )
     assert video.frames_sampled == SAMPLED_FRAME_CAP
     assert response.contact.contact_absolute_time_s >= video.analysis_window_start_s
     assert response.contact.contact_absolute_time_s <= video.analysis_window_end_s
@@ -375,7 +411,7 @@ def test_orchestrator_drives_the_real_runner_to_succeeded() -> None:
         orchestrator = JobOrchestrator(
             repository=repository,  # type: ignore[arg-type]
             storage=ClipStorage(),  # type: ignore[arg-type]
-            settings=Settings(env=FAKE_ENV),
+            settings=Settings(env=RUN_ENV),
             loop=loop,
             runner=partial(run_analysis_job, gemini_client=client),
         )
