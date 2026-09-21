@@ -28,4 +28,10 @@ COPY backend/ ./backend/
 # container -- the identical correctness defect that --max-instances=1 exists
 # to prevent. Concurrency comes from the async event loop, never from workers.
 ENV PYTHONUNBUFFERED=1
-CMD exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1
+# DEVIATION FROM docs/PIPELINE.md 1.20.1 (documented CMD is stale, see commit msg):
+# every module under backend/app/ imports absolutely from `app.` (e.g.
+# `from app.api import routes_analyses`), so `backend.app.main` raises
+# ModuleNotFoundError: No module named 'app'. /app/backend on PYTHONPATH and the
+# `app.main:app` target are the real importable ASGI path.
+ENV PYTHONPATH=/app/backend
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1
