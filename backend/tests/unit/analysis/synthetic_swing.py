@@ -125,8 +125,18 @@ def build_sequence(
     swing_direction_sign: int = 1,
     visibility: float = 0.9,
     handedness: Handedness = Handedness.RIGHT,
+    valid_run: tuple[int, int] | None = None,
 ) -> NormalizedSequence:
-    """An upright body in the Stage 7 body frame: y UP, mid-hip at (0, 0)."""
+    """An upright body in the Stage 7 body frame: y UP, mid-hip at (0, 0).
+
+    ``valid_run`` is ``(start, end_exclusive)``: frames outside it are marked
+    invalid and their per-landmark visibility is dropped below the gate, which
+    is the shape REAL footage has -- trackable in the middle, absent at both
+    ends (PIPELINE.md 7.1.4). The default, end-to-end-valid sequence cannot
+    express that shape, which is why a whole suite of green tests said nothing
+    about a gate that rejected a third of the corpus. Stages 12/13 are supposed
+    to key their thin-data degradation off this mask.
+    """
     points = np.zeros((frame_count, NUM_LANDMARKS, 2), dtype=np.float64)
     mirror = 1.0 if handedness != Handedness.LEFT else -1.0
     points[:, LEFT_HIP] = (-0.5 * mirror, 0.0)
@@ -165,13 +175,20 @@ def build_sequence(
         else np.asarray(timestamps_s, dtype=np.float64)
     )
     velocity = central_difference(points, stamps)
+    valid = np.zeros((frame_count,), dtype=bool)
+    if valid_run is None:
+        valid[:] = True
+    else:
+        valid[int(valid_run[0]) : int(valid_run[1])] = True
+    visibility_map = np.full((frame_count, NUM_LANDMARKS), visibility, dtype=np.float64)
+    visibility_map[~valid] = 0.0
     return NormalizedSequence(
         points=points,
         velocity=velocity,
         acceleration=central_difference(velocity, stamps),
         timestamps_s=stamps,
-        valid=np.ones((frame_count,), dtype=bool),
-        visibility=np.full((frame_count, NUM_LANDMARKS), visibility, dtype=np.float64),
+        valid=valid,
+        visibility=visibility_map,
         swing_direction_sign=int(swing_direction_sign),
         torso_scale_px=120.0,
         width_px=360,

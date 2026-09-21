@@ -19,6 +19,7 @@ from app.analysis.smoothing import (
     MAX_GAP_FRAMES,
     central_difference,
     interpolate_gaps,
+    longest_gap_frames,
     savgol_smooth,
 )
 from app.models.enums import CameraView
@@ -52,6 +53,30 @@ VISIBILITY_THRESHOLD: Final[float] = 0.5
 CENTROID_JUMP_TU: Final[float] = 0.25
 TORSO_CHANGE_FRACTION: Final[float] = 0.35
 SUBJECT_IDENTITY_UNSTABLE: Final[str] = "subject_identity_unstable"
+
+#: PIPELINE.md 7.1.2, Tier 2. Length of the core sub-window the usability
+#: verdict is judged over (+-1.0 s about the anchor). A swing from takeback-end
+#: through follow-through runs ~0.6-1.2 s; 2.0 s is 60 frames at 30 fps, which
+#: holds all four Stage 12 phases plus margin.
+CORE_WINDOW_S: Final[float] = 2.0
+
+#: Bounds TOTAL loss inside the core. 10 % of 60 frames is 6 frames, which
+#: (because Tier 1 still refuses any single gap over 3) must arrive as at least
+#: two separate short gaps to get this far.
+MIN_CORE_COVERAGE: Final[float] = 0.90
+
+#: Bounds CONCENTRATED loss inside the core: the unchanged 3-frame bound, newly
+#: SCOPED. Outside the core a longer gap is recorded and flagged, not fatal.
+MAX_CORE_GAP_FRAMES: Final[int] = 3
+
+#: How far the coarse anchor may be repositioned to find the best-covered
+#: placement of the core window. PIPELINE.md 7.1.2 states the anchor's own
+#: accuracy -- "allowed to be half a second wrong" -- and this is that number
+#: spent where it was earned. Bounded: a box free to slide further would walk
+#: around a hole through contact instead of failing on it.
+ANCHOR_TOLERANCE_S: Final[float] = 0.5
+
+DEAD_TIME_OUTSIDE_CORE: Final[str] = "dead_time_outside_core"
 
 
 def core_visibility(landmarks: np.ndarray) -> np.ndarray:
@@ -255,14 +280,273 @@ def swing_direction_sign(wrist_points: np.ndarray, timestamps_s: np.ndarray) -> 
     return 1 if displacement >= 0.0 else -1
 
 
+# --- Tier 1: what may be interpolated (PIPELINE.md 7.1.2) -------------------
+
+
+def hold_unfillable_gaps(
+    filled: np.ndarray,
+    valid: np.ndarray,
+    *,
+    max_gap_frames: int = MAX_GAP_FRAMES,
+) -> tuple[np.ndarray, int]:
+    """Undo the linear fill across gaps LONGER than ``max_gap_frames``.
+
+    Tier 1 of PIPELINE.md 7.1.2, and the half of the defect that is NOT being
+    relaxed: linear interpolation across more than ~100 ms of a swing fabricates
+    the trajectory the product exists to measure. ``interpolate_gaps`` fills
+    every gap unconditionally, so the long ones are replaced here with an edge
+    hold -- the first half of the gap holds the last frame before it, the second
+    half holds the first frame after it. A hold is inert and visibly so (Stage
+    9's held-coordinate test reads exactly-zero speed); a ramp looks like
+    motion that never happened. Those frames stay ``valid=False`` either way.
+
+    Returns:
+        (data, interpolated_frame_count) where the count covers only frames
+        whose coordinates were genuinely interpolated.
+    """
+    data = np.array(filled, dtype=np.float64, copy=True)
+    flags = np.asarray(valid, dtype=bool)
+    if flags.ndim != 1 or data.shape[0] != flags.shape[0]:
+        raise ValueError("valid must be 1-D and match filled along axis 0")
+
+    interpolated = 0
+    count = int(flags.shape[0])
+    index = 0
+    while index < count:
+        if flags[index]:
+            index += 1
+            continue
+        start = index
+        while index < count and not flags[index]:
+            index += 1
+        end = index  # exclusive
+        length = end - start
+        bounded = start > 0 and end < count
+        if bounded and length <= int(max_gap_frames):
+            interpolated += length
+            continue
+        if bounded:
+            middle = start + length // 2
+            data[start:middle] = data[start - 1]
+            data[middle:end] = data[end]
+        # Leading and trailing gaps are already an edge hold out of
+        # ``interpolate_gaps`` -- there is nothing on one side to interpolate
+        # between -- so they are left alone and never counted as interpolated.
+    return data, int(interpolated)
+
+
+# --- Tier 2: where the verdict is judged (PIPELINE.md 7.1.2) ----------------
+
+
+def longest_valid_run(valid: np.ndarray) -> tuple[int, int]:
+    """``(start, end_exclusive)`` of the longest contiguous run of valid frames.
+
+    ``(0, 0)`` when no frame is valid. Ties go to the earlier run.
+    """
+    flags = np.asarray(valid, dtype=bool)
+    if flags.ndim != 1:
+        raise ValueError("valid must be 1-D")
+    best = (0, 0)
+    index = 0
+    count = int(flags.shape[0])
+    while index < count:
+        if not flags[index]:
+            index += 1
+            continue
+        start = index
+        while index < count and flags[index]:
+            index += 1
+        if index - start > best[1] - best[0]:
+            best = (start, index)
+    return best
+
+
+def wrist_extension(xy: np.ndarray) -> np.ndarray:
+    """Summed two-wrist distance from mid-hip, per frame, in torso lengths.
+
+    The anchor refinement's proxy for "the busiest moment": both wrists are far
+    from the hips during a swing and close to them at rest. Summing the two
+    needs no handedness, and dividing by the per-frame torso length makes it
+    independent of how big the player is in frame, which changes across a clip
+    as the player walks toward or away from the camera. No smoothing: the
+    anchor only has to be good to ~half a second.
+    """
+    data = np.asarray(xy, dtype=np.float64)
+    if data.shape[0] == 0:
+        return np.zeros((0,), dtype=np.float64)
+    hips = mid_hip(data)
+    reach = np.linalg.norm(data[:, LEFT_WRIST, :] - hips, axis=1) + np.linalg.norm(
+        data[:, RIGHT_WRIST, :] - hips, axis=1
+    )
+    torso = torso_lengths(data)
+    return np.asarray(
+        np.where(torso > 0.0, reach / np.where(torso > 0.0, torso, 1.0), 0.0),
+        dtype=np.float64,
+    )
+
+
+def window_indices_at(
+    timestamps_s: np.ndarray, anchor: int, *, core_window_s: float = CORE_WINDOW_S
+) -> tuple[int, int]:
+    """``(start, end_exclusive)`` of the ``core_window_s`` window about ``anchor``.
+
+    Placed in TIME, not in frame counts: a 25 fps clip sampled at 30 fps carries
+    duplicated timestamps, so "60 frames" is not two seconds and a frame-count
+    window would silently under-cover exactly the footage this fix is for. The
+    window is +-``core_window_s``/2 about the anchor's timestamp, slid (not
+    shrunk) when it would run off an end, and only then truncated -- a sequence
+    shorter than ``core_window_s`` yields the whole sequence.
+    """
+    times = np.asarray(timestamps_s, dtype=np.float64)
+    count = int(times.shape[0])
+    if count == 0:
+        return (0, 0)
+    anchor = int(np.clip(anchor, 0, count - 1))
+    half = float(core_window_s) / 2.0
+    first, last = float(times[0]), float(times[-1])
+
+    low = float(times[anchor]) - half
+    high = low + float(core_window_s)
+    if low < first:
+        low, high = first, min(last, first + float(core_window_s))
+    if high > last:
+        high, low = last, max(first, last - float(core_window_s))
+
+    start = int(np.searchsorted(times, low, side="left"))
+    stop = count if high >= last else int(np.searchsorted(times, high, side="left"))
+    start = max(0, min(start, count - 1))
+    stop = max(start + 1, min(stop, count))
+    return (start, stop)
+
+
+def core_window_indices(
+    valid: np.ndarray,
+    timestamps_s: np.ndarray,
+    xy: np.ndarray,
+    *,
+    core_window_s: float = CORE_WINDOW_S,
+    anchor_tolerance_s: float = ANCHOR_TOLERANCE_S,
+) -> tuple[int, int]:
+    """``(start, end_exclusive)`` of the core sub-window the verdict is judged over.
+
+    The anchor is the centre of the longest contiguous valid run, refined --
+    when that run is longer than the core window -- to the frame of maximum
+    summed two-wrist displacement from mid-hip (``wrist_extension``). The core
+    is then the ``core_window_s`` window about the anchor, repositioned by at
+    most ``anchor_tolerance_s`` to the placement that covers the most valid
+    frames, nearest placement winning ties.
+
+    That last step is the anchor's own stated accuracy spent deliberately: a
+    coarse locator good to ~half a second must not be trusted to the frame when
+    deciding where the box goes, and on real footage the reach proxy peaks in
+    the serve trophy pose ~0.7 s before the strike, which hung a third of the
+    box off the front of the valid run and failed a clip whose tracking was
+    perfect. The budget is bounded ON PURPOSE: a box free to slide a whole
+    second would simply walk around a hole through contact, which is exactly
+    the clip Tier 2 must still reject.
+
+    THIS ANCHOR IS A COARSE LOCATOR AND IS NOT CONTACT DETECTION. It exists to
+    place a 2 s box and is allowed to be half a second wrong. Contact detection
+    is Stage 9's job, it runs on the NormalizedSequence this function helps
+    produce, and nothing here may ever be reused as a contact estimate.
+    """
+    flags = np.asarray(valid, dtype=bool)
+    times = np.asarray(timestamps_s, dtype=np.float64)
+    count = int(flags.shape[0])
+    if count == 0:
+        return (0, 0)
+
+    run_start, run_end = longest_valid_run(flags)
+    if run_end <= run_start:
+        return window_indices_at(times, count // 2, core_window_s=core_window_s)
+
+    anchor = (run_start + run_end - 1) // 2
+    core = window_indices_at(times, anchor, core_window_s=core_window_s)
+    if (run_end - run_start) > (core[1] - core[0]) and np.asarray(xy).shape[0] == count:
+        reach = wrist_extension(xy)
+        anchor = run_start + int(np.argmax(reach[run_start:run_end]))
+
+    return _best_placement(
+        flags,
+        times,
+        anchor,
+        core_window_s=core_window_s,
+        anchor_tolerance_s=anchor_tolerance_s,
+    )
+
+
+def _best_placement(
+    valid: np.ndarray,
+    timestamps_s: np.ndarray,
+    anchor: int,
+    *,
+    core_window_s: float = CORE_WINDOW_S,
+    anchor_tolerance_s: float = ANCHOR_TOLERANCE_S,
+) -> tuple[int, int]:
+    """The best-covered window within ``anchor_tolerance_s`` of ``anchor``."""
+    flags = np.asarray(valid, dtype=bool)
+    times = np.asarray(timestamps_s, dtype=np.float64)
+    count = int(times.shape[0])
+    anchor = int(np.clip(anchor, 0, count - 1))
+    anchor_time = float(times[anchor])
+    offsets = np.abs(times - anchor_time) <= float(anchor_tolerance_s)
+
+    best: tuple[int, int] = window_indices_at(times, anchor, core_window_s=core_window_s)
+    best_key = (core_coverage(flags, best), 0.0)
+    for candidate in np.flatnonzero(offsets):
+        window = window_indices_at(times, int(candidate), core_window_s=core_window_s)
+        key = (
+            core_coverage(flags, window),
+            -abs(float(times[int(candidate)]) - anchor_time),
+        )
+        if key > best_key:
+            best_key, best = key, window
+    return best
+
+
+def core_coverage(valid: np.ndarray, core: tuple[int, int]) -> float:
+    """Share of frames inside ``core`` that passed the visibility gate."""
+    flags = np.asarray(valid, dtype=bool)
+    start, end = int(core[0]), int(core[1])
+    if end <= start:
+        return 0.0
+    window = flags[start:end]
+    if window.size == 0:
+        return 0.0
+    return float(np.count_nonzero(window) / window.size)
+
+
+def longest_core_gap(valid: np.ndarray, core: tuple[int, int]) -> int:
+    """Longest run of invalid frames INSIDE ``core``."""
+    flags = np.asarray(valid, dtype=bool)
+    start, end = int(core[0]), int(core[1])
+    if end <= start:
+        return 0
+    return longest_gap_frames(flags[start:end])
+
+
 def normalize_sequence(
-    seq: PoseSequence, *, max_gap_frames: int = MAX_GAP_FRAMES
+    seq: PoseSequence,
+    *,
+    max_gap_frames: int = MAX_GAP_FRAMES,
+    core_window_s: float = CORE_WINDOW_S,
+    min_core_coverage: float = MIN_CORE_COVERAGE,
+    max_core_gap_frames: int = MAX_CORE_GAP_FRAMES,
 ) -> tuple[NormalizedSequence, PoseQuality]:
     """Stage 7, all nine steps, in the declared order. Never raises on bad data.
 
     Step 1b needs a TU scale before step 6 formally computes one, so the torso
     median is evaluated once on the aspect-corrected coordinates and the SAME
     scalar is reused at step 6; the visible order of operations is unchanged.
+
+    The usability verdict is the two-tier rule of PIPELINE.md 7.1.2.
+    ``max_gap_frames`` is now purely an INTERPOLATION limit (Tier 1); the
+    verdict (Tier 2) is decided by ``min_core_coverage`` and
+    ``max_core_gap_frames`` over a ``core_window_s`` sub-window anchored on the
+    longest valid run. A dead stretch outside that core -- which ordinary
+    single-camera footage contains by construction, before the player is in
+    frame and after they have walked out of it -- is recorded, flagged
+    ``dead_time_outside_core``, and tolerated.
     """
     landmarks = np.asarray(seq.landmarks, dtype=np.float64)
     frame_count = int(landmarks.shape[0])
@@ -289,16 +573,31 @@ def normalize_sequence(
     if subject_identity_unstable(corrected, valid, scale_units):
         flags.append(SUBJECT_IDENTITY_UNSTABLE)
 
-    # 2. gap interpolation
-    filled, interpolated_frames, longest_gap = interpolate_gaps(
+    # 2. gap interpolation -- TIER 1. Gaps of at most ``max_gap_frames`` are
+    #    interpolated; longer ones are edge-held and stay invalid, because
+    #    interpolating them would fabricate the swing.
+    interpolated, _, longest_gap = interpolate_gaps(
         corrected, valid, max_gap_frames=max_gap_frames
     )
+    filled, interpolated_frames = hold_unfillable_gaps(
+        interpolated, valid, max_gap_frames=max_gap_frames
+    )
+
+    # 2b. TIER 2 -- the usability verdict, judged over the core sub-window.
+    core = core_window_indices(valid, timestamps_s, corrected, core_window_s=core_window_s)
+    coverage = core_coverage(valid, core)
+    core_gap = longest_core_gap(valid, core)
     usable = bool(
         frame_count > 0
         and bool(valid.any())
-        and longest_gap <= max_gap_frames
         and scale_units > 0.0
+        and coverage >= float(min_core_coverage)
+        and core_gap <= int(max_core_gap_frames)
     )
+    if usable and longest_gap > max_gap_frames:
+        flags.append(DEAD_TIME_OUTSIDE_CORE)
+    core_start_s = float(timestamps_s[core[0]]) if core[1] > core[0] else 0.0
+    core_end_s = float(timestamps_s[core[1] - 1]) if core[1] > core[0] else 0.0
 
     # 4. flip y, 5. mid-hip origin, 6. torso-unit scaling
     flipped = flip_y(filled)
@@ -349,6 +648,10 @@ def normalize_sequence(
         longest_gap_frames=int(longest_gap) if frame_count else 0,
         interpolated_frames=int(interpolated_frames),
         torso_scale_px=torso_scale_px,
+        core_window_start_s=core_start_s,
+        core_window_end_s=core_end_s,
+        core_coverage_fraction=float(np.clip(coverage, 0.0, 1.0)),
+        longest_core_gap_frames=int(core_gap),
         estimated_camera_view=CameraView.UNKNOWN,
         usable=usable,
         flags=flags,

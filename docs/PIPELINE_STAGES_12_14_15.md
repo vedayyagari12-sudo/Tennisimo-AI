@@ -230,7 +230,10 @@ when:
 1. `T < 5`. Five phases cannot be ordered across fewer than five frames even with
    collapses.
 2. No reliable frame exists (`observed_fraction == 0`, cf. `contact.py:148`). The
-   speed curve is not evidence of anything.
+   speed curve is not evidence of anything. **FOLLOW-UP (PIPELINE.md §7.1.2):** Stage 7
+   now carries a per-frame `valid` mask on `NormalizedSequence`, and this clause should
+   key off it instead of re-deriving validity from per-landmark visibility. Not done —
+   `phases.py` was out of scope for the Defect 2 fix.
 3. `S_peak <= 0` or non-finite. Every fraction-of-peak boundary is undefined.
 4. `contact.sanity_flags` contains `"sequence_unusable"` — Stage 9's degenerate return
    (`contact.py:515`), which carries `frame_index = 0` (`contact.py:507`). Segmenting

@@ -6,16 +6,22 @@ import numpy as np
 import pytest
 
 from app.analysis.normalize import (
+    DEAD_TIME_OUTSIDE_CORE,
     LEFT_HIP,
     LEFT_SHOULDER,
     RIGHT_HIP,
     RIGHT_SHOULDER,
+    MIN_CORE_COVERAGE,
     RIGHT_WRIST,
     SUBJECT_IDENTITY_UNSTABLE,
     apply_aspect_correction,
+    core_coverage,
     core_visibility,
+    core_window_indices,
     flip_y,
+    hold_unfillable_gaps,
     landmark_visible,
+    longest_valid_run,
     mid_hip,
     normalize_sequence,
     path_length,
@@ -27,7 +33,12 @@ from app.analysis.normalize import (
     valid_frames,
 )
 from app.models.enums import Handedness
-from tests.unit.analysis.synthetic import NUM_LANDMARKS, make_pose_sequence
+from tests.unit.analysis.synthetic import (
+    NUM_LANDMARKS,
+    make_pose_sequence,
+    make_pose_sequence_with_valid_run,
+    punch_hole,
+)
 
 
 def skeleton(frame_count: int, torso_length: float = 0.25) -> np.ndarray:
@@ -198,11 +209,16 @@ def test_normalize_sequence_end_to_end_on_a_clean_clip() -> None:
     )
 
 
-def test_normalize_sequence_interpolates_short_gaps_and_rejects_long_ones() -> None:
+def test_interpolation_still_refuses_gaps_longer_than_three_frames() -> None:
+    """TIER 1, semantics unchanged (PIPELINE.md 7.1.2).
+
+    A gap of at most three frames is interpolated; a longer one is NOT. The
+    long-gap frames are edge-held and stay invalid, because a linear fill
+    across them would fabricate the trajectory the product measures.
+    """
     detected = np.ones(60, dtype=bool)
-    detected[10:13] = False  # 3-frame gap: allowed
+    detected[10:13] = False  # 3-frame gap: interpolated
     normalized, quality = normalize_sequence(make_pose_sequence(detected=detected))
-    assert quality.usable is True
     assert quality.longest_gap_frames == 3
     assert quality.interpolated_frames == 3
     assert not normalized.valid[11]
@@ -210,10 +226,151 @@ def test_normalize_sequence_interpolates_short_gaps_and_rejects_long_ones() -> N
     assert np.all(np.diff(normalized.points[:, RIGHT_WRIST, 0]) > 0.0)
 
     detected = np.ones(60, dtype=bool)
-    detected[10:15] = False  # 5-frame gap: rejected
-    _, bad = normalize_sequence(make_pose_sequence(detected=detected))
-    assert bad.usable is False
-    assert bad.longest_gap_frames == 5
+    detected[20:40] = False  # 20-frame gap: never interpolated
+    held, quality = normalize_sequence(make_pose_sequence(detected=detected))
+    assert quality.longest_gap_frames == 20
+    assert quality.interpolated_frames == 0
+    assert not held.valid[20:40].any()
+    # Frames deep inside the gap are a flat hold, not a ramp: had the gap been
+    # interpolated, the fixture's linear sweep would keep marching here.
+    inside = held.points[22:28, RIGHT_WRIST, 0]
+    assert float(np.ptp(inside)) == pytest.approx(0.0, abs=1e-9)
+    # ... whereas the frames around the gap are still moving.
+    assert held.points[45, RIGHT_WRIST, 0] > held.points[15, RIGHT_WRIST, 0]
+
+
+def test_hold_unfillable_gaps_leaves_short_gaps_to_the_interpolator() -> None:
+    valid = np.ones(12, dtype=bool)
+    valid[3:6] = False   # 3 frames: keep the interpolation
+    valid[8:11] = False  # 3 frames: keep the interpolation
+    ramp = np.arange(12, dtype=np.float64).reshape(12, 1)
+    held, interpolated = hold_unfillable_gaps(ramp, valid, max_gap_frames=3)
+    assert interpolated == 6
+    assert np.allclose(held, ramp)
+
+    valid = np.ones(12, dtype=bool)
+    valid[3:9] = False  # 6 frames: hold, do not interpolate
+    held, interpolated = hold_unfillable_gaps(ramp, valid, max_gap_frames=3)
+    assert interpolated == 0
+    assert np.allclose(held[3:6, 0], 2.0)  # first half holds the frame before
+    assert np.allclose(held[6:9, 0], 9.0)  # second half holds the frame after
+
+
+def test_a_long_gap_outside_the_core_window_does_not_make_the_clip_unusable() -> None:
+    """TIER 2 (PIPELINE.md 7.1.2), the case that rejected a third of the corpus.
+
+    Real footage: the player is untrackable before ~2.2 s and after ~4.7 s of an
+    8 s analysis window. The whole-window ``longest_gap_frames`` is enormous and
+    says nothing about whether the swing is measurable.
+    """
+    seq = make_pose_sequence_with_valid_run(
+        clip_len_s=8.0, valid_run_start_s=2.2, valid_run_len_s=2.5
+    )
+    _, quality = normalize_sequence(seq)
+
+    assert quality.usable is True
+    assert quality.longest_gap_frames > 90  # the old gate rejected on exactly this
+    assert quality.core_coverage_fraction == pytest.approx(1.0)
+    assert quality.longest_core_gap_frames == 0
+    assert DEAD_TIME_OUTSIDE_CORE in quality.flags
+    # The 2 s core sits inside the valid run, around the swing at ~3.45 s.
+    assert quality.core_window_start_s >= 2.2
+    assert quality.core_window_end_s <= 4.7
+    assert quality.core_window_end_s - quality.core_window_start_s == pytest.approx(
+        2.0, abs=0.05
+    )
+
+
+def test_the_anchor_picks_the_longest_valid_run_when_there_are_two() -> None:
+    seq = make_pose_sequence_with_valid_run(
+        clip_len_s=10.0,
+        valid_run_start_s=5.0,
+        valid_run_len_s=4.0,
+        swing_centre_s=6.5,
+    )
+    xy = np.asarray(seq.landmarks, dtype=np.float64)[:, :, :2]
+    timestamps_s = np.asarray(seq.timestamps_s, dtype=np.float64)
+
+    valid = np.zeros(300, dtype=bool)
+    valid[10:70] = True    # 60 frames of decoy
+    valid[150:270] = True  # 120 frames: the real run
+    assert longest_valid_run(valid) == (150, 270)
+
+    start, end = core_window_indices(valid, timestamps_s, xy)
+    assert timestamps_s[end - 1] - timestamps_s[start] == pytest.approx(2.0, abs=0.05)
+    assert 150 <= start and end <= 270
+    # Refined within the run onto the swing at 6.5 s == frame 195.
+    assert start <= 195 < end
+    assert core_coverage(valid, (start, end)) == pytest.approx(1.0)
+
+
+def test_the_core_window_clamps_at_the_sequence_ends() -> None:
+    # Anchor near frame 0: the core may not run off the front of the array.
+    seq = make_pose_sequence_with_valid_run(
+        clip_len_s=3.0, valid_run_start_s=0.0, valid_run_len_s=1.0
+    )
+    valid = valid_frames(np.asarray(seq.landmarks, dtype=np.float64), seq.detected)
+    start, end = core_window_indices(valid, seq.timestamps_s, seq.landmarks[:, :, :2])
+    assert start == 0
+    assert end == 60
+
+    # A sequence shorter than the core window yields the whole sequence, and
+    # the reported bounds say so rather than shrinking silently.
+    short = make_pose_sequence(frame_count=30)
+    _, quality = normalize_sequence(short)
+    assert quality.core_window_start_s == pytest.approx(0.0)
+    assert quality.core_window_end_s == pytest.approx(29.0 / 30.0)
+    assert quality.core_coverage_fraction == pytest.approx(1.0)
+
+
+def test_a_four_frame_hole_inside_the_core_makes_the_clip_unusable() -> None:
+    """The rule that must still bite: fabrication is refused where it matters."""
+    seq = make_pose_sequence_with_valid_run(
+        clip_len_s=9.0,
+        valid_run_start_s=2.0,
+        valid_run_len_s=5.0,
+        swing_centre_s=3.0,
+    )
+    holed = punch_hole(seq, 88, 92)  # ~2.93-3.07 s, straight through the swing
+    _, quality = normalize_sequence(holed)
+
+    assert quality.usable is False
+    assert quality.longest_core_gap_frames == 4
+    assert quality.core_coverage_fraction > MIN_CORE_COVERAGE  # coverage alone would pass
+
+
+def test_the_same_hole_three_seconds_outside_the_core_is_tolerated_and_flagged() -> None:
+    seq = make_pose_sequence_with_valid_run(
+        clip_len_s=9.0,
+        valid_run_start_s=2.0,
+        valid_run_len_s=5.0,
+        swing_centre_s=3.0,
+    )
+    holed = punch_hole(seq, 195, 199)  # 6.5 s, ~3 s past the core
+    _, quality = normalize_sequence(holed)
+
+    assert quality.usable is True
+    assert quality.longest_core_gap_frames == 0
+    assert quality.core_window_end_s < 6.5
+    assert DEAD_TIME_OUTSIDE_CORE in quality.flags
+
+
+def test_core_coverage_below_the_minimum_is_unusable() -> None:
+    """Scattered 3-frame gaps, each individually legal under Tier 1.
+
+    Coverage without contiguity is not the signal: no 2 s stretch of this clip
+    is densely enough tracked to support a central-difference velocity.
+    """
+    seq = make_pose_sequence_with_valid_run(
+        clip_len_s=8.0, valid_run_start_s=0.0, valid_run_len_s=8.0
+    )
+    for start in range(3, 235, 12):
+        seq = punch_hole(seq, start, start + 3)
+    _, quality = normalize_sequence(seq)
+
+    assert quality.usable is False
+    assert quality.longest_core_gap_frames <= 3  # every single gap is Tier-1 legal
+    assert quality.core_coverage_fraction < MIN_CORE_COVERAGE
 
 
 def test_normalize_sequence_handles_degenerate_input_without_raising() -> None:

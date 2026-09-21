@@ -19,6 +19,7 @@ below is a tolerance BAND, never an exact frame.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import shutil
 import threading
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+import numpy as np
 import pytest
 
 from app.analysis.normalize import normalize_sequence
@@ -41,6 +43,7 @@ from app.models.enums import (
     FeedbackSource,
     JobStatus,
 )
+from app.models.internal import PoseSequence
 from app.models.requests import CreateAnalysisRequest
 from app.models.responses import AnalysisResponse
 from app.services import pipeline as pipeline_module
@@ -57,13 +60,13 @@ GROUND_TRUTH_CONTACT_S: tuple[float, float] = (86.0 / 25.0, 88.0 / 25.0)
 #: the band is not itself the thing under test.
 CONTACT_TOLERANCE_S: float = 2.0 / 25.0
 
-#: Stage 7's default ``max_gap_frames`` is 3 (``smoothing.py:16``). On this clip
-#: MediaPipe's core-landmark visibility dips below the 0.5 gate for 4
-#: consecutive frames, which fails the whole job (see
-#: ``test_default_settings_fail_on_pose_quality``). The pure function takes the
-#: bound as a keyword argument, so the run below relaxes exactly that one number
-#: in order to exercise Stages 8-18 on real footage. Nothing else is patched.
-RELAXED_MAX_GAP_FRAMES: int = 8
+#: NOTHING about Stage 7 is relaxed here any more. Until Defect 2 (PIPELINE.md
+#: 7.1) this module ran with ``max_gap_frames=8`` because the whole-window gap
+#: gate rejected this clip outright: the player is untrackable before ~2.2 s and
+#: after ~4.7 s, which is ordinary single-camera footage, not bad footage. The
+#: two-tier verdict judges a 2 s core instead, this clip passes at STOCK
+#: settings, and the relaxation is gone. If it ever has to come back, that is a
+#: regression in the gate, not a test fixture detail.
 
 #: Cap on sampled frames, set through Settings like any operator would.
 SAMPLED_FRAME_CAP: int = 80
@@ -90,7 +93,7 @@ FAKE_ENV: dict[str, str] = {
 }
 
 #: What the two REAL runs use. Kept separate from ``FAKE_ENV`` so that
-#: ``test_default_settings_fail_on_pose_quality`` keeps testing stock Stage 5
+#: ``test_stock_settings_now_reach_an_analysis`` keeps testing stock Stage 5
 #: settings.
 RUN_ENV: dict[str, str] = {
     **FAKE_ENV,
@@ -200,15 +203,8 @@ def completed_run() -> Iterator[dict[str, Any]]:
     settings = Settings(env=RUN_ENV)
     client = ReplayGeminiClient()
 
-    original = pipeline_module.normalize_sequence
-    pipeline_module.normalize_sequence = partial(  # type: ignore[assignment]
-        normalize_sequence, max_gap_frames=RELAXED_MAX_GAP_FRAMES
-    )
-    try:
-        context = make_context(repository, storage, settings)
-        run_analysis_job(context, gemini_client=client)
-    finally:
-        pipeline_module.normalize_sequence = original  # type: ignore[assignment]
+    context = make_context(repository, storage, settings)
+    run_analysis_job(context, gemini_client=client)
 
     assert repository.rows, "the runner persisted nothing"
     yield {
@@ -221,28 +217,66 @@ def completed_run() -> Iterator[dict[str, Any]]:
     }
 
 
-def test_default_settings_fail_on_pose_quality() -> None:
-    """DEFECT PIN, not an aspiration.
+def test_stock_settings_now_reach_an_analysis() -> None:
+    """The former DEFECT PIN, inverted (PIPELINE.md 7.1).
 
-    With stock settings the vendored clip does not produce an analysis at all:
-    the motion scan centres an 8 s window on the strike at ~3.38 s, which clamps
-    to [0.0, 8.0]; the player is not trackable before ~2.2 s or after ~4.7 s,
-    and the resulting long gap trips Stage 7's 3-frame ``max_gap_frames`` bound.
-    The job fails CLEANLY -- a ``JobFailure`` carrying ``pose_quality_too_low``
-    -- rather than crashing, and that clean failure is what this test pins.
-
-    Correct centring does NOT fix this and was never expected to: PIPELINE.md
-    7.1 establishes with a monkeypatched true strike time that Stage 7 still
-    fails on a correctly centred window. Fixing Defect 1 moved the gap figure
-    (156 -> 98 per 7.1) and did not change the verdict. Change this test when
-    the gate changes -- Defect 2 -- not by loosening the assertion.
+    This test used to assert that the vendored clip produced NO analysis at all
+    at stock settings: the player is not trackable before ~2.2 s or after
+    ~4.7 s of an 8 s window, and the whole-window 3-frame gap bound rejected
+    the job with ``pose_quality_too_low``. Under the two-tier verdict the 2 s
+    core around the swing is fully tracked, the clip is usable, and the
+    98-frame hole is recorded as a ``dead_time_outside_core`` flag instead of a
+    failure. The honest-rejection path it used to cover is now covered by
+    ``test_a_hole_through_contact_is_still_rejected`` below, on a clip whose
+    tracking really is broken where it matters.
     """
     repository = RecordingRepository()
     settings = Settings(env={k: v for k, v in FAKE_ENV.items() if k != "MAX_ANALYSIS_FRAMES"})
     context = make_context(repository, ClipStorage(), settings)
 
-    with pytest.raises(JobFailure) as excinfo:
-        run_analysis_job(context, gemini_client=ReplayGeminiClient())
+    run_analysis_job(context, gemini_client=ReplayGeminiClient())
+
+    assert repository.rows, "the runner persisted nothing"
+    response = AnalysisResponse.model_validate(repository.rows[0].payload)
+    quality = response.pose_quality
+    assert quality.usable is True
+    assert quality.longest_gap_frames > 3  # the old gate rejected on exactly this
+    assert "dead_time_outside_core" in quality.flags
+    assert quality.core_coverage_fraction >= 0.9
+    assert quality.longest_core_gap_frames <= 3
+
+
+def test_a_hole_through_contact_is_still_rejected() -> None:
+    """The gate keeps its teeth: a clip is rejected when the SWING is missing.
+
+    Real decode, real MediaPipe, real Stage 7 -- with one defect injected into
+    the seam: every detection is dropped for ~0.3 s straight through the
+    ground-truth contact at 3.44-3.52 s. That is a hole no interpolation may
+    fill, inside any core window the anchor can place, and the job must fail
+    cleanly with ``pose_quality_too_low`` rather than measuring a swing it
+    cannot see. A gate that passes everything is not a fix, it is a deletion.
+    """
+    repository = RecordingRepository()
+    settings = Settings(env={k: v for k, v in FAKE_ENV.items() if k != "MAX_ANALYSIS_FRAMES"})
+    context = make_context(repository, ClipStorage(), settings)
+
+    def blind_the_contact(seq: PoseSequence, **kwargs: Any) -> Any:
+        hole = (seq.timestamps_s >= 3.30) & (seq.timestamps_s <= 3.60)
+        landmarks = np.array(seq.landmarks, copy=True)
+        landmarks[hole] = 0.0
+        detected = np.array(seq.detected, copy=True)
+        detected[hole] = False
+        return normalize_sequence(
+            dataclasses.replace(seq, landmarks=landmarks, detected=detected), **kwargs
+        )
+
+    original = pipeline_module.normalize_sequence
+    pipeline_module.normalize_sequence = blind_the_contact  # type: ignore[assignment]
+    try:
+        with pytest.raises(JobFailure) as excinfo:
+            run_analysis_job(context, gemini_client=ReplayGeminiClient())
+    finally:
+        pipeline_module.normalize_sequence = original  # type: ignore[assignment]
 
     assert excinfo.value.error_code is ErrorCode.POSE_QUALITY_TOO_LOW
     assert excinfo.value.stage == "normalize"
@@ -403,10 +437,6 @@ def test_orchestrator_drives_the_real_runner_to_succeeded() -> None:
 
     repository = RecordingRepository()
     client = ReplayGeminiClient()
-    original = pipeline_module.normalize_sequence
-    pipeline_module.normalize_sequence = partial(  # type: ignore[assignment]
-        normalize_sequence, max_gap_frames=RELAXED_MAX_GAP_FRAMES
-    )
     try:
         orchestrator = JobOrchestrator(
             repository=repository,  # type: ignore[arg-type]
@@ -425,7 +455,6 @@ def test_orchestrator_drives_the_real_runner_to_succeeded() -> None:
         future.result(timeout=300)
         orchestrator.shutdown()
     finally:
-        pipeline_module.normalize_sequence = original  # type: ignore[assignment]
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=5)
         loop.close()

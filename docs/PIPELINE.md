@@ -630,9 +630,13 @@ Order of operations is fixed and matters:
 8. **Derivatives.** Velocity by central difference on smoothed coordinates using **actual Δt** from `timestamps_s`. Acceleration by central difference on velocity. Units: TU/s and TU/s².
 9. **Swing direction sign.** `swing_direction_sign ∈ {−1,+1}` = sign of racket-hand x-displacement from takeback-end to contact. Every signed-x metric is multiplied by it, so "forward" means "toward the target" regardless of which way the player faces the camera.
 
-#### 7.1 DEFECT — the gap gate rejects ordinary footage, and the statistic it uses is the wrong statistic (UNIVERSAL; root cause established, fix planned)
+#### 7.1 DEFECT — the gap gate rejects ordinary footage, and the statistic it uses is the wrong statistic (UNIVERSAL; FIXED)
 
-> **Status: root-caused on real footage, fix specified here, no code written.** `normalize_sequence` in `backend/app/analysis/normalize.py`, constant `MAX_GAP_FRAMES = 3`.
+> **Status: FIXED.** The two-tier verdict specified in §7.1.2 is implemented in
+> `backend/app/analysis/normalize.py` (`hold_unfillable_gaps`, `longest_valid_run`,
+> `wrist_extension`, `window_indices_at`, `core_window_indices`, `core_coverage`,
+> `longest_core_gap`). The section below is kept as written — it is the specification the
+> fix was built against — with the as-landed result recorded in §7.1.6.
 
 **The evidence that determines the shape of the fix.** It is tempting to read this as downstream of Defect 1 — a badly centred window would naturally contain more dead time. **It is not.** With `motion_scan_centre_s` monkeypatched to return the true strike time (3.48 s) so that the window correctly becomes `[0.0, 8.0]`, Stage 7 **still fails**: `longest_gap_frames = 98` against a bound of 3. At stock settings, with the miscentred window, it is 156. Fixing Defect 1 moves the number and does not change the verdict.
 
@@ -760,6 +764,57 @@ Re-run the full 16-clip corpus recording, per clip: window bounds, valid-run ext
 2. **No clip that currently produces a usable sequence becomes unusable.**
 
 And the criterion that is *not* acceptance: **a higher pass rate is not the goal.** A clip with a genuine 4-frame hole through contact must still be rejected, and the corpus run must include at least one such case — synthetic if the corpus does not contain one — to demonstrate the gate still has teeth. A gate that passes everything is not a fix, it is a deletion.
+
+##### 7.1.6 As landed — measured result, and the two places the code differs from §7.1.2
+
+**Corpus, 16 clips, stock settings, correctly-centred windows (the same harness as the
+re-measurement above).** 1 clip still fails Stage 6 (`tennis_forehand_10340703`, 19.2 %
+detection). Of the 15 that reach Stage 7, **13 are usable, up from 10**, and **no clip that
+was usable became unusable** — both halves of the §7.1.5 acceptance are met.
+
+| Clip | whole-window gap | core window | core coverage | core gap | verdict |
+|---|---|---|---|---|---|
+| `tennis_serve_10340710` | 98 | [2.20, 4.16] | 1.000 | 0 | **now passes** |
+| `serve_06_vertical_10340710` | 98 | [2.20, 4.16] | 1.000 | 0 | **now passes** |
+| `tennis_forehand_34449247` | 18 | [3.10, 5.07] | 1.000 | 0 | **now passes** |
+| `tennis_forehand_34449204` | 117 | [0.13, 2.07] | 0.458 | 13 | still rejected — valid run is 0.46 s |
+| `serve_07_10340707` | 88 | [2.48, 4.44] | 0.900 | 5 | still rejected — valid run is 1.76 s, shorter than the core |
+| the other 10 | 0–2 | — | ≥ 0.98 | ≤ 2 | pass, as before |
+
+`serve_07_10340707` is the honest residual: its longest contiguous tracked stretch is
+**1.76 s**, so no 2.0 s core can avoid dead time, and the 5-frame unfilled gap that lands
+inside the core is disqualifying under `MAX_CORE_GAP_FRAMES` for the fabrication reason
+Tier 1 gives. Shortening `CORE_WINDOW_S` to admit it would be exactly the retune §7.1
+rejects, on a corpus of one; it is left failing and recorded here instead.
+
+**Two deliberate departures from the §7.1.2 sketch, both measured rather than argued:**
+
+1. **The core window is placed in TIME, not in a frame count.** A 25 fps clip sampled at
+   30 fps carries duplicated timestamps, so "60 frames" is 1.64 s on this corpus, not 2.0 s
+   — a frame-count window silently under-covers precisely the footage this fix is for.
+2. **`ANCHOR_TOLERANCE_S = 0.5` (new constant, not in §7.1.2).** The anchor is the frame of
+   maximum `wrist_extension` inside the longest valid run, as specified; the core is then
+   repositioned by **at most half a second** to the best-covered placement, nearest
+   placement winning ties. This is the anchor's own stated accuracy — "allowed to be half
+   a second wrong" — spent where it was earned. It is needed because on serve footage the
+   reach proxy peaks in the trophy pose ~0.7 s before the strike: the unshifted box hung a
+   third of itself off the front of the valid run and failed `serve_06` (coverage 0.84) and
+   `serve_03` (0.898) whose tracking is 97.5–100 % clean. The budget is **bounded on
+   purpose**: a box free to slide a whole second would walk around a hole through contact
+   instead of failing on it, and that clip must still fail.
+
+**Teeth, demonstrated rather than asserted.** `tests/integration/test_pipeline_end_to_end.py::test_a_hole_through_contact_is_still_rejected` drops every detection for 0.3 s
+through the ground-truth contact on the real clip and asserts `POSE_QUALITY_TOO_LOW`;
+`test_a_four_frame_hole_inside_the_core_makes_the_clip_unusable` and
+`test_core_coverage_below_the_minimum_is_unusable` cover the synthetic cases. The fixture
+generators now take a valid-run parameter, so leading/trailing dead time is expressible
+(§7.1.4's precondition for any of this being testable at all).
+
+**Left open.** §7.1.2 asks Stages 12/13 to key their thin-data degradation off
+`NormalizedSequence.valid` rather than re-deriving validity. The mask is carried and the
+Stage 12 fixture can now express dead ends, but `phases.py` still keys off
+`observed_fraction` — `docs/PIPELINE_STAGES_12_14_15.md` §A.5 clause 2 — and was out of
+scope here. That is a follow-up, not part of this change.
 
 ---
 

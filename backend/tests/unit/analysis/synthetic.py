@@ -6,6 +6,8 @@ the pure layer can be exercised exactly as PIPELINE.md 4.5 requires.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 
 from app.analysis.normalize import (
@@ -208,3 +210,66 @@ def make_pose_sequence(
         width_px=width_px,
         height_px=height_px,
     )
+
+
+def make_pose_sequence_with_valid_run(
+    *,
+    clip_len_s: float,
+    valid_run_start_s: float,
+    valid_run_len_s: float,
+    fps: float = 30.0,
+    swing_centre_s: float | None = None,
+    swing_width_s: float = 0.25,
+    handedness: Handedness = Handedness.RIGHT,
+    torso_px_fraction: float = 0.25,
+    visibility: float = 0.9,
+) -> PoseSequence:
+    """A clip shaped like REAL footage: valid in the middle, absent at both ends.
+
+    PIPELINE.md 7.1.4: the end-to-end-valid fixtures above cannot express the
+    shape of the failure Stage 7's whole-window gap gate was rejecting, which is
+    why 670 green unit tests said nothing about a defect that rejected a third
+    of the corpus. Outside ``[valid_run_start_s, valid_run_start_s +
+    valid_run_len_s)`` the frames are undetected and their landmarks are zeroed,
+    exactly as MediaPipe leaves a frame it found nobody in -- the player is
+    small in frame or turned away before the swing and has walked off after it.
+
+    The racket wrist reaches away from the hips in a bump centred on
+    ``swing_centre_s`` (the middle of the valid run by default), so the Tier 2
+    anchor has something to find and the test can say where it should land.
+    """
+    frame_count = max(int(round(clip_len_s * fps)), 0)
+    base = make_pose_sequence(
+        frame_count=frame_count,
+        fps=fps,
+        handedness=handedness,
+        torso_px_fraction=torso_px_fraction,
+        visibility=visibility,
+    )
+    landmarks = np.array(base.landmarks, copy=True)
+    timestamps_s = np.asarray(base.timestamps_s, dtype=np.float64)
+
+    centre = (
+        valid_run_start_s + valid_run_len_s / 2.0
+        if swing_centre_s is None
+        else float(swing_centre_s)
+    )
+    racket = RIGHT_WRIST if handedness != Handedness.LEFT else LEFT_WRIST
+    reach = 0.35 * np.exp(-(((timestamps_s - centre) / swing_width_s) ** 2))
+    landmarks[:, racket, 0] = 0.5 + reach
+    landmarks[:, racket, 1] = 0.6 - torso_px_fraction - reach
+
+    detected = (timestamps_s >= valid_run_start_s) & (
+        timestamps_s < valid_run_start_s + valid_run_len_s
+    )
+    landmarks[~detected] = 0.0
+    return dataclasses.replace(base, landmarks=landmarks, detected=detected)
+
+
+def punch_hole(seq: PoseSequence, start: int, end: int) -> PoseSequence:
+    """Blank frames ``[start, end)`` the way a lost detection blanks them."""
+    landmarks = np.array(seq.landmarks, copy=True)
+    detected = np.array(seq.detected, copy=True)
+    landmarks[start:end] = 0.0
+    detected[start:end] = False
+    return dataclasses.replace(seq, landmarks=landmarks, detected=detected)

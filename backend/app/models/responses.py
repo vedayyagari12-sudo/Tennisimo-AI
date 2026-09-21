@@ -38,9 +38,38 @@ class PoseQuality(BaseModel):
     frames_missing: int
     detection_rate: float = Field(ge=0.0, le=1.0)
     mean_visibility: float = Field(ge=0.0, le=1.0, description="Mean over the 12 core landmarks.")
-    longest_gap_frames: int
-    interpolated_frames: int
+    longest_gap_frames: int = Field(
+        description=(
+            "Longest run of invalid frames anywhere in the analysis window. DIAGNOSTIC "
+            "ONLY since PIPELINE.md 7.1: the usability verdict is decided over the core "
+            "sub-window below, not by this whole-window worst case."
+        )
+    )
+    interpolated_frames: int = Field(
+        description=(
+            "Frames whose coordinates were LINEARLY INTERPOLATED across a gap of at most "
+            "``MAX_GAP_FRAMES``. Frames inside a longer gap are not interpolated -- they "
+            "are edge-held and stay invalid -- and are not counted here."
+        )
+    )
     torso_scale_px: float = Field(description="Median shoulder-to-hip length in pixels. Defines 1 TU.")
+    core_window_start_s: float = Field(
+        default=0.0,
+        description=(
+            "Start of the 2 s core sub-window, in analysis-window time. The core is "
+            "anchored on the longest contiguous valid run; the verdict is judged here."
+        ),
+    )
+    core_window_end_s: float = Field(default=0.0, description="End of the core sub-window.")
+    core_coverage_fraction: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Share of frames inside the core window that passed the visibility gate.",
+    )
+    longest_core_gap_frames: int = Field(
+        default=0, description="Longest run of invalid frames INSIDE the core window."
+    )
     estimated_camera_view: CameraView = CameraView.UNKNOWN
     usable: bool
     flags: list[str] = Field(
@@ -48,11 +77,14 @@ class PoseQuality(BaseModel):
         description=(
             "Closed vocabulary, part of the contract -- clients may branch on these. "
             "'ankles_not_visible' | 'wrists_low_visibility' | 'subject_identity_unstable' | "
-            "'rotation_retry_applied' | 'motion_scan_coarse'. 'motion_scan_coarse' means Stage "
+            "'rotation_retry_applied' | 'motion_scan_coarse' | 'dead_time_outside_core'. "
+            "'motion_scan_coarse' means Stage "
             "5 located the analysis window with a whole-clip dense scan at a stride wider than "
             "0.5 s, so the window is coarsely centred. 'subject_identity_unstable' never fails "
             "the job; it "
-            "depresses Stage 9 confidence."
+            "depresses Stage 9 confidence. 'dead_time_outside_core' means the clip was "
+            "admitted DESPITE a whole-window gap over the bound, because the core window "
+            "is densely tracked -- the audit trail for that tolerance."
         ),
     )
 

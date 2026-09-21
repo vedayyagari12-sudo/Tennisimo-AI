@@ -27,7 +27,7 @@ from app.analysis.handedness import (
 )
 from app.analysis.contact import detect_contact_frame
 from app.analysis.metrics import compute_swing_metrics
-from app.analysis.normalize import LEFT_WRIST, RIGHT_WRIST
+from app.analysis.normalize import LEFT_WRIST, RIGHT_WRIST, VISIBILITY_THRESHOLD
 from app.models.enums import Handedness, HandednessSource
 from app.models.internal import NormalizedSequence
 from app.models.responses import ContactDetection, HandednessResult, SwingMetrics
@@ -144,3 +144,27 @@ def test_unmeasurable_clip_is_distinguishable_from_an_internal_failure() -> None
     assert crashed_metrics == SwingMetrics()
     assert not any(w.startswith(INTERNAL_FAILURE_PREFIX) for w in honest_warnings)
     assert any(w.startswith(INTERNAL_FAILURE_PREFIX) for w in crashed_warnings)
+
+
+# --- Defect 2 (PIPELINE.md 7.1) ---------------------------------------------
+
+
+def test_a_sequence_with_dead_ends_carries_the_validity_mask() -> None:
+    """The Stage 12 fixture can now express real footage's shape.
+
+    Before this, every synthetic NormalizedSequence was valid end to end, which
+    is why 670 green tests said nothing about a Stage 7 gate that rejected a
+    third of the real corpus. Frames outside the run are invalid AND their
+    per-landmark visibility is below the gate, so a downstream stage that keys
+    off either signal sees the same clip.
+    """
+    seq = build_sequence(frame_count=32, valid_run=(8, 28))
+
+    assert not seq.valid[:8].any()
+    assert seq.valid[8:28].all()
+    assert not seq.valid[28:].any()
+    assert np.all(seq.visibility[:8] < VISIBILITY_THRESHOLD)
+    assert np.all(seq.visibility[8:28] >= VISIBILITY_THRESHOLD)
+    # Contact at frame 25 is inside the run, so Stage 9's reliability view and
+    # the Stage 7 mask agree about the frames that matter.
+    assert seq.valid[CONTACT_FRAME]
