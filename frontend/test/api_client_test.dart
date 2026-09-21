@@ -187,4 +187,59 @@ void main() {
           isNull);
     });
   });
+
+  group('looksLikeFinishedAnalysis reads the status through the enum', () {
+    test('complete is finished', () {
+      expect(looksLikeFinishedAnalysis(<String, dynamic>{'status': 'complete'}),
+          isTrue);
+    });
+
+    test('partial is finished', () {
+      expect(looksLikeFinishedAnalysis(<String, dynamic>{'status': 'partial'}),
+          isTrue);
+    });
+
+    test('the deliberately tolerated succeeded body is still finished', () {
+      // PIPELINE.md 4.4 says this endpoint never emits the JobStatus value
+      // `succeeded`. The client has tolerated it anyway since 6511a7f, and
+      // that tolerance must survive the move to AnalysisStatus.fromJson.
+      expect(looksLikeFinishedAnalysis(<String, dynamic>{'status': 'succeeded'}),
+          isTrue);
+    });
+
+    test('an unrelated status does not look finished', () {
+      expect(
+          looksLikeFinishedAnalysis(<String, dynamic>{'status': 'quarantined'}),
+          isFalse);
+      expect(looksLikeFinishedAnalysis(<String, dynamic>{'status': 'queued'}),
+          isFalse);
+    });
+
+    test('a body falling through terminates instead of polling to the cap', () {
+      // The nice property of routing through the enums: the same string that
+      // is not "finished" is also not a known JobStatus, so the in-progress
+      // path ends the loop rather than polling it for the full cap.
+      const String raw = 'quarantined';
+      expect(looksLikeFinishedAnalysis(<String, dynamic>{'status': raw}),
+          isFalse);
+      expect(JobStatus.fromJson(raw), JobStatus.unrecognized);
+      expect(
+        terminalPollFailure(PollUpdate(status: JobStatus.fromJson(raw))),
+        isNotNull,
+      );
+    });
+
+    test('a feedback or scorecard block is finished whatever the status', () {
+      expect(
+        looksLikeFinishedAnalysis(
+            <String, dynamic>{'feedback': <String, dynamic>{}}),
+        isTrue,
+      );
+      expect(
+        looksLikeFinishedAnalysis(
+            <String, dynamic>{'scorecard': <String, dynamic>{}}),
+        isTrue,
+      );
+    });
+  });
 }

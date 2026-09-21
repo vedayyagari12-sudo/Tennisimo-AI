@@ -289,6 +289,41 @@ ApiFailure? jobFailureFromErrorNode(Object? error) {
   );
 }
 
+/// Whether a poll body is a finished analysis rather than a job-status envelope.
+///
+/// Extracted as a pure seam for the same reason as [isFinalPollFailure] and
+/// [terminalPollFailure]: it is a decision, and it should be testable without
+/// standing up an HTTP call.
+///
+/// The status comparison goes through [AnalysisStatus.fromJson] rather than
+/// matching raw strings, so the wire vocabulary `{complete, partial}` is
+/// defined in exactly one place. Anything [AnalysisStatus.fromJson] cannot read
+/// yields [AnalysisStatus.unrecognized], which is NOT treated as finished: such
+/// a body falls through to the in-progress path, where [JobStatus.fromJson]
+/// turns it into [JobStatus.unrecognized] and [terminalPollFailure] ends the
+/// loop honestly instead of polling it to the cap.
+///
+/// The `succeeded` check is deliberate and is NOT accidental duplication of the
+/// [JobStatus] vocabulary. The documented contract for this endpoint
+/// (PIPELINE.md 4.4) says a finished analysis carries an [AnalysisStatus] —
+/// `complete` or `partial` — and never the [JobStatus] value `succeeded`. This
+/// client has tolerated a `succeeded` body here since 6511a7f anyway, and that
+/// tolerance is preserved verbatim: routing it through [AnalysisStatus.fromJson]
+/// would map it to [AnalysisStatus.unrecognized] and quietly stop treating it
+/// as finished, which is a behaviour change to a contract-violation path, not a
+/// refactor. It is kept explicit, alongside the enum check, so that a server
+/// which ever does emit it still produces a result for the user rather than an
+/// "unrecognised status" dead end.
+bool looksLikeFinishedAnalysis(Map<String, dynamic> json) {
+  if (json['feedback'] is Map || json['scorecard'] is Map) return true;
+  final Object? rawStatus = json['status'];
+  if (AnalysisStatus.fromJson(rawStatus) != AnalysisStatus.unrecognized) {
+    return true;
+  }
+  // Defensive against a documented-impossible body, not a normal case.
+  return rawStatus == JobStatus.succeeded.wire;
+}
+
 /// Step 4: one poll. Distinguishes the job-status envelope from the finished
 /// analysis by looking for the blocks only a finished analysis carries.
 Future<ApiResult<PollUpdate>> fetchAnalysis(String analysisId) async {
@@ -313,13 +348,7 @@ Future<ApiResult<PollUpdate>> fetchAnalysis(String analysisId) async {
     final Map<String, dynamic> json = body.cast<String, dynamic>();
 
     final Object? rawStatus = json['status'];
-    final bool looksFinished = json['feedback'] is Map ||
-        json['scorecard'] is Map ||
-        rawStatus == 'complete' ||
-        rawStatus == 'partial' ||
-        rawStatus == 'succeeded';
-
-    if (looksFinished) {
+    if (looksLikeFinishedAnalysis(json)) {
       return ApiResult<PollUpdate>.ok(PollUpdate(
         status: JobStatus.succeeded,
         analysis: AnalysisResponse.fromJson(json),
