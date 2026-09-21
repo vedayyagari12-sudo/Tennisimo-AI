@@ -11,7 +11,7 @@ void main() {
     test('unknown strings fall back instead of throwing', () {
       expect(MetricVerdict.fromJson('sideways'), MetricVerdict.unavailable);
       expect(MetricVerdict.fromJson(null), MetricVerdict.unavailable);
-      expect(MetricUnit.fromJson('mph'), MetricUnit.ratio);
+      expect(MetricUnit.fromJson('mph'), MetricUnit.unrecognized);
       expect(ShotType.fromJson('drop_shot'), ShotType.unknown);
       expect(ShotType.fromJson(42), ShotType.unknown);
       expect(BallSpeedConfidence.fromJson('excellent'),
@@ -50,6 +50,34 @@ void main() {
       // The real contract still parses exactly as before.
       expect(AnalysisStatus.fromJson('complete'), AnalysisStatus.complete);
       expect(AnalysisStatus.fromJson('partial'), AnalysisStatus.partial);
+    });
+
+    test('an unknown metric unit is not read as a bare ratio', () {
+      // ratio's suffix is '', so the old fallback rendered an unrecognised
+      // unit as an unlabelled number.
+      expect(MetricUnit.fromJson('mph'), MetricUnit.unrecognized);
+      expect(MetricUnit.fromJson(null), MetricUnit.unrecognized);
+      expect(MetricUnit.unrecognized, isNot(MetricUnit.ratio));
+      expect(MetricUnit.ratio.suffix, '');
+      expect(MetricUnit.unrecognized.suffix.trim(), isNotEmpty);
+    });
+
+    test('an unknown unit renders visibly rather than blank', () {
+      final MetricScore metric = MetricScore.fromJson(<String, dynamic>{
+        'name': 'racket_speed_mph',
+        'value': 57.0,
+        'unit': 'mph',
+        'ideal_min': 40.0,
+        'ideal_max': 60.0,
+      });
+      expect(metric.unit, MetricUnit.unrecognized);
+      expect(metric.displayValue, '57.0 (unit?)');
+      expect(metric.displayIdealBand, '40.0–60.0 (unit?)');
+    });
+
+    test('the sentinel wire string cannot collide with a real unit', () {
+      expect(MetricUnit.unrecognized.wire, '__unrecognized__');
+      expect(MetricUnit.fromJson('__unrecognized__'), MetricUnit.unrecognized);
     });
 
     test('unknown job status is not read as queued', () {
@@ -106,7 +134,7 @@ void main() {
     test('missing optional fields do not throw', () {
       final MetricScore metric =
           MetricScore.fromJson(<String, dynamic>{'name': 'shoulder_turn_deg'});
-      expect(metric.unit, MetricUnit.ratio);
+      expect(metric.unit, MetricUnit.unrecognized);
       expect(metric.verdict, MetricVerdict.unavailable);
       expect(metric.score, isNull);
       expect(metric.hasIdealBand, isFalse);

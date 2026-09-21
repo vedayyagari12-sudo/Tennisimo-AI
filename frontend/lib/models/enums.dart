@@ -58,15 +58,33 @@ enum MetricUnit implements WireEnum {
   torsoUnits('TU'),
   torsoUnitsPerSec('TU/s'),
   seconds('s'),
-  ratio('ratio');
+  ratio('ratio'),
+
+  /// Client-side sentinel: the server sent a unit this build does not know.
+  ///
+  /// This is NOT part of the backend contract. The documented wire vocabulary
+  /// is exactly `{deg, TU, TU/s, s, ratio}`, so — unlike [ShotType.unknown] or
+  /// [CameraView.unknown], which mirror real wire strings the backend genuinely
+  /// emits — this member can only ever be produced locally by [fromJson].
+  ///
+  /// Its wire string is deliberately `__unrecognized__` rather than `unknown`:
+  /// it never round-trips to the server, and the double-underscore form cannot
+  /// collide with a real unit the backend might add later.
+  unrecognized('__unrecognized__');
 
   const MetricUnit(this.wire);
 
   @override
   final String wire;
 
+  /// Unknown degrades to [unrecognized], never to [ratio].
+  ///
+  /// [ratio]'s suffix is the empty string, so an unrecognised unit used to
+  /// render as a bare, unlabelled number — a value silently stripped of the
+  /// only thing that gives it meaning. The sentinel carries a visible suffix
+  /// instead, so the number is still shown but is never read as a ratio.
   static MetricUnit fromJson(Object? raw) =>
-      parseWireEnum(values, raw, MetricUnit.ratio);
+      parseWireEnum(values, raw, MetricUnit.unrecognized);
 
   /// Suffix appended to a raw value. Torso units are NEVER converted to a
   /// real-world length: ball speed is the only real-world unit in this app.
@@ -76,6 +94,11 @@ enum MetricUnit implements WireEnum {
         MetricUnit.torsoUnitsPerSec => ' TU/s',
         MetricUnit.seconds => ' s',
         MetricUnit.ratio => '',
+        // Appended directly after the number by MetricScore.displayValue and
+        // .displayIdealBand, matching the ' s' / ' TU' spacing above. It says
+        // plainly that the unit is unreadable rather than leaving the number
+        // bare, which is what the old [ratio] fallback did.
+        MetricUnit.unrecognized => ' (unit?)',
       };
 }
 
