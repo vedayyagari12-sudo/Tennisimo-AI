@@ -357,6 +357,35 @@ bool isFinalPollFailure(ApiFailure failure) {
   return failure.statusCode != null && failure.statusCode! < 500;
 }
 
+/// The failure an in-progress poll update ends the loop with, or null to keep
+/// polling.
+///
+/// Extracted for the same reason as [isFinalPollFailure]: it is the loop's
+/// terminal decision, and it is only testable without real 2 s delays on its
+/// own. [JobStatus.unrecognized] is terminal — it is what [JobStatus.fromJson]
+/// yields for a status this build does not know, and continuing to poll such a
+/// job merely hides the outcome until the 120 s cap.
+ApiFailure? terminalPollFailure(PollUpdate update) {
+  switch (update.status) {
+    case JobStatus.failed:
+      return update.failure ??
+          const ApiFailure(
+            kind: ApiFailureKind.server,
+            message: 'The analysis failed.',
+          );
+    case JobStatus.unrecognized:
+      return const ApiFailure(
+        kind: ApiFailureKind.badResponse,
+        message: 'The server reported a job status this app version does not '
+            'recognise. Update the app, or check your history in a minute.',
+      );
+    case JobStatus.queued:
+    case JobStatus.running:
+    case JobStatus.succeeded:
+      return null;
+  }
+}
+
 /// Polls every 2 s until the analysis is done, failed, or the 120 s cap is hit.
 ///
 /// [onUpdate] fires on each successful non-final poll so the screen can show
@@ -383,12 +412,9 @@ Future<ApiResult<AnalysisResponse>> pollUntilComplete(
       if (update.analysis != null) {
         return ApiResult<AnalysisResponse>.ok(update.analysis!);
       }
-      if (update.status == JobStatus.failed) {
-        return ApiResult<AnalysisResponse>.err(update.failure ??
-            const ApiFailure(
-              kind: ApiFailureKind.server,
-              message: 'The analysis failed.',
-            ));
+      final ApiFailure? terminal = terminalPollFailure(update);
+      if (terminal != null) {
+        return ApiResult<AnalysisResponse>.err(terminal);
       }
       onUpdate?.call(update);
     }

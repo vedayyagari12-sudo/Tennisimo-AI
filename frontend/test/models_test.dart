@@ -18,7 +18,7 @@ void main() {
           BallSpeedConfidence.unavailable);
       expect(FeedbackSource.fromJson('gpt'), FeedbackSource.template);
       expect(Handedness.fromJson('ambidextrous'), Handedness.unknown);
-      expect(JobStatus.fromJson('cancelled'), JobStatus.queued);
+      expect(JobStatus.fromJson('cancelled'), JobStatus.unrecognized);
     });
 
     test('known strings parse', () {
@@ -50,6 +50,27 @@ void main() {
       // The real contract still parses exactly as before.
       expect(AnalysisStatus.fromJson('complete'), AnalysisStatus.complete);
       expect(AnalysisStatus.fromJson('partial'), AnalysisStatus.partial);
+    });
+
+    test('unknown job status is not read as queued', () {
+      // Regression: the fallback used to be `queued`, which the poll loop does
+      // not treat as terminal — so an unrecognised status was polled as work
+      // still in progress until the 120 s cap instead of surfacing at once.
+      expect(
+        JobStatus.fromJson('some_future_value_this_client_does_not_know'),
+        isNot(JobStatus.queued),
+      );
+      expect(
+        JobStatus.fromJson('some_future_value_this_client_does_not_know'),
+        JobStatus.unrecognized,
+      );
+      expect(JobStatus.fromJson(null), JobStatus.unrecognized);
+      expect(JobStatus.fromJson(9), JobStatus.unrecognized);
+      // The real contract still parses exactly as before.
+      expect(JobStatus.fromJson('queued'), JobStatus.queued);
+      expect(JobStatus.fromJson('running'), JobStatus.running);
+      expect(JobStatus.fromJson('succeeded'), JobStatus.succeeded);
+      expect(JobStatus.fromJson('failed'), JobStatus.failed);
     });
 
     test('unavailable reason: unknown yields null rather than a guess', () {

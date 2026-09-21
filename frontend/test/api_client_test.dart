@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tennisform_ai/models/enums.dart';
 import 'package:tennisform_ai/services/api_client.dart';
 
 void main() {
@@ -142,6 +143,48 @@ void main() {
         retryable: true,
       );
       expect(isFinalPollFailure(failure), isTrue);
+    });
+  });
+
+  group('terminalPollFailure ends the loop on a status it cannot read', () {
+    test('an unrecognised status is terminal, not polled as in-progress', () {
+      // Regression: JobStatus.fromJson used to fall back to `queued`, and the
+      // loop's terminal check only looked for `failed` — so an unknown status
+      // fell through to onUpdate and kept polling for the full 120 s cap.
+      const PollUpdate update = PollUpdate(status: JobStatus.unrecognized);
+      final ApiFailure? failure = terminalPollFailure(update);
+      expect(failure, isNotNull, reason: 'must end the loop, not keep polling');
+      expect(failure!.kind, ApiFailureKind.badResponse);
+      // The message must name the real cause, not borrow another failure's.
+      expect(failure.message, contains('does not recognise'));
+      expect(failure.errorCode, isNull);
+    });
+
+    test('a status parsed from an unknown wire string is terminal', () {
+      final PollUpdate update =
+          PollUpdate(status: JobStatus.fromJson('cancelled'));
+      expect(terminalPollFailure(update), isNotNull);
+    });
+
+    test('failed stays terminal and keeps the server error', () {
+      const PollUpdate update = PollUpdate(
+        status: JobStatus.failed,
+        failure: ApiFailure(
+          kind: ApiFailureKind.server,
+          message: 'Worker died.',
+          errorCode: 'worker_lost',
+        ),
+      );
+      expect(terminalPollFailure(update)!.errorCode, 'worker_lost');
+    });
+
+    test('in-progress statuses keep polling', () {
+      expect(terminalPollFailure(const PollUpdate(status: JobStatus.queued)),
+          isNull);
+      expect(terminalPollFailure(const PollUpdate(status: JobStatus.running)),
+          isNull);
+      expect(terminalPollFailure(const PollUpdate(status: JobStatus.succeeded)),
+          isNull);
     });
   });
 }

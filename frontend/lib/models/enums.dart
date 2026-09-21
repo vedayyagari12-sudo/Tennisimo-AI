@@ -254,15 +254,39 @@ enum JobStatus implements WireEnum {
   queued('queued'),
   running('running'),
   succeeded('succeeded'),
-  failed('failed');
+  failed('failed'),
+
+  /// Client-side sentinel: the server sent a job status this build does not
+  /// know.
+  ///
+  /// This is NOT part of the backend contract. The documented wire vocabulary
+  /// is exactly `{queued, running, succeeded, failed}`, so — unlike
+  /// [ShotType.unknown] or [CameraView.unknown], which mirror real wire strings
+  /// the backend genuinely emits — this member can only ever be produced
+  /// locally by [fromJson].
+  ///
+  /// Its wire string is deliberately `__unrecognized__` rather than `unknown`:
+  /// it never round-trips to the server, and the double-underscore form cannot
+  /// collide with a real snake_case status the backend might add later, so a
+  /// future genuine `unknown` would still be seen as unrecognised rather than
+  /// silently absorbed by this sentinel.
+  unrecognized('__unrecognized__');
 
   const JobStatus(this.wire);
 
   @override
   final String wire;
 
+  /// Unknown degrades to [unrecognized], never to [queued].
+  ///
+  /// The poll loop treats only a subset of statuses as terminal. Falling back
+  /// to [queued] made an unrecognised status — a newer backend's genuinely
+  /// terminal state, or a malformed response — look like work still in
+  /// progress, so the client kept polling it for the full 120 s cap before the
+  /// user saw any outcome at all. The sentinel is a state the loop can end on
+  /// honestly instead of a false claim that the job is still waiting.
   static JobStatus fromJson(Object? raw) =>
-      parseWireEnum(values, raw, JobStatus.queued);
+      parseWireEnum(values, raw, JobStatus.unrecognized);
 }
 
 enum AnalysisStatus implements WireEnum {
