@@ -29,6 +29,10 @@ class ResultsScreen extends StatelessWidget {
             const _PartialBanner(),
             const SizedBox(height: 16),
           ],
+          if (analysis.status == AnalysisStatus.unrecognized) ...<Widget>[
+            const _UnrecognizedStatusBanner(),
+            const SizedBox(height: 16),
+          ],
           _ShotHeader(analysis: analysis),
           const SizedBox(height: 16),
           if (feedback != null && feedback.summary.isNotEmpty) ...<Widget>[
@@ -127,6 +131,63 @@ class _PartialBanner extends StatelessWidget {
                     'For a fuller reading next time, film side-on with the '
                     'phone level, 5-10 m to your side, with your whole body in '
                     'frame.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Notice for a status string this build does not recognise.
+///
+/// Deliberately the same container/icon/title/body shape as [_PartialBanner],
+/// so an unrecognised status is as visible as a degraded one instead of being
+/// silently rendered as a normal, fully successful analysis.
+class _UnrecognizedStatusBanner extends StatelessWidget {
+  const _UnrecognizedStatusBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Card(
+      color: theme.colorScheme.tertiaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Icon(Icons.help_outline,
+                color: theme.colorScheme.onTertiaryContainer),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'This app could not read the status of this analysis',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'The server reported a status this version of the app does '
+                    'not recognise, so it cannot tell you whether everything '
+                    'below was measured fully. Treat these numbers with care.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Updating the app usually clears this.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onTertiaryContainer,
                     ),

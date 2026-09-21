@@ -29,8 +29,26 @@ void main() {
       expect(BallSpeedConfidence.fromJson('medium'), BallSpeedConfidence.medium);
     });
 
-    test('unknown analysis status degrades to complete, not partial', () {
-      expect(AnalysisStatus.fromJson('weird'), AnalysisStatus.complete);
+    test('unknown analysis status is neither complete nor partial', () {
+      // Regression: the fallback used to be `complete`, which silently
+      // presented an analysis of unknown standing as a fully successful one.
+      // `partial` would be wrong the other way. It must be the sentinel.
+      expect(
+        AnalysisStatus.fromJson('some_future_value_this_client_does_not_know'),
+        isNot(AnalysisStatus.complete),
+      );
+      expect(
+        AnalysisStatus.fromJson('some_future_value_this_client_does_not_know'),
+        isNot(AnalysisStatus.partial),
+      );
+      expect(
+        AnalysisStatus.fromJson('some_future_value_this_client_does_not_know'),
+        AnalysisStatus.unrecognized,
+      );
+      expect(AnalysisStatus.fromJson(null), AnalysisStatus.unrecognized);
+      expect(AnalysisStatus.fromJson(7), AnalysisStatus.unrecognized);
+      // The real contract still parses exactly as before.
+      expect(AnalysisStatus.fromJson('complete'), AnalysisStatus.complete);
       expect(AnalysisStatus.fromJson('partial'), AnalysisStatus.partial);
     });
 
@@ -312,32 +330,33 @@ void main() {
       expect(analysis.status, AnalysisStatus.complete);
     });
 
-    test('unknown or missing status degrades to complete, never partial', () {
-      // An unrecognised string must not fabricate a degraded-analysis banner.
+    test('unknown or missing status is flagged, not read as complete', () {
+      // An unrecognised string must neither fabricate a degraded-analysis
+      // banner nor pass itself off as a fully successful analysis.
       expect(
         AnalysisResponse.fromJson(<String, dynamic>{
           'analysis_id': 'x',
           'status': 'half_done',
         }).status,
-        AnalysisStatus.complete,
+        AnalysisStatus.unrecognized,
       );
       expect(
         AnalysisResponse.fromJson(<String, dynamic>{'analysis_id': 'x'}).status,
-        AnalysisStatus.complete,
+        AnalysisStatus.unrecognized,
       );
       expect(
         AnalysisResponse.fromJson(<String, dynamic>{
           'analysis_id': 'x',
           'status': null,
         }).status,
-        AnalysisStatus.complete,
+        AnalysisStatus.unrecognized,
       );
       expect(
         AnalysisResponse.fromJson(<String, dynamic>{
           'analysis_id': 'x',
           'status': 7,
         }).status,
-        AnalysisStatus.complete,
+        AnalysisStatus.unrecognized,
       );
     });
 

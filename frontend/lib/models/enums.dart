@@ -267,17 +267,42 @@ enum JobStatus implements WireEnum {
 
 enum AnalysisStatus implements WireEnum {
   complete('complete'),
-  partial('partial');
+  partial('partial'),
+
+  /// Client-side sentinel: the server sent a status this build does not know.
+  ///
+  /// This is NOT part of the backend contract. The documented wire vocabulary
+  /// is exactly `{complete, partial}` (docs/DATABASE_SETUP.md); there is no
+  /// server-side "unknown" status, so unlike [ShotType.unknown],
+  /// [Handedness.unknown] and [CameraView.unknown] — each of which mirrors a
+  /// real wire string the backend genuinely emits — this member can only ever
+  /// be produced locally by [fromJson].
+  ///
+  /// Its wire string is deliberately `__unrecognized__` rather than `unknown`:
+  /// it never round-trips to the server, and the double-underscore form cannot
+  /// collide with a real snake_case status the backend might add later, so a
+  /// future genuine `unknown` would still be seen as unrecognised rather than
+  /// silently absorbed by this sentinel.
+  unrecognized('__unrecognized__');
 
   const AnalysisStatus(this.wire);
 
   @override
   final String wire;
 
-  /// Unknown degrades to [complete]: defaulting to `partial` would put a
-  /// degraded-result banner on a perfectly good analysis.
+  /// Unknown degrades to [unrecognized], because both real members lie about it.
+  ///
+  /// Defaulting to [partial] would stamp a degraded-result banner on a
+  /// perfectly good analysis — the original concern, and a valid one. But
+  /// defaulting to [complete] is worse: it presents an analysis of unknown
+  /// standing as a fully successful one, silently hiding a real problem (a
+  /// newer backend status, a bug, a malformed response) instead of merely
+  /// mislabelling a good result. With only two members, every unrecognised
+  /// value is forced into one of two misleading buckets; a third state is the
+  /// only answer that claims neither success nor degradation, and lets the UI
+  /// say plainly that it does not recognise what the server reported.
   static AnalysisStatus fromJson(Object? raw) =>
-      parseWireEnum(values, raw, AnalysisStatus.complete);
+      parseWireEnum(values, raw, AnalysisStatus.unrecognized);
 }
 
 /// Court features the user may tap during calibration.
