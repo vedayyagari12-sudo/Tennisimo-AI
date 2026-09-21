@@ -1015,6 +1015,35 @@ Required, in this order:
 
 ##### 9.2.9 IMPLEMENTED — what landed, what it measured, and what it did not fix
 
+> **CORRECTION, added after independent re-measurement. Read this before acting on
+> 9.2.9's own conclusions.** 9.2.9 reports that `wrist_behind_mid_hip` rejects the
+> ground-truth candidate on `serve_06_vertical_10340710.mp4` and recommends revisiting
+> that gate first. **On the stock 8 s / 240-frame configuration — the one 9.2.9's own
+> corpus table uses, and which reproduces its `72 → 96` result exactly — that is not
+> what happens.** Measured directly with `candidate_rejection_flags`:
+>
+> | source frame | filter verdict |
+> |---|---|
+> | 86 (idx 103) | **ACCEPTED** |
+> | 87 (idx 104) | **ACCEPTED** |
+> | 88 (idx 106) | **ACCEPTED** |
+>
+> All three ground-truth frames pass **both** filter gates. The enumerated candidates are
+> source frames **72, 67, 92, 82, 59** — none within the 86–88 band. The winner, source 96,
+> is the plateau walk of candidate 92.
+>
+> **The gates are not rejecting the correct frame; the enumerator never offers it.**
+> Frames 86–88 are not local maxima of racket-wrist speed, so `candidate_peak_indices`
+> cannot enumerate them at any `MAX_CANDIDATES`. This is root cause (b) — the wrist-speed
+> proxy — which §9.2 deliberately scoped out, and it is the binding constraint on this
+> clip, not gate disposition.
+>
+> 9.2.9's observation may still hold on the shipped end-to-end path (2.67 s window,
+> 80-frame cap), where different sampling yields different peaks; the two are not
+> necessarily in conflict. But **the gate-first recommendation does not follow from the
+> corpus table**, and acting on it would change a filter that is behaving correctly.
+> The next revisit should target the contact proxy, not `wrist_behind_mid_hip`.
+
 > **Status: code written, corpus re-measured on current HEAD (post Defects 1 and 2).**
 > `backend/app/analysis/contact.py`. The earlier per-clip Stage 9 figures in §9.1 were
 > taken on hand-centred windows and before Defects 1–2 moved the windows; they are stale
