@@ -144,7 +144,8 @@ def test_allowlist_adds_ball_speed_as_integer_only(
 def test_generation_config_matches_the_contract() -> None:
     config = generation_config()
     assert config["temperature"] == 0.3
-    assert config["max_output_tokens"] == 800
+    assert config["max_output_tokens"] == 2048
+    assert config["thinking_config"] == {"thinking_budget": 0}
     assert config["response_mime_type"] == "application/json"
     assert config["response_schema"] == response_schema()
     assert config["response_schema"]["required"] == [

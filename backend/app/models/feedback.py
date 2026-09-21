@@ -119,6 +119,15 @@ class NumericGuardReport(BaseModel):
             "'banned' when ball_speed_mph is null; 'bound_to:<int>' when it is not."
         ),
     )
+    model_finish_reason: str | None = Field(
+        default=None,
+        description=(
+            "The model's finish_reason when it is the reason the template was "
+            "used, e.g. 'MAX_TOKENS' for a response truncated by the output "
+            "token budget. None when the model was not called, answered "
+            "completely, or failed for a transport reason."
+        ),
+    )
 
 
 class CoachingFeedback(BaseModel):

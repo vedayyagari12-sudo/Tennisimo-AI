@@ -16,6 +16,7 @@ email, user id, or calibration tap coordinates.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -23,7 +24,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Protocol, runtime_checkable
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.models.enums import (
     BallSpeedConfidence,
@@ -147,9 +148,34 @@ SYSTEM_INSTRUCTION: Final[str] = (
     "this clip."
 )
 
+logger = logging.getLogger("tennisform.feedback")
+
 GENERATION_TEMPERATURE: Final[float] = 0.3
-GENERATION_MAX_OUTPUT_TOKENS: Final[int] = 800
+
+#: For ``gemini-2.5-flash`` thinking tokens are billed against the SAME
+#: ``max_output_tokens`` budget as the answer itself, and the thinking
+#: allocation is unbounded unless a budget is set. With no thinking budget and
+#: an 800-token ceiling, a live call spent 764 tokens thinking and 22 on the
+#: answer, finished as MAX_TOKENS and returned 101 characters of truncated
+#: JSON -- unparseable every time. This is a pure formatting task over an
+#: already-computed payload with an explicit ``response_schema``; it needs no
+#: extended reasoning, so the budget is pinned to 0 (DISABLED in the GenAI SDK)
+#: to remove that nondeterminism entirely.
+GENERATION_THINKING_BUDGET: Final[int] = 0
+
+#: Sized from the ``response_schema`` and confirmed by live measurement, not
+#: guessed: a complete draft (summary + strengths + improvements of
+#: title/why/cue/drill/metric_refs) cost 260 candidate tokens for a
+#: one-priority-metric payload and 352 for a three-priority-metric one, the
+#: largest shape Stage 16 produces. Budgeting ~800 tokens for an unusually
+#: verbose draft, 2048 is a ~5.8x margin over the measured worst case and keeps
+#: the ceiling non-binding even if a future model ignores the thinking budget.
+#: Complementary to, not a substitute for, GENERATION_THINKING_BUDGET.
+GENERATION_MAX_OUTPUT_TOKENS: Final[int] = 2048
 GENERATION_RESPONSE_MIME_TYPE: Final[str] = "application/json"
+
+#: ``finish_reason`` name meaning the response was cut off by the output budget.
+MAX_TOKENS_FINISH_REASON: Final[str] = "MAX_TOKENS"
 
 
 # --------------------------------------------------------------------------- #
@@ -325,6 +351,10 @@ def generation_config() -> dict[str, Any]:
         "max_output_tokens": GENERATION_MAX_OUTPUT_TOKENS,
         "response_mime_type": GENERATION_RESPONSE_MIME_TYPE,
         "response_schema": response_schema(),
+        # google-genai 2.8.0 spells this ``thinking_config.thinking_budget``
+        # (types.ThinkingConfig); 0 is DISABLED. Without it, thinking tokens
+        # eat an unpredictable share of ``max_output_tokens``.
+        "thinking_config": {"thinking_budget": GENERATION_THINKING_BUDGET},
     }
 
 
@@ -536,6 +566,66 @@ def skipped_feedback(core: FeedbackInput) -> CoachingFeedback:
 # --------------------------------------------------------------------------- #
 
 
+class TokenUsage(BaseModel):
+    """Token accounting for one model call, read off ``usage_metadata``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int = 0
+    thoughts_tokens: int = 0
+    candidates_tokens: int = 0
+    total_tokens: int = 0
+
+
+class GeminiTruncatedError(RuntimeError):
+    """The model hit ``max_output_tokens`` before finishing its JSON.
+
+    Distinct from a transport failure or an unparseable-for-another-reason
+    response so that truncation is observable rather than silently
+    indistinguishable from "the model declined to answer".
+    """
+
+    def __init__(self, usage: TokenUsage) -> None:
+        super().__init__(
+            "Gemini response truncated at max_output_tokens "
+            f"(prompt={usage.prompt_tokens}, thoughts={usage.thoughts_tokens}, "
+            f"candidates={usage.candidates_tokens}, total={usage.total_tokens})"
+        )
+        self.usage = usage
+        self.finish_reason = MAX_TOKENS_FINISH_REASON
+
+
+def _int_attr(node: Any, name: str) -> int:
+    value = getattr(node, name, None)
+    return int(value) if isinstance(value, int) else 0
+
+
+def read_token_usage(response: Any) -> TokenUsage:
+    """Read token counts off an SDK response. Tolerates missing fields."""
+    usage = getattr(response, "usage_metadata", None)
+    return TokenUsage(
+        prompt_tokens=_int_attr(usage, "prompt_token_count"),
+        thoughts_tokens=_int_attr(usage, "thoughts_token_count"),
+        candidates_tokens=_int_attr(usage, "candidates_token_count"),
+        total_tokens=_int_attr(usage, "total_token_count"),
+    )
+
+
+def read_finish_reason(response: Any) -> str | None:
+    """Name of the first candidate's ``finish_reason``, or None if absent.
+
+    The SDK returns a ``FinishReason`` enum; a plain string is accepted too so
+    that a mocked response is handled identically.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    if reason is None:
+        return None
+    return str(getattr(reason, "name", reason))
+
+
 @runtime_checkable
 class GeminiClient(Protocol):
     """Thin seam over the model call so tests need no SDK and no network."""
@@ -579,6 +669,18 @@ class GoogleGenAIClient:
             contents=prompt,
             config={"system_instruction": system_instruction, **config},
         )
+        if read_finish_reason(response) == MAX_TOKENS_FINISH_REASON:
+            usage = read_token_usage(response)
+            logger.warning(
+                "gemini response truncated at max_output_tokens=%d "
+                "(prompt=%d thoughts=%d candidates=%d total=%d)",
+                GENERATION_MAX_OUTPUT_TOKENS,
+                usage.prompt_tokens,
+                usage.thoughts_tokens,
+                usage.candidates_tokens,
+                usage.total_tokens,
+            )
+            raise GeminiTruncatedError(usage)
         return response.text or ""
 
 
@@ -610,6 +712,15 @@ def generate_feedback(
             prompt=render_user_prompt(payload),
             config=generation_config(),
         )
+    except GeminiTruncatedError as truncated:
+        # Distinct from every other failure: a real response almost arrived and
+        # was cut off by the token budget. Surface that in the guard report.
+        return _fallback_feedback(
+            GUARD_FALLBACK_MESSAGE,
+            guard_default.model_copy(
+                update={"model_finish_reason": truncated.finish_reason}
+            ),
+        )
     except Exception:  # noqa: BLE001 - the API never fails because Gemini failed
         return _fallback_feedback(GUARD_FALLBACK_MESSAGE, guard_default)
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -636,6 +747,13 @@ def generate_feedback(
 
 __all__: Sequence[str] = (
     "BANNED_UNIT_SUBSTRINGS",
+    "GENERATION_MAX_OUTPUT_TOKENS",
+    "GENERATION_THINKING_BUDGET",
+    "MAX_TOKENS_FINISH_REASON",
+    "GeminiTruncatedError",
+    "TokenUsage",
+    "read_finish_reason",
+    "read_token_usage",
     "CONDITIONAL_MPH_SUBSTRING",
     "GEMINI_API_KEY_ENV",
     "GUARD_FALLBACK_MESSAGE",
