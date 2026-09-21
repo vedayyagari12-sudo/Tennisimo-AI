@@ -229,6 +229,7 @@ def to_wire_feedback(feedback: FeedbackCoachingFeedback) -> CoachingFeedback:
             fields_discarded=list(feedback.guard.fields_discarded),
             fell_back_to_template=feedback.guard.fell_back_to_template,
             mph_rule=feedback.guard.mph_rule,
+            model_finish_reason=feedback.guard.model_finish_reason,
         ),
         latency_ms=feedback.latency_ms,
     )

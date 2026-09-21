@@ -381,6 +381,52 @@ def test_feedback_projection_carries_every_field_across_the_model_pair() -> None
     assert wire.improvements[0].priority == 2
 
 
+def test_feedback_projection_carries_the_model_finish_reason() -> None:
+    """A truncation signal must survive the feedback -> wire model hop.
+
+    ``gemini.py`` records ``model_finish_reason='MAX_TOKENS'`` on the
+    feedback-layer guard. If the wire model lacks the field, or the projection
+    forgets to copy it, the truncation event is silently dropped before the
+    analysis row is persisted.
+    """
+    feedback = FeedbackCoachingFeedback(
+        summary="Template fallback.",
+        strengths=[],
+        improvements=[],
+        source=FeedbackSource.TEMPLATE,
+        model="gemini-2.5-flash",
+        guard=FeedbackGuard(
+            passed=False,
+            fell_back_to_template=True,
+            mph_rule="banned",
+            model_finish_reason="MAX_TOKENS",
+        ),
+        latency_ms=1200,
+    )
+
+    wire = to_wire_feedback(feedback)
+
+    assert wire.guard.model_finish_reason == "MAX_TOKENS"
+
+
+def test_feedback_projection_leaves_finish_reason_none_on_a_clean_call() -> None:
+    feedback = FeedbackCoachingFeedback(
+        summary="A tidy swing.",
+        strengths=[],
+        improvements=[],
+        source=FeedbackSource.GEMINI,
+        model="gemini-2.5-flash",
+        guard=FeedbackGuard(
+            passed=True,
+            fell_back_to_template=False,
+            mph_rule="banned",
+        ),
+        latency_ms=800,
+    )
+
+    assert to_wire_feedback(feedback).guard.model_finish_reason is None
+
+
 def test_heartbeat_and_run_async_are_the_only_async_seam() -> None:
     """The runner is synchronous; a coroutine may only travel over run_async."""
     seen: list[str] = []
