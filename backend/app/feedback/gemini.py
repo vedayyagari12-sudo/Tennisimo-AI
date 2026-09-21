@@ -223,6 +223,38 @@ def ball_speed_block(result: Any) -> dict[str, Any]:
     }
 
 
+#: Decimal places every float in the payload is rounded to before it is either
+#: serialized into the prompt or walked for the allowlist. The two MUST agree:
+#: the guard only ever allowlists a float at 0..PAYLOAD_DECIMAL_PLACES decimal
+#: places, so any value carrying more precision than that in the prompt is
+#: structurally impossible for the model to quote without being rejected.
+#:
+#: 2, not 1, because the rubric's band edges are hand-picked at 2 decimal places
+#: (``swing_plane_deviation_tu`` 0.0..0.08, ``head_stillness_tu`` 0.0..0.06,
+#: ``contact_point_forward_tu`` 0.25..0.60). Rounding those to 1dp would move a
+#: real decision boundary -- 0.08 would render as 0.1 and an above-ideal 0.09
+#: would read as sitting exactly on the ideal edge. At 2dp every band edge in
+#: ``app/analysis/rubric.py`` survives rounding untouched.
+PAYLOAD_DECIMAL_PLACES: Final[int] = 2
+
+
+def round_payload_numbers(node: Any) -> Any:
+    """Recursively round every float to :data:`PAYLOAD_DECIMAL_PLACES`.
+
+    Pure and idempotent. Ints and bools are returned unchanged, so integer-only
+    fields (``ball_speed.mph``) never acquire a decimal point.
+    """
+    if isinstance(node, bool) or node is None or isinstance(node, int):
+        return node
+    if isinstance(node, float):
+        return round(node, PAYLOAD_DECIMAL_PLACES)
+    if isinstance(node, Mapping):
+        return {key: round_payload_numbers(child) for key, child in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [round_payload_numbers(child) for child in node]
+    return node
+
+
 def build_feedback_payload(core: FeedbackInput) -> FeedbackPayload:
     """Render the text-only Gemini payload (PIPELINE.md Stage 16)."""
     metrics: list[dict[str, Any]] = [
@@ -238,7 +270,7 @@ def build_feedback_payload(core: FeedbackInput) -> FeedbackPayload:
         }
         for m in core.metrics
     ]
-    return {
+    return round_payload_numbers({
         "pipeline_version": core.pipeline_version,
         "rubric_version": core.rubric_version,
         "shot_type": core.shot_type,
@@ -254,7 +286,7 @@ def build_feedback_payload(core: FeedbackInput) -> FeedbackPayload:
         "unit_glossary": dict(UNIT_GLOSSARY),
         "unavailable_metrics": [m.name for m in core.metrics if m.value is None],
         "low_confidence_warnings": list(core.low_confidence_warnings),
-    }
+    })
 
 
 def _add_number_renderings(value: float, out: set[str], integer_only: bool) -> None:
@@ -264,8 +296,8 @@ def _add_number_renderings(value: float, out: set[str], integer_only: bool) -> N
     if isinstance(value, int):
         out.add(str(value))
         return
-    out.add(f"{value:.0f}")
-    out.add(f"{value:.1f}")
+    for places in range(PAYLOAD_DECIMAL_PLACES + 1):
+        out.add(f"{value:.{places}f}")
 
 
 def _walk_numbers(node: Any, out: set[str], integer_only: bool) -> None:
@@ -286,19 +318,31 @@ def _walk_numbers(node: Any, out: set[str], integer_only: bool) -> None:
 def numeric_allowlist(payload: FeedbackPayload) -> frozenset[str]:
     """Every numeric string rendering the model is permitted to emit.
 
-    Floats are allowlisted at 0 and 1 decimal places. Everything under
+    The payload is rounded with :func:`round_payload_numbers` first -- exactly
+    as :func:`render_user_prompt` does -- so the allowlist can never be narrower
+    than what the prompt actually shows the model.
+
+    Floats are allowlisted at 0..:data:`PAYLOAD_DECIMAL_PLACES` decimal places.
+    Everything under
     ``ball_speed`` (``mph``, ``detections_used``) is allowlisted as an INTEGER
     rendering only -- so ``"68.0 mph"`` is a violation by construction.
     """
     out: set[str] = set()
-    _walk_numbers(payload, out, integer_only=False)
+    _walk_numbers(round_payload_numbers(payload), out, integer_only=False)
     out.update(ORDINAL_ALLOWLIST)
     return frozenset(out)
 
 
 def render_user_prompt(payload: FeedbackPayload) -> str:
-    """Render the text-only user prompt. Numbers, enum strings and verdicts only."""
-    body = json.dumps(payload, indent=2, sort_keys=False, ensure_ascii=False)
+    """Render the text-only user prompt. Numbers, enum strings and verdicts only.
+
+    Floats are rounded to :data:`PAYLOAD_DECIMAL_PLACES` at serialization time,
+    so every number the model is shown is one the numeric guard's allowlist
+    accepts verbatim.
+    """
+    body = json.dumps(
+        round_payload_numbers(payload), indent=2, sort_keys=False, ensure_ascii=False
+    )
     return (
         "Write coaching feedback from the measurements below. Every number you "
         "write must appear verbatim in this JSON. Coach only the metrics named "
@@ -762,6 +806,8 @@ __all__: Sequence[str] = (
     "MAX_MPH_MENTIONS",
     "MIN_CONTACT_CONFIDENCE_FOR_GEMINI",
     "MODEL_NAME",
+    "PAYLOAD_DECIMAL_PLACES",
+    "round_payload_numbers",
     "SYSTEM_INSTRUCTION",
     "GeminiClient",
     "GoogleGenAIClient",

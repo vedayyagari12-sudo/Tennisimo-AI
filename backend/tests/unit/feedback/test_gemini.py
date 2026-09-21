@@ -21,10 +21,18 @@ from app.feedback.gemini import (
     parse_gemini_response,
     render_user_prompt,
     response_schema,
+    round_payload_numbers,
     should_skip_gemini,
+    validate_text_field,
 )
-from app.models.enums import BallSpeedConfidence, FeedbackSource
-from app.models.feedback import FeedbackInput
+from app.analysis.rubric import RUBRIC_V1
+from app.models.enums import (
+    BallSpeedConfidence,
+    FeedbackSource,
+    MetricUnit,
+    MetricVerdict,
+)
+from app.models.feedback import BallSpeedResult, FeedbackInput, MetricScore
 from tests.conftest import FakeGeminiClient, make_core
 
 VALID_DRAFT: dict[str, Any] = {
@@ -306,3 +314,87 @@ def test_low_confidence_or_truncated_skips_gemini_entirely(
     assert feedback.strengths == []
     assert feedback.improvements == []
     assert feedback.guard.fell_back_to_template is True
+
+
+# --------------------------------------------------------------------------- #
+# Regression: payload precision vs. allowlist precision
+# --------------------------------------------------------------------------- #
+#
+# The payload used to be serialized into the prompt at FULL float precision
+# while the allowlist only ever rendered a float at 0 and 1 decimal places. Any
+# value with 2+ decimal digits was therefore impossible for the model to quote
+# without being rejected -- it read `shoulder_turn_deg: 87.15032792538659`,
+# wrote "87.15" exactly as instructed, and the guard threw the whole field away
+# because the allowlist held only "87" and "87.2". Hardcoded band edges such as
+# `ideal_min: 0.25` could never be allowlisted at all. That is why `source` was
+# "template" on every live run.
+
+
+def _high_precision_core() -> FeedbackInput:
+    """A core whose metric value carries far more precision than the guard renders."""
+    return FeedbackInput(
+        shot_type="forehand_topspin",
+        shot_type_confidence=0.81,
+        shot_type_evidence=[],
+        handedness="right",
+        contact_confidence=0.74,
+        overall_score=71.5,
+        category_scores={"preparation": 78.0},
+        metrics=[
+            MetricScore(
+                name="shoulder_turn_deg",
+                value=87.15032792538659,
+                unit=MetricUnit.DEGREES,
+                verdict=MetricVerdict.LOW,
+                score=88.33333333333333,
+                ideal_min=0.25,
+                ideal_max=110.0,
+                view_sensitive=False,
+            )
+        ],
+        ball_speed=BallSpeedResult(
+            ball_speed_mph=68,
+            confidence=BallSpeedConfidence.MEDIUM,
+            detections_used=6,
+        ),
+        priority_metric_names=["shoulder_turn_deg"],
+    )
+
+
+def test_prompt_never_shows_a_number_the_allowlist_rejects() -> None:
+    payload = build_feedback_payload(_high_precision_core())
+    allowlist = numeric_allowlist(payload)
+    prompt = render_user_prompt(payload)
+
+    # What the model is shown is bounded to the allowlist's own precision.
+    assert "87.15" in prompt
+    assert "87.15032792538659" not in prompt
+    assert "88.33" in prompt
+    assert "0.25" in prompt
+
+    # ...and every number it is shown can be quoted verbatim.
+    for token in ("87.15", "87.2", "87", "88.33", "0.25"):
+        assert token in allowlist, f"{token} missing from allowlist"
+
+    # End to end: a field citing the payload value exactly survives the guard.
+    assert (
+        validate_text_field(
+            "Your shoulder turn measured 87.15 deg against a 0.25 deg floor.",
+            allowlist,
+            68,
+        )
+        == []
+    )
+
+
+def test_band_edges_survive_payload_rounding_unchanged() -> None:
+    """Every hand-picked rubric band edge must round-trip exactly.
+
+    Rounding must not move a real decision boundary: if `ideal_max` 0.08 were
+    rendered as 0.1, an above-ideal 0.09 would read as sitting on the edge of
+    the ideal range.
+    """
+    for bands in RUBRIC_V1.values():
+        for name, band in bands.items():
+            for edge in (band.ideal_min, band.ideal_max):
+                assert round_payload_numbers(edge) == edge, f"{name} edge {edge} moved"
