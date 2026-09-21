@@ -11,9 +11,39 @@ import '../models/enums.dart';
 /// REPLACE ME: base URL of the deployed FastAPI backend (Render).
 const String baseUrl = 'https://replace-me.example.com';
 
-/// Poll cadence and cap, per PIPELINE.md Stage 19 / Appendix A.
+/// Poll cadence, per PIPELINE.md Stage 19 / Appendix A.
+///
+/// The 2 s cadence is load-bearing beyond the UI: it is what keeps the Cloud
+/// Run instance's CPU allocated while a job runs.
 const Duration kPollInterval = Duration(seconds: 2);
-const Duration kPollTimeout = Duration(seconds: 120);
+
+/// Local mirror of the server's `JOB_HEARTBEAT_STALE_S` (backend/app/config.py,
+/// default 180).
+///
+/// Dart cannot import a Python constant or read the server's environment, so
+/// this duplicate and [kPollTimeout]'s doc below are the only link between the
+/// two sides. If the server value changes, change this one too — the test
+/// `kPollTimeout outlives the server's heartbeat staleness window` enforces the
+/// RELATIONSHIP between them, which is the part that actually matters.
+const int kServerHeartbeatStaleSeconds = 180;
+
+/// Cap on the poll loop. MUST stay above [kServerHeartbeatStaleSeconds] with
+/// margin.
+///
+/// The server marks a job `WORKER_LOST` only after its heartbeat has been stale
+/// for `JOB_HEARTBEAT_STALE_S` (180 s). That 180 s is a deliberately derived
+/// number: PIPELINE.md sizes it with wide margin over the documented worst-case
+/// job duration (~23-41 s, including the rotation-retry doubling of Stage 6).
+/// The client's cap had no comparable reasoning behind it and sat at 120 s, so
+/// a genuinely dead job timed out here a full minute BEFORE the server would
+/// have said so, and the user got "taking longer than expected" instead of the
+/// real answer.
+///
+/// 210 s = 180 s + 30 s, so the server's verdict — `WORKER_LOST`, or a late
+/// success — always has room to arrive and be shown, with 15 more polls of
+/// slack for a slow round trip. A future reader shortening this must check the
+/// server constant first.
+const Duration kPollTimeout = Duration(seconds: 210);
 
 /// What went wrong, at a granularity the screens actually branch on.
 enum ApiFailureKind {
@@ -30,7 +60,7 @@ enum ApiFailureKind {
   /// Server answered 2xx with a body this client could not read.
   badResponse,
 
-  /// Polling hit the 120 s cap without the job finishing.
+  /// Polling hit the [kPollTimeout] cap without the job finishing.
   timeout,
 }
 
@@ -393,7 +423,7 @@ bool isFinalPollFailure(ApiFailure failure) {
 /// terminal decision, and it is only testable without real 2 s delays on its
 /// own. [JobStatus.unrecognized] is terminal — it is what [JobStatus.fromJson]
 /// yields for a status this build does not know, and continuing to poll such a
-/// job merely hides the outcome until the 120 s cap.
+/// job merely hides the outcome until the [kPollTimeout] cap.
 ApiFailure? terminalPollFailure(PollUpdate update) {
   switch (update.status) {
     case JobStatus.failed:
@@ -415,7 +445,7 @@ ApiFailure? terminalPollFailure(PollUpdate update) {
   }
 }
 
-/// Polls every 2 s until the analysis is done, failed, or the 120 s cap is hit.
+/// Polls every 2 s until the analysis is done, failed, or [kPollTimeout] is hit.
 ///
 /// [onUpdate] fires on each successful non-final poll so the screen can show
 /// queue position. Transient network blips do not abort the loop; they are

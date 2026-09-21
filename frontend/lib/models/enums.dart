@@ -305,8 +305,8 @@ enum JobStatus implements WireEnum {
   /// The poll loop treats only a subset of statuses as terminal. Falling back
   /// to [queued] made an unrecognised status — a newer backend's genuinely
   /// terminal state, or a malformed response — look like work still in
-  /// progress, so the client kept polling it for the full 120 s cap before the
-  /// user saw any outcome at all. The sentinel is a state the loop can end on
+  /// progress, so the client kept polling it for the full kPollTimeout cap
+  /// before the user saw any outcome at all. The sentinel is a state the loop can end on
   /// honestly instead of a false claim that the job is still waiting.
   static JobStatus fromJson(Object? raw) =>
       parseWireEnum(values, raw, JobStatus.unrecognized);

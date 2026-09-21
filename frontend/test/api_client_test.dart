@@ -150,7 +150,7 @@ void main() {
     test('an unrecognised status is terminal, not polled as in-progress', () {
       // Regression: JobStatus.fromJson used to fall back to `queued`, and the
       // loop's terminal check only looked for `failed` — so an unknown status
-      // fell through to onUpdate and kept polling for the full 120 s cap.
+      // fell through to onUpdate and kept polling for the full kPollTimeout.
       const PollUpdate update = PollUpdate(status: JobStatus.unrecognized);
       final ApiFailure? failure = terminalPollFailure(update);
       expect(failure, isNotNull, reason: 'must end the loop, not keep polling');
@@ -240,6 +240,21 @@ void main() {
             <String, dynamic>{'scorecard': <String, dynamic>{}}),
         isTrue,
       );
+    });
+  });
+
+  group('poll cap is tied to the server heartbeat window', () {
+    test('kPollTimeout outlives the server heartbeat staleness window', () {
+      expect(kPollTimeout, const Duration(seconds: 210));
+      expect(kPollTimeout.inSeconds, greaterThan(kServerHeartbeatStaleSeconds));
+      // Not merely greater: greater with real margin, so a slow round trip
+      // near the window still gets the server's own verdict through.
+      expect(kPollTimeout.inSeconds - kServerHeartbeatStaleSeconds,
+          greaterThanOrEqualTo(30));
+    });
+
+    test('the mirrored server constant is the documented 180 s', () {
+      expect(kServerHeartbeatStaleSeconds, 180);
     });
   });
 }

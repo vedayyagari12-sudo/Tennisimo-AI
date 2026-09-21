@@ -83,7 +83,7 @@ void main() {
     test('unknown job status is not read as queued', () {
       // Regression: the fallback used to be `queued`, which the poll loop does
       // not treat as terminal — so an unrecognised status was polled as work
-      // still in progress until the 120 s cap instead of surfacing at once.
+      // still in progress until the poll cap instead of surfacing at once.
       expect(
         JobStatus.fromJson('some_future_value_this_client_does_not_know'),
         isNot(JobStatus.queued),
