@@ -33,7 +33,13 @@ class _RecordScreenState extends State<RecordScreen> {
   Timer? _ticker;
 
   ShotType _shotType = ShotType.forehandTopspin;
-  Handedness _handedness = Handedness.right;
+  /// NO DEFAULT, deliberately. A defaulted hint is indistinguishable from a
+  /// confirmed one on the server, and it OVERRIDES Stage 8 detection whenever
+  /// detection confidence is below its floor (14 of 16 corpus clips). A
+  /// left-handed user who never noticed this control would have had every
+  /// racket-hand metric computed on the wrong arm, with no flag anywhere.
+  /// See docs/PIPELINE.md section 8.1. Null until the user actually chooses.
+  Handedness? _handedness;
   BallSpeedCalibration? _calibration;
 
   @override
@@ -153,7 +159,7 @@ class _RecordScreenState extends State<RecordScreen> {
         builder: (BuildContext context) => AnalyzingScreen(
           videoPath: file.path,
           durationSeconds: recorded.inMilliseconds / 1000.0,
-          handednessHint: _handedness,
+          handednessHint: _handedness!,
           labelHint: _shotType,
           calibration: _calibration,
         ),
@@ -233,12 +239,25 @@ class _RecordScreenState extends State<RecordScreen> {
                 label: Text('Left'),
               ),
             ],
-            selected: <Handedness>{_handedness},
+            emptySelectionAllowed: true,
+            selected: _handedness == null
+                ? const <Handedness>{}
+                : <Handedness>{_handedness!},
             onSelectionChanged: _isRecording
                 ? null
-                : (Set<Handedness> selection) =>
-                    setState(() => _handedness = selection.first),
+                : (Set<Handedness> selection) => setState(
+                    () => _handedness =
+                        selection.isEmpty ? null : selection.first),
           ),
+          if (_handedness == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Choose your racket hand to start recording.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error),
+              ),
+            ),
           const SizedBox(height: 24),
           _buildCalibrationSection(theme),
         ],
@@ -312,8 +331,11 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   Widget _buildRecordControls(ThemeData theme) {
-    final bool ready =
-        _controller != null && _controller!.value.isInitialized;
+    // `_handedness != null` is part of readiness: recording must not start
+    // until the racket hand is an explicit user choice rather than a default.
+    final bool ready = _controller != null &&
+        _controller!.value.isInitialized &&
+        _handedness != null;
     final Duration remaining = kMaxRecordingDuration - _elapsed;
 
     return Column(
