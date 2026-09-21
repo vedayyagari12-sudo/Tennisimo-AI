@@ -526,4 +526,57 @@ void main() {
       expect(farEnough.separation, closeTo(0.8, 1e-9));
     });
   });
+
+  group('NumericGuardReport carries the model finish reason', () {
+    test('MAX_TOKENS is parsed off the wire field', () {
+      final NumericGuardReport guard =
+          NumericGuardReport.fromJson(<String, dynamic>{
+        'passed': false,
+        'fell_back_to_template': true,
+        'rejected_tokens': <String>['92 mph'],
+        'mph_rule': 'banned',
+        'model_finish_reason': 'MAX_TOKENS',
+      });
+      expect(guard.modelFinishReason, 'MAX_TOKENS');
+      expect(guard.fellBackToTemplate, isTrue);
+    });
+
+    test('an absent finish reason stays null, with no sentinel', () {
+      final NumericGuardReport guard =
+          NumericGuardReport.fromJson(<String, dynamic>{
+        'passed': true,
+        'fell_back_to_template': false,
+      });
+      expect(guard.modelFinishReason, isNull);
+    });
+
+    test('it is read through the full feedback payload', () {
+      final CoachingFeedback feedback =
+          CoachingFeedback.fromJson(<String, dynamic>{
+        'summary': 'Template text.',
+        'source': 'template',
+        'guard': <String, dynamic>{
+          'fell_back_to_template': true,
+          'model_finish_reason': 'MAX_TOKENS',
+        },
+      });
+      expect(feedback.guard?.modelFinishReason, 'MAX_TOKENS');
+    });
+
+    test('a truncation produces a debug line, a clean call does not', () {
+      final NumericGuardReport truncated =
+          NumericGuardReport.fromJson(<String, dynamic>{
+        'fell_back_to_template': true,
+        'model_finish_reason': 'MAX_TOKENS',
+      });
+      expect(truncated.truncationDebugLine, contains('MAX_TOKENS'));
+
+      final NumericGuardReport clean =
+          NumericGuardReport.fromJson(<String, dynamic>{
+        'passed': true,
+        'fell_back_to_template': false,
+      });
+      expect(clean.truncationDebugLine, isNull);
+    });
+  });
 }

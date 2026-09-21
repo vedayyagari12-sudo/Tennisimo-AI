@@ -18,6 +18,17 @@ class ResultsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final CoachingFeedback? feedback = analysis.feedback;
 
+    // Debug-only. Nothing in this app surfaced guard diagnostics anywhere, so a
+    // truncated Gemini draft looked identical to a normal template answer from
+    // the client side. This is the smallest thing that makes that event
+    // debuggable: the assert body is stripped entirely from release builds, so
+    // it costs a user nothing and adds no UI.
+    assert(() {
+      final String? note = feedback?.guard?.truncationDebugLine;
+      if (note != null) debugPrint('[TennisForm] $note');
+      return true;
+    }());
+
     return Scaffold(
       appBar: AppBar(title: const Text('Your swing')),
       body: ListView(

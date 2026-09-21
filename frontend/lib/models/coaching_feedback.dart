@@ -43,6 +43,7 @@ class NumericGuardReport {
     required this.fieldsDiscarded,
     required this.fellBackToTemplate,
     required this.mphRule,
+    required this.modelFinishReason,
   });
 
   final bool passed;
@@ -51,6 +52,27 @@ class NumericGuardReport {
   final bool fellBackToTemplate;
   final String mphRule;
 
+  /// The model's `finish_reason` when it is WHY the template was used, e.g.
+  /// `MAX_TOKENS` for a draft cut off by the output token budget.
+  ///
+  /// Null is the ordinary case and is left as null deliberately: the backend
+  /// sends nothing here when the model was not called, answered completely, or
+  /// failed for a transport reason. An absent field is legitimately "no reason
+  /// to report", not an unrecognised value, so there is no sentinel here.
+  final String? modelFinishReason;
+
+  /// A one-line diagnostic when the coaching text was replaced by the template
+  /// because Gemini's draft was truncated, else null.
+  ///
+  /// Kept as a pure getter so the truncation case is testable without a widget
+  /// or a network call; [ResultsScreen] is what prints it, in debug builds.
+  String? get truncationDebugLine {
+    if (!fellBackToTemplate || modelFinishReason == null) return null;
+    return 'Coaching text fell back to the template: model finish_reason = '
+        '$modelFinishReason'
+        '${rejectedTokens.isEmpty ? '' : ', rejected ${rejectedTokens.join(', ')}'}.';
+  }
+
   factory NumericGuardReport.fromJson(Map<String, dynamic> json) {
     return NumericGuardReport(
       passed: asBool(json, 'passed', fallback: true),
@@ -58,6 +80,7 @@ class NumericGuardReport {
       fieldsDiscarded: asStringList(json, 'fields_discarded'),
       fellBackToTemplate: asBool(json, 'fell_back_to_template'),
       mphRule: asString(json, 'mph_rule', fallback: 'banned'),
+      modelFinishReason: asStringOrNull(json, 'model_finish_reason'),
     );
   }
 }
