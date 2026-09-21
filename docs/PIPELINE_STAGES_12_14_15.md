@@ -1229,7 +1229,7 @@ the right kind.
 | 6 | `NO_POSE_DETECTED` (< 40% of sampled frames), `INTERNAL_ERROR` (model asset missing / SHA mismatch) | `PIPELINE.md:188` |
 | 7 | `POSE_QUALITY_TOO_LOW` | `normalize_sequence` never raises; the **orchestrator** raises on `PoseQuality.usable == False` (`normalize.py:271-276`) |
 | 8 | **none** | Never raises (`handedness.py:80`). Low confidence is data, not an error. |
-| 9 | `CONTACT_NOT_FOUND` | `detect_contact_frame` never raises (`contact.py:526`). The **orchestrator** raises when `sanity_flags` contains `"sequence_unusable"` (`contact.py:515`). Low confidence alone does **not** raise — it downgrades to `PARTIAL` and skips ball speed (`PIPELINE.md:553`). |
+| 9 | `CONTACT_NOT_FOUND` | `detect_contact_frame` never raises. The **orchestrator** raises on **either** of `sanity_flags` containing `"sequence_unusable"` **or** `"contact_not_found"` (`pipeline.py` `CONTACT_FAILING_FLAGS`). The two are distinct conditions with one consequence: `sequence_unusable` means "fewer than 3 frames, or an internal failure"; `contact_not_found` (PIPELINE.md §9.2.3) means the sequence was perfectly analysable and **every enumerated candidate failed a pre-selection filter gate**, so Stage 9 refused rather than returning a frame it had already judged impossible. Low confidence alone still does **not** raise — it downgrades to `PARTIAL` and skips ball speed (`PIPELINE.md:553`). |
 | **12** | **none** | Returns `(None, warnings)`. |
 | 13 | **none** | Never raises (`metrics.py:626,685-686`). |
 | **14** | **none** | Returns `UNKNOWN` (`PIPELINE.md:978`). |
@@ -1238,6 +1238,15 @@ the right kind.
 | 11 | **none** | `BallSpeedResult` with null speed + reason (`speed.py:211-221`). |
 | 16–17 | **none** | Gemini failure → template fallback (`FeedbackSource.TEMPLATE`, `enums.py:47`). |
 | 18 | `INTERNAL_ERROR`, `STORAGE_UNAVAILABLE` | |
+
+**`contact_not_found` deliberately raises the job-failure rate, and that is the trade.**
+A wrong contact frame does not stay local: it sets Stage 12's phase boundaries, therefore
+every Stage 13 metric, therefore Stage 14's shot type, Stage 15's score and Stage 16's
+coaching text — all of which come out looking entirely normal and are entirely wrong. A
+`contact_not_found` is locally diagnosable; a wrong frame is neither local nor diagnosable.
+Measured all-rejected rate on the 16-clip corpus: **5 of 16 (31 %)**, above the ~20 % that
+PIPELINE.md §9.2.3 pre-committed as the revisit trigger — see §9.2.9 for what that revisit
+found and why `ARM_RANGE_MIN_TU` is *not* the value to move.
 
 **Stages 12, 14 and 15 raise nothing, ever.** There is no `SEGMENTATION_FAILED`, no
 `SHOT_TYPE_UNKNOWN`, no `SCORING_FAILED` in `ErrorCode` — correctly, because none of
@@ -1254,7 +1263,10 @@ which is a bug report, not a user-facing condition.
   `speed.py:271`). **This is the common case** and must not produce a warning that
   reads like a fault.
 - `contact.confidence < 0.35` (`speed.py:71`, `PIPELINE.md:553,596`) →
-  `CONTACT_UNRELIABLE`.
+  `CONTACT_UNRELIABLE`. Note that `contact_not_found` never reaches this gate: the job
+  has already failed at Stage 9, so Stages 10–18 do not run at all. `CONTACT_UNRELIABLE`
+  remains the path for a contact that was *found but is weak*, which is still the
+  common case.
 - `PoseQuality.estimated_camera_view in {FRONT, BEHIND}` → `CAMERA_VIEW_UNSUITABLE`.
   **This gate is inert:** `estimated_camera_view` is hardcoded `UNKNOWN`
   (`normalize.py:325`) and `UNKNOWN` matches neither value, so it never fires
@@ -1278,7 +1290,9 @@ be attempted always and skipped only by its own `None` return.
 `AnalysisStatus` has exactly two members (`enums.py:120-124`). Downgrade to `PARTIAL`
 when any of:
 
-- `contact.confidence < 0.35` (`PIPELINE.md:553`)
+- `contact.confidence < 0.35` (`PIPELINE.md:553`) — reachable only for a contact that
+  WAS selected. `confidence == 0.0` with `contact_not_found` is not a `PARTIAL`: there is
+  no analysis to be partial about, and the job fails with `CONTACT_NOT_FOUND` instead.
 - `phases is None`, or any phase collapsed
 - `shot_type == ShotType.UNKNOWN`
 - `overall_score is None`, **or** fewer than 5 categories scored (C.6)

@@ -8,16 +8,24 @@ import numpy as np
 import pytest
 
 from app.analysis.contact import (
+    ARM_EXTENSION_MIN_RATIO,
+    ARM_RANGE_MIN_TU,
     CLIP_EDGE_MARGIN_FRAMES,
     CONFIDENCE_FLOOR,
+    CONTACT_NOT_FOUND,
+    MAX_CANDIDATES,
     MAX_SUSTAINED_RUN_FRAMES,
     MIN_SUSTAINED_RUN_FRAMES,
     MAX_HELD_FRACTION,
     MIN_APPROACH_COVERAGE,
     MOTION_NOT_SUSTAINED,
+    PEAK_SEPARATION_FRAMES,
     RACKET_WRIST_UNOBSERVED,
     approach_motion_coverage,
+    arm_extension_range_tu,
     arm_extension_ratio,
+    candidate_peak_indices,
+    candidate_rejection_flags,
     detect_contact_frame,
     find_deceleration_onset,
     forward_swing_window_start,
@@ -29,6 +37,7 @@ from app.analysis.contact import (
     peak_speed_index,
     racket_hand_speed,
     racket_wrist_reliable,
+    select_contact_index,
     sustained_motion_frames,
 )
 from app.analysis.normalize import RIGHT_SHOULDER, RIGHT_WRIST, SUBJECT_IDENTITY_UNSTABLE
@@ -36,7 +45,6 @@ from app.analysis.smoothing import central_difference
 from app.models.enums import Handedness, HandednessSource
 from app.models.responses import HandednessResult
 from tests.unit.analysis.synthetic import (
-    arc_positions,
     make_normalized_sequence,
     make_pose_quality,
     triangular_speed,
@@ -75,6 +83,107 @@ def double_peak_speed(
     hit = hit_speed * np.exp(-(((frames - hit_frame) / width) ** 2))
     shoulder = 0.45 * hit_speed * np.exp(-(((frames - (hit_frame + 3)) / 0.9) ** 2))
     return 0.5 + toss + hit + shoulder
+
+
+#: The two-candidate fixture below: a TALLER, implausible peak followed by a
+#: shorter, plausible one. ``synthetic_swing`` and the single-peak helpers above
+#: cannot express this shape -- which is exactly why 679 green unit tests said
+#: nothing about a defect visible on every serve (PIPELINE.md 9.2.7).
+BAD_PEAK: int = 20
+GOOD_PEAK: int = 45
+TWO_CANDIDATE_FRAMES: int = 70
+
+#: ``make_normalized_sequence`` puts the racket shoulder here.
+SHOULDER_XY: tuple[float, float] = (0.2, 1.0)
+
+
+def two_candidate_speed(
+    frame_count: int = TWO_CANDIDATE_FRAMES,
+    *,
+    bad_peak: int = BAD_PEAK,
+    good_peak: int = GOOD_PEAK,
+    bad_speed: float = 12.0,
+    good_speed: float = 8.0,
+    width: float = 3.0,
+    baseline: float = 0.5,
+) -> np.ndarray:
+    """Two well-separated peaks, the EARLIER and TALLER one being the wrong answer.
+
+    This is the serve signature root cause (b) describes: the wrist-speed proxy
+    peaks during the arm drive, well before the racket head reaches the ball.
+    """
+    frames = np.arange(frame_count, dtype=np.float64)
+    bad = bad_speed * np.exp(-(((frames - bad_peak) / width) ** 2))
+    good = good_speed * np.exp(-(((frames - good_peak) / width) ** 2))
+    return baseline + bad + good
+
+
+def reach_arc_positions(
+    frame_count: int,
+    *,
+    theta_span: tuple[float, float],
+    reach_peaks: tuple[int, ...],
+    reach_width: float = 8.0,
+    reach_min: float = 0.55,
+    reach_max: float = 1.0,
+) -> np.ndarray:
+    """Wrist positions on an arc about the shoulder, with reach and ANGLE controlled
+    independently.
+
+    ``theta_span`` drives the wrist across mid-hip (``x`` changes sign when theta
+    does), which is what ``wrist_behind_mid_hip`` reads. ``reach_peaks`` places
+    the wrist-to-shoulder extension maxima, which is what ``arm_not_extended``
+    reads. ``arc_positions`` ties the two together; the filter tests need them
+    apart so each gate can be exercised without the other firing.
+    """
+    frames = np.arange(frame_count, dtype=np.float64)
+    theta = np.linspace(theta_span[0], theta_span[1], frame_count)
+    bump = np.zeros(frame_count, dtype=np.float64)
+    for centre in reach_peaks:
+        bump = np.maximum(
+            bump, np.exp(-(((frames - float(centre)) / reach_width) ** 2))
+        )
+    reach = reach_min + (reach_max - reach_min) * bump
+    return np.stack(
+        [SHOULDER_XY[0] + reach * np.sin(theta), SHOULDER_XY[1] - reach * np.cos(theta)],
+        axis=1,
+    )
+
+
+def two_candidate_sequence(
+    *,
+    theta_span: tuple[float, float] = (-1.2, 1.2),
+    reach_peaks: tuple[int, ...] = (BAD_PEAK, GOOD_PEAK),
+    reach_min: float = 0.55,
+    reach_max: float = 1.0,
+) -> tuple[object, np.ndarray]:
+    """A sequence whose TALLER speed peak is the implausible one."""
+    speed = two_candidate_speed()
+    positions = reach_arc_positions(
+        TWO_CANDIDATE_FRAMES,
+        theta_span=theta_span,
+        reach_peaks=reach_peaks,
+        reach_min=reach_min,
+        reach_max=reach_max,
+    )
+    return make_normalized_sequence(speed, wrist_positions=positions), speed
+
+
+def single_candidate_sequence(speed: np.ndarray, *, dip_frame: int) -> object:
+    """One plausible candidate whose extension DIPS below threshold on one frame.
+
+    The 9.2.4 fixture: everything about this sequence is correct except a
+    one-frame notch in reach at exactly the frame Stage 9 returns.
+    """
+    count = int(speed.shape[0])
+    positions = reach_arc_positions(
+        count, theta_span=(0.2, 1.2), reach_peaks=(dip_frame,), reach_width=12.0
+    )
+    positions = np.array(positions, copy=True)
+    notched = positions[dip_frame] - SHOULDER_XY
+    radius = float(np.linalg.norm(notched))
+    positions[dip_frame] = SHOULDER_XY + notched / radius * 0.55
+    return make_normalized_sequence(speed, wrist_positions=positions)
 
 
 # --- component functions -----------------------------------------------------
@@ -292,40 +401,162 @@ def test_double_peak_serve_picks_the_hit_and_reports_the_ambiguity() -> None:
 # --- sanity gates, each in isolation ----------------------------------------
 
 
-def test_gate_wrist_behind_mid_hip_lowers_confidence() -> None:
+def test_a_candidate_with_the_wrist_behind_mid_hip_is_not_selected() -> None:
+    """REPLACES ``test_gate_wrist_behind_mid_hip_lowers_confidence``.
+
+    That test asserted the contract this change reverses -- it required the
+    implausible frame to be RETURNED, with a smaller confidence. A discount on a
+    decision already made IS the defect (PIPELINE.md 9.2), and the old fixture
+    could not express the shape that shows it: one peak means nothing for a bad
+    candidate to lose to.
+    """
+    seq, speed = two_candidate_sequence()
+    result = detect_contact_frame(seq, RIGHT_HANDED, make_pose_quality())
+
+    # The taller peak is the one with the hand still behind the hips.
+    assert int(np.argmax(speed)) == BAD_PEAK
+    assert result.peak_frame_index == GOOD_PEAK
+    assert result.frame_index >= GOOD_PEAK
+    assert "wrist_behind_mid_hip" not in result.sanity_flags
+    assert CONTACT_NOT_FOUND not in result.sanity_flags
+
+
+def test_a_candidate_with_an_unextended_arm_is_not_selected() -> None:
+    """REPLACES ``test_gate_arm_not_extended_lowers_confidence``. Same reversal."""
+    seq, speed = two_candidate_sequence(reach_peaks=(GOOD_PEAK,), theta_span=(0.2, 1.2))
+    assert arm_extension_range_tu(seq, Handedness.RIGHT) >= ARM_RANGE_MIN_TU
+
+    result = detect_contact_frame(seq, RIGHT_HANDED, make_pose_quality())
+
+    assert int(np.argmax(speed)) == BAD_PEAK
+    # Nothing is behind the hips here, so extension is the only discriminator.
+    assert candidate_rejection_flags(seq, Handedness.RIGHT, BAD_PEAK) == [
+        "arm_not_extended"
+    ]
+    assert result.peak_frame_index == GOOD_PEAK
+    assert CONTACT_NOT_FOUND not in result.sanity_flags
+
+
+def test_the_correct_frame_is_not_rejected_by_a_one_frame_dip() -> None:
+    """PIPELINE.md 9.2.4, the binding constraint. This test must not go soft.
+
+    Stage 9 carries an accepted +1 frame residual and the filter runs on the
+    plateau-walked index, so that residual sits INSIDE the quantity being
+    filtered. A momentary dip below the extension threshold at the returned
+    frame must not reject it: a filter that rejects correct answers is strictly
+    worse than the defect it replaces.
+    """
     speed = triangular_speed(FRAME_COUNT, PEAK_FRAME, PEAK_SPEED)
-    baseline = detect_contact_frame(
-        make_normalized_sequence(speed), RIGHT_HANDED, make_pose_quality()
-    )
-    # Same geometry, opposite declared swing direction: the wrist is now on the
-    # wrong side of mid-hip at contact.
-    behind = make_normalized_sequence(speed, swing_direction_sign=-1)
-    behind = dataclasses.replace(
-        behind, points=make_normalized_sequence(speed).points
-    )
-    result = detect_contact_frame(behind, RIGHT_HANDED, make_pose_quality())
+    contact_index = find_deceleration_onset(speed, PEAK_FRAME)
+    seq = single_candidate_sequence(speed, dip_frame=contact_index)
 
-    assert "wrist_behind_mid_hip" in result.sanity_flags
-    assert result.confidence < baseline.confidence
-    assert result.frame_index == baseline.frame_index
-
-
-def test_gate_arm_not_extended_lowers_confidence() -> None:
-    speed = triangular_speed(FRAME_COUNT, PEAK_FRAME, PEAK_SPEED)
-    baseline = detect_contact_frame(
-        make_normalized_sequence(speed), RIGHT_HANDED, make_pose_quality()
+    # The dip is real: at the returned frame alone the gate's condition holds.
+    assert (
+        arm_extension_ratio(seq, Handedness.RIGHT, contact_index)
+        < ARM_EXTENSION_MIN_RATIO
     )
-    # Extension peaks late in the follow-through instead of at contact, so the
-    # contact frame sits low in the clip range of arm extension.
-    flexed = arc_positions(FRAME_COUNT, FRAME_COUNT - 1, extension_width_frames=4.0)
-    result = detect_contact_frame(
-        make_normalized_sequence(speed, wrist_positions=flexed),
-        RIGHT_HANDED,
-        make_pose_quality(),
+    assert (
+        arm_extension_ratio(seq, Handedness.RIGHT, contact_index - 1)
+        >= ARM_EXTENSION_MIN_RATIO
+    )
+    assert (
+        arm_extension_ratio(seq, Handedness.RIGHT, contact_index + 1)
+        >= ARM_EXTENSION_MIN_RATIO
     )
 
+    # ... and the three-frame rule refuses to reject on it.
+    assert candidate_rejection_flags(seq, Handedness.RIGHT, contact_index) == []
+    result = detect_contact_frame(seq, RIGHT_HANDED, make_pose_quality())
+    assert result.frame_index == contact_index
+    assert CONTACT_NOT_FOUND not in result.sanity_flags
+    # It still costs confidence: demoted to a penalty, not deleted.
     assert "arm_not_extended" in result.sanity_flags
-    assert result.confidence < baseline.confidence
+
+
+def test_all_candidates_rejected_returns_contact_not_found() -> None:
+    """Refuse honestly rather than return a known-wrong frame -- without raising."""
+    seq, _ = two_candidate_sequence(theta_span=(-1.2, -0.3))
+    result = detect_contact_frame(seq, RIGHT_HANDED, make_pose_quality())
+
+    assert result.confidence == 0.0
+    assert result.sanity_flags == [CONTACT_NOT_FOUND]
+    # Distinct from the degenerate return: this sequence was perfectly analysable.
+    assert "sequence_unusable" not in result.sanity_flags
+
+
+def test_candidate_enumeration_respects_separation_and_cap() -> None:
+    frames = np.arange(80, dtype=np.float64)
+    speed = np.zeros(80, dtype=np.float64)
+    for order, centre in enumerate((5, 15, 25, 35, 45, 55, 65, 75)):
+        speed += (10.0 - order) * np.exp(-(((frames - centre) / 1.5) ** 2))
+    speed[27] = 9.4  # a shoulder of the peak at 25, closer than the separation
+    reliable = np.ones(80, dtype=bool)
+
+    chosen = candidate_peak_indices(speed, reliable, window_start=0)
+    assert len(chosen) == MAX_CANDIDATES
+    assert chosen == sorted(chosen, key=lambda index: -speed[index]), "best first"
+    for first in range(len(chosen)):
+        for second in range(first + 1, len(chosen)):
+            assert abs(chosen[first] - chosen[second]) >= PEAK_SEPARATION_FRAMES
+
+    # The forward-swing window start is honoured: nothing before it qualifies.
+    assert all(
+        index >= 40
+        for index in candidate_peak_indices(speed, reliable, window_start=40)
+    )
+    # A peak the tracker could not see is not a candidate.
+    masked = np.ones(80, dtype=bool)
+    masked[3:8] = False
+    assert 5 not in candidate_peak_indices(speed, masked, window_start=0)
+
+
+def test_a_degenerate_arm_range_demotes_the_filter_to_a_penalty() -> None:
+    """ARM_RANGE_MIN_TU: 60 % of nothing is not information (PIPELINE.md 9.2.2)."""
+    seq, _ = two_candidate_sequence(
+        reach_peaks=(GOOD_PEAK,),
+        theta_span=(0.2, 1.2),
+        reach_min=0.90,
+        reach_max=0.95,
+    )
+    assert 0.0 < arm_extension_range_tu(seq, Handedness.RIGHT) < ARM_RANGE_MIN_TU
+    # The ratio still says "unextended" -- it is clip-relative and cannot tell.
+    assert arm_extension_ratio(seq, Handedness.RIGHT, BAD_PEAK) < ARM_EXTENSION_MIN_RATIO
+    # But the filter declines to act on a collapsed denominator.
+    assert candidate_rejection_flags(seq, Handedness.RIGHT, BAD_PEAK) == []
+
+    result = detect_contact_frame(seq, RIGHT_HANDED, make_pose_quality())
+    assert result.peak_frame_index == BAD_PEAK
+    assert "arm_not_extended" in result.sanity_flags
+    assert CONTACT_NOT_FOUND not in result.sanity_flags
+
+
+def test_the_audit_trail_records_every_rejected_candidate() -> None:
+    seq, speed = two_candidate_sequence()
+    reliable = racket_wrist_reliable(seq, Handedness.RIGHT)
+    window_start = forward_swing_window_start(
+        seq.points[:, RIGHT_WRIST, 0] * seq.swing_direction_sign,
+        int(np.argmax(speed)),
+    )
+    index, flags, audit = select_contact_index(
+        seq, Handedness.RIGHT, speed, reliable, window_start=window_start
+    )
+
+    assert index is not None and flags == []
+    assert len(audit) >= 2, "the rejected candidate must be visible, not silent"
+    assert audit[0][1] == ["wrist_behind_mid_hip"]
+    assert audit[-1] == (index, [])
+
+
+def test_selection_names_contact_not_found_when_nothing_survives() -> None:
+    seq, speed = two_candidate_sequence(theta_span=(-1.2, -0.3))
+    reliable = racket_wrist_reliable(seq, Handedness.RIGHT)
+    index, flags, audit = select_contact_index(
+        seq, Handedness.RIGHT, speed, reliable, window_start=0
+    )
+
+    assert index is None
+    assert flags == [CONTACT_NOT_FOUND]
+    assert audit and all(entry[1] for entry in audit)
 
 
 def test_gate_contact_near_clip_end_lowers_confidence() -> None:

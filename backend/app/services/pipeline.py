@@ -39,7 +39,7 @@ from typing import Final
 
 import numpy as np
 
-from app.analysis.contact import detect_contact_frame
+from app.analysis.contact import CONTACT_NOT_FOUND, detect_contact_frame
 from app.analysis.handedness import detect_handedness, racket_wrist_index
 from app.analysis.metrics import compute_swing_metrics
 from app.analysis.normalize import normalize_sequence
@@ -100,9 +100,16 @@ MIN_CONTACT_CONFIDENCE: Final[float] = 0.35
 #: Stage 7 flag that downgrades to ``partial`` without failing (Part E.4).
 SUBJECT_IDENTITY_UNSTABLE: Final[str] = "subject_identity_unstable"
 
-#: Stage 9's degenerate return (``contact.py:515``). The ONLY contact condition
-#: that fails the job; low confidence alone does not (Part E.2).
+#: Stage 9's degenerate return (``contact.py:515``). One of the two contact
+#: conditions that fail the job; low confidence alone does not (Part E.2).
 SEQUENCE_UNUSABLE: Final[str] = "sequence_unusable"
+
+#: Stage 9's OTHER failing condition (PIPELINE.md 9.2.3): the sequence was
+#: perfectly analysable and every enumerated candidate was physically
+#: implausible. Distinct from ``sequence_unusable`` in cause, identical in
+#: consequence -- both map to ``ErrorCode.CONTACT_NOT_FOUND``, because Stage 9
+#: cannot raise and refusing is the whole point of the filter. Part E.2.
+CONTACT_FAILING_FLAGS: Final[tuple[str, ...]] = (SEQUENCE_UNUSABLE, CONTACT_NOT_FOUND)
 
 #: How close to either end of the sampled sequence the contact frame may sit
 #: before the swing is reported as running off the end of the analysis window.
@@ -440,7 +447,7 @@ def run_analysis_job(
                 quality,
                 analysis_window_start_s=stream.analysis_window_start_s,
             )
-            if SEQUENCE_UNUSABLE in contact.sanity_flags:
+            if any(flag in contact.sanity_flags for flag in CONTACT_FAILING_FLAGS):
                 raise JobFailure(ErrorCode.CONTACT_NOT_FOUND, stage="contact")
             if contact.confidence < MIN_CONTACT_CONFIDENCE:
                 message = (
@@ -580,6 +587,7 @@ __all__ = [
     "MIN_CONTACT_CONFIDENCE",
     "MIN_DETECTION_RATE",
     "PIPELINE_VERSION",
+    "CONTACT_FAILING_FLAGS",
     "SEQUENCE_UNUSABLE",
     "TRUNCATION_MARGIN_FRAMES",
     "Accumulator",

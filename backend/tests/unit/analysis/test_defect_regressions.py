@@ -25,13 +25,20 @@ from app.analysis.handedness import (
     UnknownHandednessError,
     racket_wrist_index,
 )
-from app.analysis.contact import detect_contact_frame
+from app.analysis.contact import (
+    MAX_SUSTAINED_RUN_FRAMES,
+    candidate_peak_indices,
+    detect_contact_frame,
+    racket_wrist_reliable,
+    select_contact_index,
+)
 from app.analysis.metrics import compute_swing_metrics
 from app.analysis.normalize import LEFT_WRIST, RIGHT_WRIST, VISIBILITY_THRESHOLD
 from app.models.enums import Handedness, HandednessSource
 from app.models.internal import NormalizedSequence
 from app.models.responses import ContactDetection, HandednessResult, SwingMetrics
 
+from tests.unit.analysis.synthetic import make_normalized_sequence
 from tests.unit.analysis.synthetic_swing import (
     CONTACT_FRAME,
     build_contact,
@@ -168,3 +175,81 @@ def test_a_sequence_with_dead_ends_carries_the_validity_mask() -> None:
     # Contact at frame 25 is inside the run, so Stage 9's reliability view and
     # the Stage 7 mask agree about the frames that matter.
     assert seq.valid[CONTACT_FRAME]
+
+
+# --- Defect 3 (PIPELINE.md 9.2) ---------------------------------------------
+
+
+SERVE_FPS: float = 30.0
+#: The wrist-speed proxy peaks during the explosive arm drive, ~0.6 s BEFORE the
+#: racket head reaches the ball: the racket's final acceleration comes from
+#: forearm pronation and wrist snap, rotation ABOUT the wrist, at a moment when
+#: the wrist's own translational speed has already fallen. Measured on the
+#: ground-truth clip: ~9-11 TU/s at the drive versus ~2.6-3.9 TU/s at contact.
+SERVE_DRIVE_FRAME: int = 22
+SERVE_CONTACT_FRAME: int = 40
+
+
+def serve_shaped_sequence() -> tuple[NormalizedSequence, np.ndarray]:
+    """A synthetic SERVE: the tallest wrist-speed peak is 0.6 s before contact.
+
+    ``synthetic_swing.py`` produces a single peak that COINCIDES with contact,
+    which is precisely why the unit suite was green against a defect visible on
+    every serve (PIPELINE.md 9.2.7). Here the drive peak is taller and the arm
+    is still folded at it; the contact peak is slower and at full extension.
+    """
+    frame_count = 70
+    frames = np.arange(frame_count, dtype=np.float64)
+    speed = (
+        0.5
+        + 10.0 * np.exp(-(((frames - SERVE_DRIVE_FRAME) / 3.0) ** 2))
+        + 3.4 * np.exp(-(((frames - SERVE_CONTACT_FRAME) / 3.0) ** 2))
+    )
+
+    # Reach: folded through the drive, fully extended through contact.
+    shoulder = np.array([0.2, 1.0])
+    reach = 0.5 + 0.5 * np.exp(-(((frames - SERVE_CONTACT_FRAME) / 9.0) ** 2))
+    theta = np.linspace(0.25, 1.15, frame_count)
+    wrist = np.stack(
+        [shoulder[0] + reach * np.sin(theta), shoulder[1] - reach * np.cos(theta)],
+        axis=1,
+    )
+    return make_normalized_sequence(speed, fps=SERVE_FPS, wrist_positions=wrist), speed
+
+
+def test_a_serve_does_not_return_the_arm_drive_as_contact() -> None:
+    """The defect, pinned: three signals said "not a contact" and it was returned anyway.
+
+    Before this fix Stage 9 took a single argmax, walked it to a contact index,
+    and only THEN ran the gates -- so the implausible winner had nothing to lose
+    to and the gates only made a wrong answer's confidence small.
+    """
+    seq, speed = serve_shaped_sequence()
+    assert int(np.argmax(speed)) == SERVE_DRIVE_FRAME, "the fixture must be serve-shaped"
+    assert speed[SERVE_DRIVE_FRAME] > speed[SERVE_CONTACT_FRAME]
+
+    result = detect_contact_frame(seq, RIGHT_HANDED)
+
+    assert result.peak_frame_index == SERVE_CONTACT_FRAME
+    assert abs(result.frame_index - SERVE_CONTACT_FRAME) <= MAX_SUSTAINED_RUN_FRAMES
+    assert "contact_not_found" not in result.sanity_flags
+    # The drive frame is what the pre-fix code returned.
+    assert abs(result.frame_index - SERVE_DRIVE_FRAME) > MAX_SUSTAINED_RUN_FRAMES
+
+
+def test_the_arm_drive_candidate_is_rejected_before_selection_not_after() -> None:
+    """The distinction that matters: a FILTER, not a discount."""
+    seq, speed = serve_shaped_sequence()
+    reliable = racket_wrist_reliable(seq, Handedness.RIGHT)
+
+    candidates = candidate_peak_indices(speed, reliable, window_start=0)
+    assert candidates[0] == SERVE_DRIVE_FRAME, "the wrong answer is still ranked first"
+    assert SERVE_CONTACT_FRAME in candidates
+
+    index, flags, audit = select_contact_index(
+        seq, Handedness.RIGHT, speed, reliable, window_start=0
+    )
+    assert flags == []
+    assert index is not None and abs(index - SERVE_CONTACT_FRAME) <= MAX_SUSTAINED_RUN_FRAMES
+    # The audit trail names the rejection rather than leaving it invisible.
+    assert audit[0][1] == ["arm_not_extended"]

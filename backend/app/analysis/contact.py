@@ -55,6 +55,61 @@ PROMINENCE_RATIO_CAP: Final[float] = 10.0
 CLIP_EDGE_MARGIN_FRAMES: Final[int] = 4
 ARM_EXTENSION_MIN_RATIO: Final[float] = 0.6
 
+# Stage 9 step 3b (PIPELINE.md 9.2). The gates below used to be post-hoc
+# discounts on a decision already made: ``peak_speed_index`` returned ONE
+# argmax, the plateau walk turned it into a contact index, and only then did the
+# gates run. With a single candidate a physically implausible answer cannot
+# lose -- there is nothing for it to lose to -- so three independent signals
+# saying "this cannot be a contact" only made a wrong answer's confidence small.
+# Two of them are now applied BEFORE selection, against an enumerated candidate
+# set. See ``FILTER_GATES`` for which two, and why only two.
+MAX_CANDIDATES: Final[int] = 5
+
+#: Gates that EXCLUDE a candidate before selection, rather than discounting the
+#: winner afterwards (PIPELINE.md 9.2.2). Deliberately only two:
+#:
+#: * ``wrist_behind_mid_hip`` compares against ZERO -- it is a statement about
+#:   physical possibility with no tuned constant in it to be wrong about.
+#: * ``arm_not_extended`` is clip-relative, so it filters only when the clip's
+#:   own reach range clears ``ARM_RANGE_MIN_TU`` (below that it degrades back to
+#:   a penalty, because "60 % of nothing" is not information).
+#:
+#: ``contact_near_clip_end`` stays a penalty because a real contact genuinely
+#: can occur near a clip edge and filtering it would reject CORRECT answers.
+#: ``motion_not_sustained`` stays a penalty because it is composite and its
+#: strongest sub-test was measured anti-correlated with correctness.
+#: ``subject_identity_unstable`` takes the same value for every candidate and so
+#: cannot discriminate between them by construction.
+FILTER_GATES: Final[frozenset[str]] = frozenset(
+    {"wrist_behind_mid_hip", "arm_not_extended"}
+)
+
+# The guard on the arm-extension filter. ARM_EXTENSION_MIN_RATIO is a fraction
+# of the range of wrist-to-shoulder reach THIS CLIP happens to contain, which is
+# what makes it robust to body size and camera distance -- and what makes it
+# meaningless when the clip contains no genuine extension at all (a practice
+# swing, a motionless hold, a tracker that never found the arm). Rejecting on a
+# degenerate denominator converts a low-confidence answer into a job failure for
+# zero information gain, so below this floor the gate demotes itself back to a
+# confidence penalty.
+#
+# SET FROM CORPUS MEASUREMENT, not guessed: across the 16-clip corpus the
+# observed reach range runs 0.415-1.179 TU, the minimum being
+# tennis_forehand_8224596_pexels. Nothing in the corpus lies between 0 and
+# 0.415, so 0.15 sits a factor of ~2.8 below the smallest genuine range and the
+# filter is permitted on every real clip measured; the guard fires only on a
+# range that has actually collapsed (the stationary-player fixture measures
+# ~0.0).
+ARM_RANGE_MIN_TU: Final[float] = 0.15
+
+#: Every enumerated candidate failed a filter gate. DISTINCT from
+#: ``sequence_unusable`` ("fewer than 3 frames, or an internal failure"): here
+#: the sequence was perfectly analysable and no frame in it could be a contact.
+#: Stage 9 still cannot raise, so this is returned with ``confidence = 0.0`` and
+#: the ORCHESTRATOR maps it to ``ErrorCode.CONTACT_NOT_FOUND``
+#: (docs/PIPELINE_STAGES_12_14_15.md E.2).
+CONTACT_NOT_FOUND: Final[str] = "contact_not_found"
+
 # Confidence is a monotone ramp in prominence_ratio between these two anchors,
 # then multiplied by one penalty per sanity gate that fired (Stage 9 step 5).
 PROMINENCE_RATIO_FLOOR: Final[float] = 1.1
@@ -502,6 +557,187 @@ def arm_extension_ratio(
     return float(np.clip((float(distances[index]) - lowest) / (highest - lowest), 0.0, 1.0))
 
 
+def arm_extension_range_tu(seq: NormalizedSequence, handedness: Handedness) -> float:
+    """Span of observed wrist-to-shoulder distance across the clip, in TU.
+
+    This is the denominator :func:`arm_extension_ratio` divides by. It is
+    returned separately because a filter must know whether its own denominator
+    is meaningful: a clip whose reach never changes has no "60 % of the range"
+    to be below. Measured over frames where the wrist AND the shoulder were
+    individually visible, for the same reason the ratio is. 0.0 when nothing was
+    observed.
+    """
+    points = np.asarray(seq.points, dtype=np.float64)
+    if points.shape[0] == 0:
+        return 0.0
+    wrist = racket_wrist_index(handedness)
+    shoulder = LEFT_SHOULDER if handedness == Handedness.LEFT else RIGHT_SHOULDER
+    distances = np.linalg.norm(points[:, wrist, :] - points[:, shoulder, :], axis=1)
+
+    visibility = np.asarray(seq.visibility, dtype=np.float64)
+    observed = np.ones((distances.shape[0],), dtype=bool)
+    if visibility.ndim == 2 and visibility.shape[0] == distances.shape[0]:
+        observed = landmark_visible(visibility[:, wrist]) & landmark_visible(
+            visibility[:, shoulder]
+        )
+    if not observed.any():
+        return 0.0
+    in_range = distances[observed]
+    return float(np.max(in_range) - np.min(in_range))
+
+
+def candidate_peak_indices(
+    speed: np.ndarray,
+    reliable: np.ndarray,
+    *,
+    window_start: int,
+    separation: int = PEAK_SEPARATION_FRAMES,
+    max_candidates: int = MAX_CANDIDATES,
+) -> list[int]:
+    """Stage 9 step 3b: the plausible speed peaks, best first.
+
+    Local maxima of ``speed`` at or after ``window_start``, restricted to
+    visibility-reliable frames, ordered by descending speed, each at least
+    ``separation`` frames from every candidate already taken, capped at
+    ``max_candidates``.
+
+    ``separation`` defaults to ``PEAK_SEPARATION_FRAMES`` -- the SAME constant
+    step 6's prominence calculation uses for "well separated". The two mean the
+    same thing ("this is a different swing event, not the shoulder of the one I
+    already have") and are deliberately one constant rather than two with the
+    same meaning drifting apart.
+
+    Falls back to ignoring reliability when no frame in the window is reliable,
+    and to the bare :func:`peak_speed_index` when the window contains no local
+    maximum at all: enumeration must never return nothing where the old single
+    ``argmax`` returned something, or the filter would be rejecting candidates
+    that were never offered.
+    """
+    values = np.asarray(speed, dtype=np.float64)
+    count = int(values.shape[0])
+    if count == 0:
+        return []
+    start = int(np.clip(window_start, 0, count - 1))
+
+    flags = np.asarray(reliable, dtype=bool)
+    if flags.shape != values.shape:
+        flags = np.ones((count,), dtype=bool)
+    if not flags[start:].any():
+        flags = np.ones((count,), dtype=bool)
+
+    maxima: list[int] = []
+    for index in range(start, count):
+        if not bool(flags[index]):
+            continue
+        left = values[index - 1] if index > 0 else -np.inf
+        right = values[index + 1] if index < count - 1 else -np.inf
+        if values[index] >= left and values[index] >= right:
+            maxima.append(index)
+
+    gap = max(int(separation), 1)
+    limit = max(int(max_candidates), 1)
+    chosen: list[int] = []
+    for index in sorted(maxima, key=lambda i: (-float(values[i]), i)):
+        if any(abs(index - taken) < gap for taken in chosen):
+            continue
+        chosen.append(index)
+        if len(chosen) >= limit:
+            break
+    if not chosen:
+        return [peak_speed_index(values, reliable)]
+    return chosen
+
+
+def candidate_rejection_flags(
+    seq: NormalizedSequence,
+    handedness: Handedness,
+    index: int,
+) -> list[str]:
+    """Which ``FILTER_GATES`` reject the candidate at ``index``. Empty = accepted.
+
+    **A candidate is rejected only when the gate fails at ``index - 1``,
+    ``index`` AND ``index + 1`` -- all three.** This is the binding design
+    constraint of the change (PIPELINE.md 9.2.4), not a softening of it. Stage 9
+    carries an accepted, unresolved ``+1`` frame residual, the filter runs on the
+    plateau-walked index, and so that residual sits INSIDE the quantity being
+    filtered. Judging the true contact frame one frame late -- when the arm has
+    begun to fold, or the wrist has begun to cross back -- would reject the
+    correct answer, and a filter that rejects correct answers is strictly worse
+    than the defect it replaces. The three-frame rule mirrors
+    :func:`racket_wrist_reliable`, so it is the existing discipline rather than a
+    new one, and it makes a one-frame dip below threshold unable to reject
+    anything.
+
+    Indices are clamped at the clip edges, so a candidate on the first or last
+    frame is judged on the neighbours it has.
+    """
+    points = np.asarray(seq.points, dtype=np.float64)
+    count = int(points.shape[0])
+    if count == 0:
+        return []
+    centre = int(np.clip(index, 0, count - 1))
+    window = [int(np.clip(centre + offset, 0, count - 1)) for offset in (-1, 0, 1)]
+
+    flags: list[str] = []
+    wrist = racket_wrist_index(handedness)
+    forward = points[:, wrist, 0] * float(seq.swing_direction_sign)
+    if all(float(forward[frame]) <= 0.0 for frame in window):
+        flags.append("wrist_behind_mid_hip")
+
+    # The clip-relative gate only gets to REJECT when its own denominator is
+    # real; below the floor it is left to the caller as a penalty.
+    if arm_extension_range_tu(seq, handedness) >= ARM_RANGE_MIN_TU and all(
+        arm_extension_ratio(seq, handedness, frame) < ARM_EXTENSION_MIN_RATIO
+        for frame in window
+    ):
+        flags.append("arm_not_extended")
+    return flags
+
+
+def select_contact_index(
+    seq: NormalizedSequence,
+    handedness: Handedness,
+    speed: np.ndarray,
+    reliable: np.ndarray,
+    *,
+    window_start: int,
+) -> tuple[int | None, list[str], list[tuple[int, list[str]]]]:
+    """Stage 9 steps 3b-4: the first plausible candidate's contact frame.
+
+    Each enumerated peak is walked through the existing plateau rule of step 4
+    FIRST, and the filter is then applied to the frame that candidate would
+    actually return -- not to the peak. Filtering the peak would judge a frame
+    the function is not going to return, and the plateau walk moves the answer by
+    up to ``MAX_SUSTAINED_RUN_FRAMES``.
+
+    Returns ``(contact_index, flags, audit)``:
+
+    * ``contact_index`` -- the winner, or ``None`` when every candidate was
+      rejected.
+    * ``flags`` -- the sanity flags SELECTION itself contributes: empty on a
+      win, ``[CONTACT_NOT_FOUND]`` when nothing passed.
+    * ``audit`` -- every candidate considered, in the order considered, paired
+      with the flags that rejected it (empty for the winner). This is not
+      decoration: a filter whose rejections are invisible is how an
+      all-rejected rate becomes a mystery instead of a measurement.
+
+    Candidates whose plateau walks converge on the same frame are one candidate.
+    """
+    candidates = candidate_peak_indices(speed, reliable, window_start=window_start)
+    audit: list[tuple[int, list[str]]] = []
+    seen: set[int] = set()
+    for peak in candidates:
+        contact_index = find_deceleration_onset(speed, peak, search_start=window_start)
+        if contact_index in seen:
+            continue
+        seen.add(contact_index)
+        rejected = candidate_rejection_flags(seq, handedness, contact_index)
+        audit.append((contact_index, rejected))
+        if not rejected:
+            return contact_index, [], audit
+    return None, [CONTACT_NOT_FOUND], audit
+
+
 def _empty_detection(analysis_window_start_s: float) -> ContactDetection:
     return ContactDetection(
         frame_index=0,
@@ -513,6 +749,38 @@ def _empty_detection(analysis_window_start_s: float) -> ContactDetection:
         prominence_ratio=0.0,
         method=METHOD,
         sanity_flags=["sequence_unusable"],
+    )
+
+
+def _not_found_detection(
+    analysis_window_start_s: float,
+    *,
+    peak_frame_index: int,
+    peak_speed_tu_s: float,
+    prominence_ratio: float,
+) -> ContactDetection:
+    """Every candidate was implausible: return NOTHING rather than a known-wrong frame.
+
+    This raises the job-failure rate, and that is the correct trade rather than a
+    general preference for honesty. A wrong contact frame does not stay local: it
+    sets Stage 12's phase boundaries, therefore every Stage 13 metric, therefore
+    Stage 14's shot type, Stage 15's score and Stage 16's coaching text -- all of
+    which come out looking entirely normal and are entirely wrong. A
+    ``contact_not_found`` is locally diagnosable; a wrong frame is not.
+
+    ``frame_index`` is 0 and ``time_s`` is 0.0 because there is no answer -- the
+    peak diagnostics are carried so the refusal can be investigated.
+    """
+    return ContactDetection(
+        frame_index=0,
+        time_s=0.0,
+        contact_absolute_time_s=float(analysis_window_start_s),
+        confidence=0.0,
+        peak_hand_speed_tu_s=float(peak_speed_tu_s),
+        peak_frame_index=int(peak_frame_index),
+        prominence_ratio=float(prominence_ratio),
+        method=METHOD,
+        sanity_flags=[CONTACT_NOT_FOUND],
     )
 
 
@@ -548,10 +816,37 @@ def detect_contact_frame(
         forward = points[:, wrist, 0] * float(seq.swing_direction_sign)
         window_start = forward_swing_window_start(forward, peak_index)
 
-        # 4. deceleration onset
-        contact_index = find_deceleration_onset(
-            speed, peak_index, search_start=window_start
+        # 3b/4. enumerate candidates, plateau-walk each, and filter the SET
+        # before selecting. The gates used to run after this point, on a
+        # decision already made; with one candidate an implausible winner had
+        # nothing to lose to (PIPELINE.md 9.2).
+        candidates = candidate_peak_indices(speed, reliable, window_start=window_start)
+        contact_index, selection_flags, _audit = select_contact_index(
+            seq, handedness.handedness, speed, reliable, window_start=window_start
         )
+        if contact_index is None:
+            return _not_found_detection(
+                analysis_window_start_s,
+                peak_frame_index=peak_index,
+                peak_speed_tu_s=peak_speed,
+                prominence_ratio=peak_prominence_ratio(
+                    speed, peak_index, reliable=reliable
+                ),
+            )
+        # The winner need not be the global argmax any more, so every quantity
+        # keyed to "the peak" is re-keyed to the peak that WON.
+        peak_index = next(
+            (
+                candidate
+                for candidate in candidates
+                if find_deceleration_onset(
+                    speed, candidate, search_start=window_start
+                )
+                == contact_index
+            ),
+            peak_index,
+        )
+        peak_speed = float(speed[peak_index])
 
         # 6. prominence, discounted by how much of the window was observable
         prominence_ratio = peak_prominence_ratio(speed, peak_index, reliable=reliable)

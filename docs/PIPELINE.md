@@ -874,9 +874,9 @@ Algorithm, fixed:
 
 **Still open -- Stage 8's independent discrimination is not validated and is weak on real footage.** Even after the round-1 visibility fix, Stage 8's path-length/radial-distance separation stayed at **confidence 0.05-0.36 on every real clip tested** -- never once reaching the 0.5 hint-override threshold -- and it selected the **wrong hand on more than half** of a 7-clip batch of visually-confirmed right-handed players. The system works in practice **only** because Stage 3/the client always supplies `handedness_hint` and Stage 8's design already gives the hint priority below 0.5 confidence. That fallback path *is* validated as functioning: on `serve_01` and `serve_04` the wrong-handed detection was correctly overridden by the hint. **What is not validated is Stage 8's hint-free discrimination.** A user who omits a hint, or whose profile hint is itself wrong, has **no safety net** -- the wrong wrist is then fed to Stage 9's speed curve, to `swing_direction_sign`, and to every handedness-sensitive Stage 13 metric, all of which will produce normal-looking numbers. Treat a present, correct `handedness_hint` as a **precondition** of trusting Stages 9 and 13, not as a convenience.
 
-#### 9.2 DEFECT — Stage 9 computes a candidate-rejection signal and then ignores it (fix planned; severity is serve-specific)
+#### 9.2 DEFECT — Stage 9 computes a candidate-rejection signal and then ignores it (FIXED; severity is serve-specific)
 
-> **Status: diagnosed against hand-labelled ground truth, fix specified here, no code written.** `backend/app/analysis/contact.py`, the `GATE_PENALTIES` application at the end of `detect_contact_frame`.
+> **Status: diagnosed against hand-labelled ground truth, fix specified below, and IMPLEMENTED -- see 9.2.9 for what it measured, what it did not fix, and two findings that contradict 9.2.2.** `backend/app/analysis/contact.py`, the `GATE_PENALTIES` application at the end of `detect_contact_frame`.
 
 **The observed failure.** On the ground-truth clip Stage 9 returns **source frame 71 with confidence 0.043**, carrying the flags `arm_not_extended`, `wrist_behind_mid_hip` and `motion_not_sustained` — and returns it anyway. Frame 71 is visually confirmed as mid-raise, with the racket down near the hip. True contact is **frame 87**, at full extension, striking the ball. The system computed three independent signals saying "this cannot be a contact," recorded all three in the response, and used them only to make the wrong answer's confidence small.
 
@@ -1012,6 +1012,144 @@ Required, in this order:
 2. **Extend ground truth to ≥ 8 serves and ≥ 8 forehands**, ball-on-strings labelled at ±1 frame, **on Stage-5-placed windows** — after Defects 1 and 2 land, since both change which frames Stage 9 is given.
 3. **Record per clip:** the full candidate list, which candidates were filtered and on which flags, the selected index, and the signed distance to truth. Acceptance, all three required: **no correct answer newly rejected (hard requirement, no exceptions);** the serve error band narrowed from ~15 frames to within ±2; and the all-rejected rate below the ~20 % pre-committed in §9.2.3.
 4. **Re-run Stage 8's handedness measurement alongside.** The candidate list is computed on the racket-hand speed curve, so a wrong hand changes every candidate. §9.1's still-open finding — Stage 8 confidence 0.05–0.36 on real footage, wrong hand on more than half a 7-clip batch — is not a new risk introduced here, but **this change sharpens the dependency**: previously a wrong hand produced a wrong frame, and now it can additionally produce a spurious `contact_not_found`. Treat a present, correct `handedness_hint` as a precondition of interpreting these results.
+
+##### 9.2.9 IMPLEMENTED — what landed, what it measured, and what it did not fix
+
+> **Status: code written, corpus re-measured on current HEAD (post Defects 1 and 2).**
+> `backend/app/analysis/contact.py`. The earlier per-clip Stage 9 figures in §9.1 were
+> taken on hand-centred windows and before Defects 1–2 moved the windows; they are stale
+> and nothing below is carried over from them.
+
+**Built as specified in §9.2.1:** `MAX_CANDIDATES = 5`, `FILTER_GATES`,
+`candidate_peak_indices`, `candidate_rejection_flags` (the §9.2.4 three-frame rule),
+`select_contact_index` with its audit trail, `arm_extension_range_tu`, the
+`contact_not_found` flag and its orchestrator mapping
+(`docs/PIPELINE_STAGES_12_14_15.md` §E.2/§E.3/§E.4). Candidate separation reuses
+`PEAK_SEPARATION_FRAMES` rather than defining a second constant. The filter runs on the
+plateau-walked index, not on the peak.
+
+**`ARM_RANGE_MIN_TU = 0.15`, set from corpus measurement as §9.2.2 required.** The
+observed wrist-to-shoulder reach range across the 16 clips runs **0.415–1.179 TU**
+(minimum: `tennis_forehand_8224596_pexels`). Nothing in the corpus lies between 0 and
+0.415, so 0.15 sits a factor of ~2.8 below the smallest genuine range: the filter is
+permitted on **every** real clip measured, and the guard fires only on a range that has
+actually collapsed. **The guard therefore did not fire once on real footage** — it is
+exercised only by the synthetic test. That is the honest status of it: specified,
+implemented, unit-tested, and never yet load-bearing.
+
+**Before / after, all 16 clips, contact in SOURCE-frame terms.** Stage 7 output cached
+once and Stages 8–9 replayed on it, so before and after see byte-identical inputs. Stock
+settings, 8 s window, 240-frame cap, **no handedness hint** (which is what the shipped
+end-to-end path sends).
+
+| Clip | Before | After | Conf | Flags after | Verdict |
+|---|---|---|---|---|---|
+| `tennis_forehand_10340703` | 203 | **rejected** | 0.000 | `contact_not_found` | refusal correct (see below) |
+| `tennis_forehand_34449204` | 230 | 230 | 0.013 | `wrist_behind_mid_hip`, `arm_not_extended`, `subject_identity_unstable`, `motion_not_sustained` | unchanged |
+| `tennis_forehand_34449247` | 250 | **rejected** | 0.000 | `contact_not_found` | refusal correct |
+| `tennis_forehand_8224254_pexels` | 286 | 286 | 0.303 | `arm_not_extended` | unchanged |
+| `tennis_forehand_8224589_pexels` | 409 | **rejected** | 0.000 | `contact_not_found` | wrong hand detected; refusal defensible |
+| `tennis_forehand_8224596_pexels` | 73 | 73 | 0.350 | none | unchanged |
+| `tennis_serve_10340710` | 72 | 96 | 0.203 | `arm_not_extended` | moved; still not the ball-strike (see serve_06) |
+| `tennis_serve_4902145_pexels` | 162 | 162 | 0.335 | none | unchanged |
+| `tennis_serve_8224610_pexels` | 432 | **rejected** | 0.000 | `contact_not_found` | refusal questionable — all 5 candidates failed extension |
+| `serve_01_baseline_4902773` | 191 | 191 | 0.575 | none | unchanged |
+| `serve_02_4902143` | 195 | 195 | 0.884 | none | unchanged |
+| `serve_03_practice_4902165` | 58 | **rejected** | 0.000 | `contact_not_found` | refusal correct |
+| `serve_04_practice_4902161` | 187 | 193 | 0.224 | `contact_near_clip_end` | moved +6 |
+| `serve_05_from_baseline_4902164` | 42 | 42 | 0.079 | `arm_not_extended`, `motion_not_sustained` | unchanged |
+| **`serve_06_vertical_10340710`** | **72** | **96** | 0.203 | `arm_not_extended` | **ground truth 86–88; still outside ±2** |
+| `serve_07_10340707` | 77 | 77 | 0.064 | `arm_not_extended`, `motion_not_sustained` | unchanged |
+
+**8 of 16 answers unchanged, 3 moved, 5 became refusals.**
+
+**`serve_06_vertical_10340710`, the only clip with firm ground truth (ball visible at
+source frame 84, contact at 86–88).** At 8 s-window settings the answer moved from **72
+to 96**: signed error went from **−15 to +9** frames. The magnitude roughly halved and
+the sign flipped, and **it is still far outside the ±2 band the integration test asserts.**
+Through the *shipped* end-to-end path — 2.67 s window, 80-frame cap, `handedness_hint`
+present — the answer is **unchanged at source frame 71**, because at those settings the
+arm-drive candidate passes both filter gates. **The `xfail(strict=True)` on
+`test_contact_matches_the_ground_truth_band` therefore stays.** It was not removed and it
+was not forced; §9.2's own text is the reason it did not flip: candidate filtering removes
+an implausible winner, it does not make wrist speed a good estimator of racket-head timing
+on a serve. Root cause (b) is untouched, exactly as predicted.
+
+**FINDING — `wrist_behind_mid_hip` is NOT safe as a filter on serves, and §9.2.2's
+argument for promoting it is measurably wrong.** §9.2.2 justified the promotion on the
+grounds that the gate "compares against zero, so there is no tuned constant to be wrong
+about." On a serve that is precisely the problem: **the racket wrist crosses mid-hip
+within one frame of contact.** On `serve_06` with the correct hand, `x · swing_direction_sign`
+crosses zero at source frame 84–85, and ground truth is 86–88. The candidate list contains
+a candidate whose plateau-walked index is **source frame 87 — exactly the ground truth —
+and the filter rejects it** on `wrist_behind_mid_hip` (margins −0.17, −0.28, −0.40 TU, so
+the §9.2.4 three-frame rule does not and cannot save it). It changes no answer today only
+because the arm-drive candidate is ranked first by speed and wins before frame 87 is
+reached. **If root cause (b) is ever fixed, this filter will block the right answer.** The
+gate has no threshold in it, but it does have `swing_direction_sign` in it, and that is a
+Stage 7 estimate which on a serve carries no meaning at the moment of contact. Recorded,
+not acted on: reversing a per-gate disposition §9.2.2 states explicitly is a decision for
+the next revisit, with the evidence now in hand rather than argued.
+
+**The all-rejected rate is 5 of 16 = 31 %, above the ~20 % §9.2.3 pre-committed.** The
+trigger has fired and the revisit is owed. §9.2.3 named `ARM_RANGE_MIN_TU` as "the first
+thing to revisit" — **the measurement says it is the wrong value to move.** Every rejected
+clip has a reach range of 0.92–1.18 TU, six to eight times the floor; no floor between 0
+and 0.4 changes any of the five. The actual rejection reasons, from the per-candidate
+audit trail:
+
+- `tennis_serve_8224610_pexels` and `serve_03_practice_4902165` — **all five** candidates
+  fail `arm_not_extended`. The candidate cap is binding: the plausible frame exists, it is
+  simply not in the top five by wrist speed. The lever here is `MAX_CANDIDATES` or the
+  ranking rule, not the range floor.
+- `tennis_forehand_10340703` and `tennis_forehand_8224589_pexels` — Stage 8 detected the
+  **left** hand on both (confidence 0.00 and 0.20). The whole speed curve is the
+  non-racket wrist. §9.2.8 clause 4 predicted exactly this: a wrong hand previously
+  produced a wrong frame and can now additionally produce a spurious
+  `contact_not_found`. These two refusals are a Stage 8 defect surfacing, not a Stage 9
+  one.
+- `tennis_forehand_34449247` — four candidates fail extension, one fails wrist-forward.
+
+So the refusal rate overstates Stage 9's strictness and understates **Stage 8's**
+unreliability. Tuning `ARM_RANGE_MIN_TU` to suppress it would hide a handedness defect
+behind a contact-detection constant.
+
+**FINDING — Stage 8's hand choice on the vendored clip is a coin flip.** Measured while
+chasing the above: on `serve_vertical_10340710` at 80 sampled frames, moving the analysis
+window by a **single frame** flips the detected hand between `left` (confidence 0.452) and
+`right` (0.447). §9.1 already recorded Stage 8 choosing the wrong hand on more than half a
+7-clip batch; this is how thin the margin actually is. Consequence for this change: a
+hint-free run of the vendored clip now **fails the job** where it previously returned a
+quietly wrong frame. `tests/integration/test_pipeline_end_to_end.py` therefore sends the
+`handedness_hint` the client always sends and §9.2.8 clause 4 calls a **precondition**.
+That is alignment with the shipped request shape, not a workaround — but it does mean the
+end-to-end suite no longer exercises the hint-free path, and the hint-free path on this
+clip is `contact_not_found`.
+
+**What §9.2.8 asked for and what was actually validated.**
+
+- Clause 1 (re-run the 5 hand-labelled ground-truth events, `+1` residual unchanged) —
+  **NOT DONE.** Only one of those five labels survives in the repository
+  (`tests/fixtures/clips/README.md`, this clip); the other four were never written down
+  in a recoverable form. On the one that does survive the answer is unchanged through the
+  shipped path, so nothing that was already correct moved — but that is 1 of 5, not 5 of
+  5, and the `+1` residual was not re-measured.
+- Clause 2 (extend ground truth to ≥ 8 serves and ≥ 8 forehands) — **NOT DONE.** No new
+  ball-on-strings labelling was performed. This remains the blocking prerequisite for
+  judging the change on anything but plausibility.
+- Clause 3 (record per clip the candidate list, the rejections and the signed distance to
+  truth) — **DONE for the candidate list and rejections** (the audit trail above), **not
+  for signed distance**, which clause 2 gates.
+- Clause 4 (re-run Stage 8 alongside) — **DONE**, and it is the most consequential finding
+  in this subsection.
+
+**Acceptance against §9.2.8's three criteria: one met, one unmeasurable, one failed.**
+No *selected* answer that was previously correct became a refusal (nothing on this corpus
+was previously confirmable as correct, so this is weak); the serve error band did **not**
+narrow to ±2 on the one clip with truth; the all-rejected rate is 31 % against a ~20 %
+ceiling. **This change is an improvement in honesty, not yet a fix for serve contact
+timing**, and the next piece of work is the racket-head kinematic proxy of §9.2.6, not
+another pass over these constants.
 
 ---
 

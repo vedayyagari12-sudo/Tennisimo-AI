@@ -41,6 +41,7 @@ from app.models.enums import (
     BallSpeedUnavailableReason,
     ErrorCode,
     FeedbackSource,
+    Handedness,
     JobStatus,
 )
 from app.models.internal import PoseSequence
@@ -55,6 +56,22 @@ CLIP = Path(__file__).resolve().parents[1] / "fixtures" / "clips" / "serve_verti
 
 #: README.md: contact at source frames 86-88 of a 25 fps clip.
 GROUND_TRUTH_CONTACT_S: tuple[float, float] = (86.0 / 25.0, 88.0 / 25.0)
+
+#: The player in the vendored clip serves RIGHT-handed. The hint is sent because
+#: PIPELINE.md Stage 8 says the client always sends one from the user profile,
+#: and 9.2.8 makes a present, correct hint a PRECONDITION of interpreting Stage
+#: 9 at all: the candidate list is computed on the racket-hand speed curve, so a
+#: wrong hand changes every candidate.
+#:
+#: This is not cosmetic and it is not a convenience. Stage 8's own
+#: discrimination on this clip is a COIN FLIP: hint-free it returns ``left``
+#: (confidence 0.452) under these settings and ``right`` (0.447) when the
+#: analysis window moves by a single frame, and 9.1 already records it choosing
+#: the wrong hand on more than half of a 7-clip batch. With Stage 9 able to
+#: refuse (``contact_not_found``), a hint-free run of this clip now fails the
+#: JOB rather than quietly analysing the non-racket wrist. That is Stage 8's
+#: open defect surfacing, not Stage 9's -- see PIPELINE.md 9.2.9.
+CLIP_HANDEDNESS: Handedness = Handedness.RIGHT
 
 #: +-2 source frames at 25 fps. Wider than Stage 9's documented +1 residual so
 #: the band is not itself the thing under test.
@@ -180,6 +197,7 @@ def make_context(
     job_id = uuid4()
     request = CreateAnalysisRequest(
         storage_path=f"swing-videos/{job_id}/clip.mp4",
+        handedness_hint=CLIP_HANDEDNESS,
         ball_speed_calibration=calibration,
     )
     return JobContext(
@@ -340,16 +358,28 @@ def test_contact_is_reported_with_its_confidence_and_flags(
     assert 0 <= contact.frame_index < SAMPLED_FRAME_CAP
     assert 0.0 <= contact.confidence <= 1.0
     assert "sequence_unusable" not in contact.sanity_flags
+    # A regression into blanket rejection is caught by the same assertion that
+    # catches the degenerate return (PIPELINE.md 9.2.7).
+    assert "contact_not_found" not in contact.sanity_flags
 
 
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "KNOWN DEFECT, logged in docs/PIPELINE.md: on this clip Stage 9 selects a "
+        "KNOWN DEFECT, logged in docs/PIPELINE.md 9.2: on this clip Stage 9 selects a "
         "contact about 0.6 s (15 source frames) before the ground-truth 86-88, far "
         "outside the documented +1 frame residual. The same frame is selected whether "
         "the sequence comes through Stage 5's 30 fps window or a naive native-rate "
-        "decode, so the miss is Stage 9's and not the seam's."
+        "decode, so the miss is Stage 9's and not the seam's. "
+        "STILL FAILING AFTER Defect 3 (9.2.9), and 9.2 predicted that it would: "
+        "candidate filtering removes an implausible WINNER, it does not make wrist "
+        "speed a good estimator of racket-head timing on a serve (root cause (b), "
+        "untouched). At these settings the arm-drive candidate passes both filter "
+        "gates, so the answer is unchanged at source frame 71. Worse, the candidate "
+        "whose plateau walk lands on source frame 87 -- exactly the ground truth -- IS "
+        "enumerated and is REJECTED by wrist_behind_mid_hip, because on a serve the "
+        "wrist crosses mid-hip within a frame of contact. Fixing root cause (b) "
+        "without revisiting that gate would swap this miss for a refusal."
     ),
 )
 def test_contact_matches_the_ground_truth_band(completed_run: dict[str, Any]) -> None:
@@ -450,7 +480,10 @@ def test_orchestrator_drives_the_real_runner_to_succeeded() -> None:
             job_id=job_id,
             user_id=uuid4(),
             storage_path=f"swing-videos/{job_id}/clip.mp4",
-            request=CreateAnalysisRequest(storage_path=f"swing-videos/{job_id}/clip.mp4"),
+            request=CreateAnalysisRequest(
+                storage_path=f"swing-videos/{job_id}/clip.mp4",
+                handedness_hint=CLIP_HANDEDNESS,
+            ),
         )
         future.result(timeout=300)
         orchestrator.shutdown()
