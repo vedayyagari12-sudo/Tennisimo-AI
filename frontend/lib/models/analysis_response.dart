@@ -4,6 +4,69 @@ import 'enums.dart';
 import 'json_utils.dart';
 import 'metric_score.dart';
 
+/// One weighted scoring category. Mirrors
+/// `backend/app/models/responses.py::CategoryScore`.
+///
+/// [category] is kept as the raw wire string rather than a new enum: the five
+/// documented values are labels, not behaviour — nothing in this client
+/// branches on which category it is — so an enum would only add a fallback
+/// question with no decision behind it. A category the backend adds later
+/// still renders with its own name.
+///
+/// `score_0_100 == null` means NOT MEASURED for this clip: no metric in the
+/// category could be measured. It is never rendered as 0, exactly as
+/// [MetricScore] treats a null value.
+class CategoryScore {
+  const CategoryScore({
+    required this.category,
+    required this.score,
+    required this.weight,
+    required this.metricNames,
+    required this.metricsAvailable,
+    required this.metricsTotal,
+  });
+
+  final String category;
+
+  /// 0-100, or null when no metric in this category was measurable.
+  final double? score;
+
+  /// This category's share of the overall score, 0.0-1.0.
+  final double weight;
+  final List<String> metricNames;
+  final int metricsAvailable;
+  final int metricsTotal;
+
+  bool get isMeasured => score != null;
+
+  factory CategoryScore.fromJson(Map<String, dynamic> json) {
+    return CategoryScore(
+      category: asString(json, 'category', fallback: 'category'),
+      score: asDoubleOrNull(json, 'score_0_100'),
+      weight: asDoubleOrNull(json, 'weight') ?? 0.0,
+      metricNames: asStringList(json, 'metric_names'),
+      metricsAvailable: asInt(json, 'metrics_available'),
+      metricsTotal: asInt(json, 'metrics_total'),
+    );
+  }
+
+  /// `follow_through` -> `Follow through`.
+  String get displayName {
+    final String cleaned = category.replaceAll('_', ' ').trim();
+    if (cleaned.isEmpty) return category;
+    return cleaned[0].toUpperCase() + cleaned.substring(1);
+  }
+
+  /// The score, or the not-measured wording. Never "0" for null.
+  String get displayScore =>
+      score == null ? 'not measured' : score!.round().toString();
+
+  /// `3 of 5 metrics · 25% of the score`.
+  String get displayCoverage =>
+      '$metricsAvailable of $metricsTotal metrics · '
+      '${(weight * 100).round()}% of the score';
+}
+
 /// The analysis envelope the client actually renders.
 ///
 /// This is a NARROWED view of PIPELINE.md 2.4 `AnalysisResponse`: it carries the
@@ -26,6 +89,7 @@ class AnalysisResponse {
     required this.shotType,
     required this.shotTypeConfidence,
     required this.overallScore,
+    required this.categories,
     required this.metrics,
     required this.ballSpeed,
     required this.feedback,
@@ -43,6 +107,10 @@ class AnalysisResponse {
 
   /// 0-100, or null when no score could be produced.
   final double? overallScore;
+
+  /// The weighted category breakdown behind [overallScore]. Empty when the
+  /// payload carried no `scorecard.categories`.
+  final List<CategoryScore> categories;
   final List<MetricScore> metrics;
 
   /// Null when the payload has no `ball_speed` block at all (v1-era rows).
@@ -55,6 +123,13 @@ class AnalysisResponse {
     final Map<String, dynamic>? shotTypeJson = asMap(json, 'shot_type');
     final Map<String, dynamic>? ballSpeedJson = asMap(json, 'ball_speed');
     final Map<String, dynamic>? feedbackJson = asMap(json, 'feedback');
+
+    List<CategoryScore> categories = const <CategoryScore>[];
+    if (scorecard != null) {
+      categories = asMapList(scorecard, 'categories')
+          .map(CategoryScore.fromJson)
+          .toList();
+    }
 
     List<MetricScore> metrics = const <MetricScore>[];
     if (scorecard != null) {
@@ -78,6 +153,7 @@ class AnalysisResponse {
           : asDoubleOrNull(json, 'shot_type_confidence'),
       overallScore: asDoubleOrNull(scorecard, 'overall_score') ??
           asDoubleOrNull(json, 'overall_score'),
+      categories: categories,
       metrics: metrics,
       ballSpeed:
           ballSpeedJson == null ? null : BallSpeedResult.fromJson(ballSpeedJson),

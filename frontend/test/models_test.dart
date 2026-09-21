@@ -579,4 +579,89 @@ void main() {
       expect(clean.truncationDebugLine, isNull);
     });
   });
+
+  group('CategoryScore reads the scorecard breakdown', () {
+    test('a real category round-trips every field', () {
+      final CategoryScore category =
+          CategoryScore.fromJson(<String, dynamic>{
+        'category': 'follow_through',
+        'score_0_100': 72.4,
+        'weight': 0.2,
+        'metric_names': <String>['finish_height_tu', 'deceleration_ratio'],
+        'metrics_available': 2,
+        'metrics_total': 2,
+      });
+      expect(category.category, 'follow_through');
+      expect(category.score, 72.4);
+      expect(category.weight, 0.2);
+      expect(category.metricNames,
+          <String>['finish_height_tu', 'deceleration_ratio']);
+      expect(category.metricsAvailable, 2);
+      expect(category.metricsTotal, 2);
+      expect(category.displayName, 'Follow through');
+      expect(category.displayScore, '72');
+      expect(category.displayCoverage, '2 of 2 metrics · 20% of the score');
+    });
+
+    test('a null score_0_100 is not measured, never zero', () {
+      final CategoryScore category =
+          CategoryScore.fromJson(<String, dynamic>{
+        'category': 'balance',
+        'score_0_100': null,
+        'weight': 0.15,
+        'metric_names': <String>['torso_lean_deg'],
+        'metrics_available': 0,
+        'metrics_total': 1,
+      });
+      expect(category.score, isNull);
+      expect(category.isMeasured, isFalse);
+      expect(category.displayScore, 'not measured');
+      expect(category.displayScore, isNot(contains('0')));
+      expect(category.displayCoverage, startsWith('0 of 1 metrics'));
+    });
+
+    test('all five categories thread through Scorecard parsing', () {
+      final AnalysisResponse analysis =
+          AnalysisResponse.fromJson(<String, dynamic>{
+        'analysis_id': 'a1',
+        'status': 'complete',
+        'scorecard': <String, dynamic>{
+          'overall_score': 68.0,
+          'categories': <Map<String, dynamic>>[
+            for (final String name in <String>[
+              'preparation',
+              'contact',
+              'swing_path',
+              'balance',
+              'follow_through',
+            ])
+              <String, dynamic>{
+                'category': name,
+                'score_0_100': name == 'balance' ? null : 70.0,
+                'weight': 0.2,
+                'metric_names': <String>['m'],
+                'metrics_available': name == 'balance' ? 0 : 1,
+                'metrics_total': 1,
+              },
+          ],
+          'metrics': <Map<String, dynamic>>[],
+        },
+      });
+      expect(analysis.categories, hasLength(5));
+      expect(analysis.categories.map((CategoryScore c) => c.category),
+          containsAll(<String>['preparation', 'swing_path']));
+      expect(
+        analysis.categories
+            .firstWhere((CategoryScore c) => c.category == 'balance')
+            .isMeasured,
+        isFalse,
+      );
+    });
+
+    test('a payload with no categories yields an empty list, not a throw', () {
+      final AnalysisResponse analysis = AnalysisResponse.fromJson(
+          <String, dynamic>{'analysis_id': 'a1', 'status': 'complete'});
+      expect(analysis.categories, isEmpty);
+    });
+  });
 }

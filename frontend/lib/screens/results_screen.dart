@@ -74,6 +74,13 @@ class ResultsScreen extends StatelessWidget {
               ),
             ),
           ],
+          // Category summary first, individual metrics after: the categories
+          // are the breakdown of the overall score shown in the header above,
+          // so they read as the "why" of that number, and the metric list
+          // below is the detail behind them. It does not replace the metric
+          // list.
+          _CategoriesSection(categories: analysis.categories),
+          if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
           _MetricsSection(metrics: analysis.metrics),
         ],
       ),
@@ -397,6 +404,69 @@ class _LabelledLine extends StatelessWidget {
             style: theme.textTheme.bodyMedium
                 ?.copyWith(fontWeight: FontWeight.bold)),
         Expanded(child: Text(text, style: theme.textTheme.bodyMedium)),
+      ],
+    );
+  }
+}
+
+/// The weighted category breakdown behind the overall score.
+///
+/// Same [_SectionCard] + divider-separated-rows shape as [_MetricsSection], so
+/// it reads as a peer of the metric list rather than a new kind of thing.
+class _CategoriesSection extends StatelessWidget {
+  const _CategoriesSection({required this.categories});
+
+  final List<CategoryScore> categories;
+
+  @override
+  Widget build(BuildContext context) {
+    if (categories.isEmpty) return const SizedBox.shrink();
+    return _SectionCard(
+      title: 'Score breakdown',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          for (int i = 0; i < categories.length; i++) ...<Widget>[
+            if (i > 0) const Divider(height: 24),
+            _CategoryRow(category: categories[i]),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryRow extends StatelessWidget {
+  const _CategoryRow({required this.category});
+
+  final CategoryScore category;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(
+              child: Text(category.displayName,
+                  style: theme.textTheme.titleSmall),
+            ),
+            const SizedBox(width: 12),
+            // An unmeasured category says so. It is never shown as 0, which
+            // would read as a score the user earned.
+            Text(
+              category.displayScore,
+              style: category.isMeasured
+                  ? theme.textTheme.titleSmall
+                  : theme.textTheme.bodySmall,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(category.displayCoverage, style: theme.textTheme.bodySmall),
       ],
     );
   }
