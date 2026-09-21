@@ -41,12 +41,20 @@ class ApiFailure {
     required this.message,
     this.errorCode,
     this.statusCode,
+    this.retryable,
   });
 
   final ApiFailureKind kind;
   final String message;
   final String? errorCode;
   final int? statusCode;
+
+  /// The server's own `retryable` flag when the body carried one.
+  ///
+  /// Null for failures the server never described: [ApiFailureKind.network],
+  /// [ApiFailureKind.timeout], [ApiFailureKind.notSignedIn], and bodies that
+  /// simply omit the key.
+  final bool? retryable;
 
   /// Message fit for a user, resolving a known `error_code` to plain language.
   String get plainLanguage =>
@@ -128,11 +136,17 @@ Map<String, String> _authHeaders(String token, {bool json = false}) {
 ///
 /// Assumes FastAPI's `detail` envelope, and also accepts a flat body or a plain
 /// string detail, because Phase 5 has not fixed the shape yet.
-ApiFailure _failureFromResponse(http.Response response) {
+ApiFailure _failureFromResponse(http.Response response) =>
+    apiFailureFromErrorBody(response.body, response.statusCode);
+
+/// Pure parser behind [_failureFromResponse]: decodes a raw error body string
+/// into an [ApiFailure]. Kept separate so it is testable without an HTTP call.
+ApiFailure apiFailureFromErrorBody(String rawBody, int statusCode) {
   String? code;
-  String message = 'Server error (${response.statusCode}).';
+  bool? retryable;
+  String message = 'Server error ($statusCode).';
   try {
-    final Object? body = jsonDecode(response.body);
+    final Object? body = jsonDecode(rawBody);
     Object? node = body;
     if (node is Map && node['detail'] != null) node = node['detail'];
     if (node is Map) {
@@ -140,6 +154,8 @@ ApiFailure _failureFromResponse(http.Response response) {
       if (rawCode is String) code = rawCode;
       final Object? rawMessage = node['message'] ?? node['detail'];
       if (rawMessage is String && rawMessage.isNotEmpty) message = rawMessage;
+      final Object? rawRetryable = node['retryable'];
+      if (rawRetryable is bool) retryable = rawRetryable;
     } else if (node is String && node.isNotEmpty) {
       message = node;
     }
@@ -150,7 +166,8 @@ ApiFailure _failureFromResponse(http.Response response) {
     kind: ApiFailureKind.server,
     message: message,
     errorCode: code,
-    statusCode: response.statusCode,
+    statusCode: statusCode,
+    retryable: retryable,
   );
 }
 
@@ -259,6 +276,19 @@ Future<ApiResult<CreateAnalysisResult>> createAnalysis({
   }
 }
 
+/// Pure parser for the job-status `error` object (`{code, message, stage,
+/// retryable}`). Returns null when the node is not an error map.
+ApiFailure? jobFailureFromErrorNode(Object? error) {
+  if (error is! Map) return null;
+  final Object? rawRetryable = error['retryable'];
+  return ApiFailure(
+    kind: ApiFailureKind.server,
+    message: '${error['message'] ?? 'The analysis failed.'}',
+    errorCode: error['code'] is String ? error['code'] as String : null,
+    retryable: rawRetryable is bool ? rawRetryable : null,
+  );
+}
+
 /// Step 4: one poll. Distinguishes the job-status envelope from the finished
 /// analysis by looking for the blocks only a finished analysis carries.
 Future<ApiResult<PollUpdate>> fetchAnalysis(String analysisId) async {
@@ -297,15 +327,7 @@ Future<ApiResult<PollUpdate>> fetchAnalysis(String analysisId) async {
     }
 
     final JobStatus status = JobStatus.fromJson(rawStatus);
-    ApiFailure? jobFailure;
-    final Object? error = json['error'];
-    if (error is Map) {
-      jobFailure = ApiFailure(
-        kind: ApiFailureKind.server,
-        message: '${error['message'] ?? 'The analysis failed.'}',
-        errorCode: error['code'] is String ? error['code'] as String : null,
-      );
-    }
+    final ApiFailure? jobFailure = jobFailureFromErrorNode(json['error']);
     final Object? queue = json['queue_position'];
     final Object? remaining = json['estimated_seconds_remaining'];
     return ApiResult<PollUpdate>.ok(PollUpdate(
@@ -320,6 +342,19 @@ Future<ApiResult<PollUpdate>> fetchAnalysis(String analysisId) async {
       message: 'Could not reach the server. Check your connection. ($e)',
     ));
   }
+}
+
+/// Whether a poll failure ends the loop (true) or is a transient blip to retry.
+///
+/// Not-signed-in is always final: the request was never sent. Otherwise the
+/// server's own `retryable` flag wins when it provided one; only when it did
+/// not do we fall back to the "4xx is final, 5xx is transient" heuristic, which
+/// is wrong for at least `429 queue_full` (`retryable: true`).
+bool isFinalPollFailure(ApiFailure failure) {
+  if (failure.kind == ApiFailureKind.notSignedIn) return true;
+  final bool? retryable = failure.retryable;
+  if (retryable != null) return !retryable;
+  return failure.statusCode != null && failure.statusCode! < 500;
 }
 
 /// Polls every 2 s until the analysis is done, failed, or the 120 s cap is hit.
@@ -339,9 +374,7 @@ Future<ApiResult<AnalysisResponse>> pollUntilComplete(
 
     if (!result.isOk) {
       final ApiFailure failure = result.failure!;
-      // Not-signed-in and hard server errors are final; a network blip is not.
-      if (failure.kind == ApiFailureKind.notSignedIn ||
-          (failure.statusCode != null && failure.statusCode! < 500)) {
+      if (isFinalPollFailure(failure)) {
         return ApiResult<AnalysisResponse>.err(failure);
       }
       lastTransient = failure;
