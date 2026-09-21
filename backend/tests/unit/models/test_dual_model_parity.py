@@ -52,6 +52,20 @@ DUAL_MODEL_PAIRS: dict[str, ExpectedDivergence] = {
         only_in_feedback=frozenset({"score"}),
         only_in_responses=frozenset({"score_0_100", "weight", "category"}),
     ),
+    # Strict parity, verified against the live field sets: both copies carry
+    # summary/strengths/improvements/source/model/guard/latency_ms.
+    # ``to_wire_feedback`` hand-projects all seven, and the dropped
+    # ``model_finish_reason`` lived inside this very construction -- so this
+    # pair is the closest neighbour to the original bug.
+    "CoachingFeedback": ExpectedDivergence(),
+    # Strict parity: priority/title/why/cue/drill/metric_refs on both copies,
+    # all six rebuilt field for field in the ``to_wire_feedback`` comprehension.
+    "Improvement": ExpectedDivergence(),
+    # Strict parity on the same four fields
+    # (ball_speed_mph/confidence/detections_used/unavailable_reason). The
+    # projection runs the other way here -- ``to_feedback_ball_speed`` in
+    # ``app/feedback/projection.py`` -- and threads all four.
+    "BallSpeedResult": ExpectedDivergence(),
 }
 
 
