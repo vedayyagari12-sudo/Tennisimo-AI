@@ -311,6 +311,11 @@ def test_run_persists_a_validatable_analysis(completed_run: dict[str, Any]) -> N
     assert row.shot_type is response.shot_type.shot_type
     assert row.overall_score == response.scorecard.overall_score
     assert row.ball_speed_mph is response.ball_speed.ball_speed_mph
+    # REGRESSION: the row must carry the pairing partner of ball_speed_mph, and
+    # must still carry it through the exclude_none dump persist_success sends.
+    assert row.ball_speed_unavailable_reason is response.ball_speed.unavailable_reason
+    body = row.model_dump(mode="json", exclude_none=True)
+    assert ("ball_speed_mph" in body) != ("ball_speed_unavailable_reason" in body)
     assert response.status in (AnalysisStatus.COMPLETE, AnalysisStatus.PARTIAL)
 
 

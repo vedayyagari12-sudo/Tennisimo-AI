@@ -18,11 +18,13 @@ import pytest
 from app.api.errors import ApiError
 from app.config import Settings
 from app.models.enums import (
+    AnalysisStatus,
     BallSpeedUnavailableReason,
     ErrorCode,
     FeedbackSource,
     Handedness,
     HandednessSource,
+    ShotType,
 )
 from app.models.feedback import CoachingFeedback as FeedbackCoachingFeedback
 from app.models.feedback import Improvement as FeedbackImprovement
@@ -30,6 +32,7 @@ from app.models.feedback import NumericGuardReport as FeedbackGuard
 from app.models.requests import CreateAnalysisRequest
 from app.models.responses import ContactDetection, HandednessResult, PoseQuality, VideoMeta
 from app.services.orchestrator import JobContext, JobFailure
+from app.services.repository import AnalysisRow
 from app.services.pipeline import (
     TRUNCATION_MARGIN_FRAMES,
     Accumulator,
@@ -145,6 +148,50 @@ def test_absent_calibration_skips_stages_10_and_11_entirely() -> None:
     assert timer.ms("ball_detect") == 0
     assert accumulator.warnings == [], "an uncalibrated clip is not a fault"
     assert accumulator.partial is False
+
+
+def test_uncalibrated_speed_reaches_the_persisted_row_as_a_reason() -> None:
+    """REGRESSION: `AnalysisRow` had no `ball_speed_unavailable_reason`, so an
+    uncalibrated clip serialised BOTH ball speed columns as NULL and the live
+    `analyses_ball_speed_reason_pairing_chk` rejected the INSERT -- losing the
+    analysis after the whole pipeline had run.
+
+    The assertion that matters is on the SERIALISED body, not the attribute:
+    `persist_success` dumps with `exclude_none=True`, which is exactly what
+    dropped the column before.
+    """
+    speed = ball_speed_stage(
+        clip=Path("does-not-exist.mp4"),
+        context=make_context(),
+        seq=None,  # type: ignore[arg-type] - never touched on this path
+        quality=make_quality(),
+        handedness=HandednessResult(
+            handedness=Handedness.RIGHT, confidence=0.8, source=HandednessSource.DETECTED
+        ),
+        contact=make_contact(),
+        video=make_video(),
+        timer=StageTimer(),
+        accumulator=Accumulator(),
+    )
+    assert speed.ball_speed_mph is None
+
+    row = AnalysisRow(
+        id=uuid4(),
+        user_id=uuid4(),
+        storage_path="swing-videos/x/clip.mp4",
+        status=AnalysisStatus.COMPLETE,
+        shot_type=ShotType.FOREHAND_TOPSPIN,
+        overall_score=70.0,
+        ball_speed_mph=speed.ball_speed_mph,
+        ball_speed_unavailable_reason=speed.unavailable_reason,
+        pipeline_version="v2",
+        rubric_version="rubric_v0_placeholder",
+        payload={},
+    )
+
+    body = row.model_dump(mode="json", exclude_none=True)
+    assert "ball_speed_mph" not in body
+    assert body["ball_speed_unavailable_reason"] == BallSpeedUnavailableReason.NOT_CALIBRATED.value
 
 
 def test_unknown_handedness_skips_the_ball_stage_instead_of_raising() -> None:

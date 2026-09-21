@@ -27,7 +27,13 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.errors import ApiError
 from app.config import Settings
-from app.models.enums import AnalysisStatus, ErrorCode, JobStatus, ShotType
+from app.models.enums import (
+    AnalysisStatus,
+    BallSpeedUnavailableReason,
+    ErrorCode,
+    JobStatus,
+    ShotType,
+)
 
 logger = logging.getLogger("tennisform.repository")
 
@@ -58,7 +64,15 @@ class JobRow(BaseModel):
 
 
 class AnalysisRow(BaseModel):
-    """One `analyses` row, as written by Stage 18."""
+    """One `analyses` row, as written by Stage 18.
+
+    `ball_speed_mph` / `ball_speed_unavailable_reason` carry the same pairing
+    invariant as `BallSpeedResult` (`responses.py`) -- exactly one is non-null
+    -- and the live `analyses_ball_speed_reason_pairing_chk` enforces it in the
+    database. No validator is repeated here: Stage 18 builds both fields from a
+    single already-validated `BallSpeedResult`, whose own `model_validator`
+    guarantees the pairing before this row can be constructed.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -69,6 +83,7 @@ class AnalysisRow(BaseModel):
     shot_type: ShotType
     overall_score: float | None = None
     ball_speed_mph: int | None = None
+    ball_speed_unavailable_reason: BallSpeedUnavailableReason | None = None
     pipeline_version: str
     rubric_version: str
     payload: dict[str, Any]

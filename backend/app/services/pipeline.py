@@ -571,6 +571,7 @@ def run_analysis_job(
             shot_type=shot_type.shot_type,
             overall_score=scorecard.overall_score,
             ball_speed_mph=ball_speed.ball_speed_mph,
+            ball_speed_unavailable_reason=ball_speed.unavailable_reason,
             pipeline_version=PIPELINE_VERSION,
             rubric_version=RUBRIC_VERSION,
             payload=response.model_dump(mode="json"),
