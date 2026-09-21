@@ -820,6 +820,62 @@ scope here. That is a follow-up, not part of this change.
 
 ### Stage 8 — Handedness detection (PURE)
 
+#### 8.1 DEFECT — handedness is wrong on 6 of 16 corpus clips, and confidence does not track correctness (diagnosed, NOT fixed)
+
+Measured on the 16-clip corpus through the real production path, stock settings, no hint.
+Ground truth established independently of Stage 8's own math — by overlaying MediaPipe's
+per-frame anatomical wrist labels on source frames at peak two-wrist extension — so this
+is not the algorithm grading itself.
+
+**10 of 16 correct (62.5 %). 6 wrong.**
+
+**The decisive case is `serve_01_baseline_4902773`: both wrists ~100 % visible, both
+signals agreeing, confidence 0.732 — and WRONG.** Integrated path length (right 5.84 vs
+left 14.93 TU) and peak radial distance (right 1.17 vs left 2.14 TU) both point at the
+toss arm. There is no occlusion excuse and no internal disagreement to warn on. On a
+serve the toss arm's overhead reach-and-return integrates to more distance, and reaches
+farther from mid-hip, than the compact racket-arm drive.
+
+**Confidence is anti-correlated with correctness at the top of its range.** Wrong answers
+scored 0.000, 0.003, 0.064, 0.098, 0.199, **0.732**; correct answers scored 0.062–0.281.
+**The highest-confidence answer in the entire corpus is the most confidently wrong one.**
+No `HINT_CONFIDENCE_FLOOR` value separates the populations — set below 0.732 and the
+dangerous case survives; set above and most currently-correct answers are discarded.
+**This is an algorithm change, not a threshold change**, the same shape as §7.1.
+
+**Two independent weaknesses, not one.** (a) `peak_radial_distance` is near-uninformative
+on serves and is averaged in at equal weight — on the vendored clip the path margin is a
+maximal 1.0 while the radius margin is 0.005. (b) The `coverage` scalar multiplies
+confidence by the WORSE-observed wrist's visibility fraction; only 2 of 16 clips have both
+wrists ≥ 95 % visible. So "low confidence" on this corpus mostly means occlusion, not a
+genuine tie — and that part is arguably correct behaviour and should not be conflated
+with the path-length defect when scoping a fix.
+
+> **KNOWN GAP — the corpus cannot test the thing Stage 8 exists to detect.** All 16 clips
+> are RIGHT-handed players. Stage 8 has never been evaluated against a left-handed player,
+> so 62.5 % measures only how often it correctly defaults toward right on a right-handed
+> corpus. Additionally, `tennis_serve_10340710` and `serve_06_vertical_10340710` are the
+> same source video, so the corpus holds **15 distinct clips, not 16**, and every aggregate
+> here slightly overstates the sample.
+
+> **KNOWN GAP — `normalize.py:617` inherits the same defect independently.**
+> `swing_direction_sign` selects its proxy wrist with `right_path >= left_path`, the exact
+> comparison that is confidently wrong on `serve_01`. Stage 7 therefore carries the same
+> failure mode for a different downstream purpose, and fixing Stage 8 alone does not
+> address it.
+
+> **CLIENT DEFECT — the hint is defaulted, never confirmed, and overrides detection.**
+> `frontend/lib/screens/record_screen.dart:36` initialises `_handedness = Handedness.right`
+> and line 156 sends it unconditionally; the Left/Right toggle has no "unsure" option and
+> the user is never required to touch it. Server-side `handedness_hint` is `Handedness |
+> None`, so absence is representable — but the client never sends absence. **A left-handed
+> user who does not notice the toggle silently submits "right"**, and because a hint
+> overrides detection whenever confidence is below the 0.5 floor — 14 of 16 clips — the
+> wrong hint wins and every racket-hand metric is computed on the wrong arm with no flag.
+> "Present and correct", which §9.2.8 treats as a precondition, collapses to merely
+> "present". **This RAISES the severity of everything above rather than mitigating it.**
+
+
 | | |
 |---|---|
 | **Owner** | `analysis/handedness.py` |
