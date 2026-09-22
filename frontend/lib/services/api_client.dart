@@ -8,8 +8,17 @@ import '../models/analysis_response.dart';
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
 
-/// REPLACE ME: base URL of the deployed FastAPI backend (Render).
-const String baseUrl = 'https://replace-me.example.com';
+/// Base URL of the deployed FastAPI backend (Cloud Run, us-east1).
+///
+/// This is the real production endpoint, not a placeholder. It is a public
+/// HTTPS URL, so it is not a secret — same category as [supabaseUrl] in
+/// main.dart.
+///
+/// There is currently NO build-time override for this value: the app defines
+/// no `--dart-define` / `String.fromEnvironment` hook anywhere, so pointing the
+/// client at a different backend (local dev, a future staging environment)
+/// means editing this literal. That gap is known and tracked separately.
+const String baseUrl = 'https://tennisform-api-143709056949.us-east1.run.app';
 
 /// Poll cadence, per PIPELINE.md Stage 19 / Appendix A.
 ///

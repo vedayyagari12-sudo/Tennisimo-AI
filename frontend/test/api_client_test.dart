@@ -257,4 +257,16 @@ void main() {
       expect(kServerHeartbeatStaleSeconds, 180);
     });
   });
+
+  group('baseUrl points at a real backend', () {
+    test('baseUrl is no longer the placeholder', () {
+      expect(baseUrl, isNot('https://replace-me.example.com'));
+    });
+
+    test('baseUrl is a well-formed https URL with a host', () {
+      final Uri parsed = Uri.parse(baseUrl);
+      expect(parsed.scheme, 'https');
+      expect(parsed.host, isNotEmpty);
+    });
+  });
 }
