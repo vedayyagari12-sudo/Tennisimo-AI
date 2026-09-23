@@ -2034,6 +2034,8 @@ CMD exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8080} --work
 
 ##### Deploy invocation
 
+**Region note:** the region in the commands below is `us-east1`, which is where the service is actually deployed (`https://tennisform-api-143709056949.us-east1.run.app`). Earlier revisions of this document said `us-central1` throughout; that was documentation-only drift with no argued rationale behind it — never a deployed value, so it was corrected in place rather than migrated.
+
 `gcloud run deploy --source` is chosen over a hand-built image deliberately: Cloud Run requires `linux/amd64`, and building locally on a Windows or Apple-Silicon dev box is a well-known way to ship an unrunnable image. Cloud Build produces amd64 natively, which removes the trap rather than documenting it.
 
 ```bash
@@ -2043,7 +2045,7 @@ CMD exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8080} --work
 # --min-instances=0 lets the service scale to zero when idle.
 gcloud run deploy tennisform-api \
   --source=. \
-  --region=us-central1 \
+  --region=us-east1 \
   --execution-environment=gen2 \
   --cpu=2 \
   --memory=2Gi \
@@ -2067,6 +2069,256 @@ Flag-by-flag, for the non-obvious ones:
 | `--concurrency=20` | Bounds simultaneous work on the ASGI loop. Five job slots (1 running + 4 queued) polling every 2 s generate nowhere near 20 in-flight requests, so this never rejects legitimate traffic; it caps how many ES256 JWT verifications can pile onto the serving core at once while inference runs. The real admission control is `429 QUEUE_FULL` at depth 4, in application code. |
 | `--allow-unauthenticated` | Authentication is application-level (Supabase ES256 JWT, Stage 2). Cloud Run IAM would reject the mobile client's tokens, which are not Google identities. Every route is guarded by Stage 2; there is no unauthenticated surface other than health. |
 | `--set-secrets` | Secret Manager, per CLAUDE.md's no-hardcoded-secrets rule. `SUPABASE_URL` and `POSE_MODEL_PATH` are non-secret configuration and stay as plain env vars; the model path is a test/local-override knob (Stage 6.1), not a secret. |
+
+##### Secret Manager setup — ready-to-run commands (NOTHING HERE HAS BEEN EXECUTED)
+
+**Status: drafted, not run.** No `gcloud` command in this subsection has been executed against real infrastructure. There is no project ID and there are no credentials in the environment that produced this text, so running any of it was neither possible nor safe. Treat every block below as a reviewed script to read, substitute into, and run yourself.
+
+**Two standing cautions before you run anything.**
+
+1. **Verify flag syntax against `gcloud run deploy --help` and `gcloud secrets create --help` before running.** `gcloud` surface changes between releases. The syntax below reflects the documented behaviour of the `run`/`secrets` command groups as understood at the time of writing; it is not a substitute for `--help` on the SDK version actually installed on your machine. `gcloud components update` first.
+2. **No secret value appears anywhere in this document, and none should ever be typed into a `gcloud` flag.** Every placeholder is an obviously-fake angle-bracket token (`<YOUR_SUPABASE_SERVICE_ROLE_KEY>`). `--data=VALUE` is *not used anywhere below and must not be used*: an inline value lands in shell history, in `ps`/`/proc` for the lifetime of the process, and in any terminal scrollback capture. Only `--data-file=-` (stdin) and `--data-file=<path>` (a temp file you delete) are used.
+
+###### Step 0 — Which variables actually belong in Secret Manager
+
+Source of truth for what the app reads: `backend/app/config.py` (the `Settings.__init__` body). Source of truth for what an operator currently sets: the variable *names* present in `backend/.env` (values were not read and are not reproduced).
+
+**Only genuine credentials go into Secret Manager.** Putting non-secret configuration there buys nothing and costs an IAM grant, a version to rotate, and a secret lookup on every cold start. Classification of every name present in `backend/.env`:
+
+| Variable | Read at | Classification | How it reaches Cloud Run |
+|---|---|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | `config.py:135`, **required**, `SecretStr` | **SECRET** — full row-level-security bypass on the Supabase project | `--update-secrets` |
+| `GEMINI_API_KEY` | `config.py:137`, **required**, `SecretStr` | **SECRET** — billable Google API credential | `--update-secrets` |
+| `SUPABASE_URL` | `config.py:133`, **required** | Not a secret. It is a public project hostname the mobile client already contains. | `--set-env-vars` |
+| `SUPABASE_JWKS_URL` | `config.py:145`, defaulted | Not a secret — a *public* JWKS endpoint, by definition. Also derived from `SUPABASE_URL` when unset; only set it for a test double. | `--set-env-vars` (usually omit) |
+| `SUPABASE_JWT_AUDIENCE` | `config.py:150`, default `authenticated` | Not a secret | `--set-env-vars` (omit unless overriding) |
+| `SUPABASE_STORAGE_BUCKET` | `config.py:153`, default `swing-videos` | Not a secret | `--set-env-vars` (omit unless overriding) |
+| `GEMINI_MODEL` | `config.py:157`, default `gemini-2.5-flash` | Not a secret | `--set-env-vars` (omit unless overriding) |
+| `GEMINI_TIMEOUT_S` | `config.py:158`, default `8.0` | Not a secret | `--set-env-vars` (omit unless overriding) |
+| `MAX_UPLOAD_BYTES`, `MAX_CLIP_SECONDS`, `ANALYSIS_WINDOW_SECONDS`, `ANALYSIS_FPS`, `MAX_ANALYSIS_FRAMES`, `TARGET_LONG_EDGE_PX` | `config.py:160–165`, all defaulted | Not secrets — tuning knobs | `--set-env-vars` (omit unless overriding) |
+| `JOB_QUEUE_MAX_DEPTH`, `JOB_HEARTBEAT_STALE_S` | `config.py:168–169`, defaults `4` / `180` | Not secrets | `--set-env-vars` (omit unless overriding) |
+| `BALL_DETECTION_ENABLED`, `BALL_CAL_SPACE_LONG_EDGE_PX`, `BALL_WINDOW_POST_S`, `BALL_MIN_DETECTIONS`, `BALL_DETECTION_DEADLINE_S`, `BALL_SPEED_MIN_MPH`, `BALL_SPEED_MAX_MPH` | `config.py:172–181`, all defaulted | Not secrets | `--set-env-vars` (omit unless overriding) |
+
+Three notes that follow from reading `config.py` rather than the `.env` file:
+
+- **Exactly three variables are required at boot** (`_require`, raising `MissingSettingError` naming the variable): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`. Two are secrets, one is not. **Everything else in `backend/.env` has a default in `config.py`, so a deploy that omits it still starts.** That is why the minimal correct deploy below carries exactly one meaningful `--set-env-vars` entry rather than reproducing `.env` wholesale — copying defaults into deploy flags creates a second place to change them.
+- **`config.py` reads several variables that are absent from `backend/.env`**: `MOTION_SCAN_THRESHOLD_S`, `MOTION_SCAN_LONG_EDGE_PX`, `BALL_BACKGROUND_PREROLL_S`, `BALL_BACKGROUND_GAP_S`, `BALL_BACKGROUND_FRAMES`, `SIGNED_UPLOAD_URL_TTL_S`, `SUPABASE_HTTP_TIMEOUT_S`. All defaulted, all non-secret; nothing to do, listed so a future reader does not mistake the `.env` file for the full list.
+- **`POSE_MODEL_PATH`, set by the deploy invocation above, is read by nothing.** `backend/app/pose/extractor.py:39` `resolve_model_path()` takes an optional `Path` argument and otherwise resolves the bundle relative to `__file__`; it does not consult the environment. The flag is harmless but inert. It is left in the command below unchanged so this subsection is not silently altering the documented invocation — **flagged here, not fixed here.**
+
+###### Step 1 — Enable the Secret Manager API
+
+Idempotent; safe to run if already enabled.
+
+```bash
+# Set once per shell so nothing below depends on your active gcloud config.
+PROJECT_ID="<YOUR_GCP_PROJECT_ID>"
+REGION="us-east1"          # must match the --region on the deploy below
+
+gcloud services enable secretmanager.googleapis.com --project="${PROJECT_ID}"
+
+# Confirm (should print secretmanager.googleapis.com):
+gcloud services list --enabled --project="${PROJECT_ID}" \
+  --filter="config.name:secretmanager.googleapis.com" --format="value(config.name)"
+```
+
+###### Step 2 — Create the two secrets (no value yet)
+
+Secret *names* match the ones already referenced by the deploy invocation above (`supabase-service-role-key`, `gemini-api-key`) — do not rename them without also editing the deploy command.
+
+```bash
+gcloud secrets create supabase-service-role-key \
+  --project="${PROJECT_ID}" \
+  --replication-policy="automatic"
+
+gcloud secrets create gemini-api-key \
+  --project="${PROJECT_ID}" \
+  --replication-policy="automatic"
+```
+
+`--replication-policy="automatic"` is the right default here: there is no data-residency requirement, and automatic replication means the secret is readable from whatever region the service ends up in. If you later need residency pinning, use `--replication-policy="user-managed" --locations="${REGION}"` instead — and note that replication policy **cannot be changed after creation**, so choosing wrongly means creating a new secret.
+
+`gcloud secrets create` fails with `ALREADY_EXISTS` if run twice. That is fine — skip to Step 3.
+
+###### Step 3 — Add the first version, without the value touching shell history
+
+Two ways. **Pick one; do not use `--data=VALUE`.**
+
+**Option A (preferred) — pipe from stdin, value never on a command line.** `printf '%s'` rather than `echo` because `echo` appends a newline that becomes part of the stored secret; `read -rs` avoids echoing the key to the terminal at all.
+
+```bash
+# Prompts silently; the value is never printed and never becomes a command argument.
+read -rsp "Paste SUPABASE_SERVICE_ROLE_KEY (input hidden), then Enter: " SECRET_VALUE && echo
+printf '%s' "${SECRET_VALUE}" | gcloud secrets versions add supabase-service-role-key \
+  --project="${PROJECT_ID}" --data-file=-
+unset SECRET_VALUE
+
+read -rsp "Paste GEMINI_API_KEY (input hidden), then Enter: " SECRET_VALUE && echo
+printf '%s' "${SECRET_VALUE}" | gcloud secrets versions add gemini-api-key \
+  --project="${PROJECT_ID}" --data-file=-
+unset SECRET_VALUE
+```
+
+One caveat on Option A: the value is briefly in a shell variable, so it is in that shell's memory — but not in its history file, and not in `ps`, since `printf` is a shell builtin and the value reaches `gcloud` over a pipe. Close the shell when done.
+
+**Option B — a temp file you create and delete.** Use this if your shell lacks `read -rs` (e.g. plain `cmd.exe`) or you already hold the key in a file. Write the file with an editor, not with a shell command containing the value.
+
+```bash
+# 1. In an editor, create a file containing ONLY the key: no trailing newline,
+#    no quotes, no KEY= prefix. Put it somewhere OUTSIDE the repo:
+#       <TEMP_DIR>/supabase-service-role-key.txt
+#       <TEMP_DIR>/gemini-api-key.txt
+# 2. Then:
+gcloud secrets versions add supabase-service-role-key \
+  --project="${PROJECT_ID}" --data-file="<TEMP_DIR>/supabase-service-role-key.txt"
+
+gcloud secrets versions add gemini-api-key \
+  --project="${PROJECT_ID}" --data-file="<TEMP_DIR>/gemini-api-key.txt"
+
+# 3. Delete both files IMMEDIATELY. They are plaintext credentials on disk.
+rm -f "<TEMP_DIR>/supabase-service-role-key.txt" "<TEMP_DIR>/gemini-api-key.txt"
+```
+
+**A file under the repo root would be uploaded by `gcloud run deploy --source=.`** unless excluded by `.gcloudignore` — which is precisely how a credential ends up baked into a container image. Keep the temp files outside the repo.
+
+Verify the versions exist without printing any value:
+
+```bash
+gcloud secrets versions list supabase-service-role-key --project="${PROJECT_ID}"
+gcloud secrets versions list gemini-api-key --project="${PROJECT_ID}"
+```
+
+Do **not** run `gcloud secrets versions access latest ...` "just to check" — that prints the credential to your terminal and into scrollback.
+
+###### Step 4 — IAM: let the service's runtime identity read the secrets
+
+**Which service account?** The deploy invocation documented above (`##### Deploy invocation`) **does not pass `--service-account`.** Stated explicitly, because it determines every command in this step: **Cloud Run therefore runs the service as the project's default compute service account, `PROJECT_NUMBER-compute@developer.gserviceaccount.com`.** That is the identity that must hold `roles/secretmanager.secretAccessor` — not your own user account, and not the Cloud Build service account that builds the image.
+
+The grant is **scoped to each individual secret**, never `gcloud projects add-iam-policy-binding`. A project-level `secretAccessor` grant would let this service read every secret the project ever holds, which is the whole failure mode the role exists to bound.
+
+```bash
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+gcloud secrets add-iam-policy-binding supabase-service-role-key \
+  --project="${PROJECT_ID}" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding gemini-api-key \
+  --project="${PROJECT_ID}" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+Confirm, per secret:
+
+```bash
+gcloud secrets get-iam-policy supabase-service-role-key --project="${PROJECT_ID}"
+gcloud secrets get-iam-policy gemini-api-key --project="${PROJECT_ID}"
+```
+
+**If you later switch to a dedicated runtime service account** — worth doing eventually, since the default compute SA is broadly privileged and shared with everything else in the project — the change is: create the SA, grant it `secretAccessor` on the two secrets exactly as above but with the new `--member`, and add `--service-account` to the deploy.
+
+```bash
+# OPTIONAL, recommended eventually. NOT assumed by the deploy command below.
+gcloud iam service-accounts create tennisform-api \
+  --project="${PROJECT_ID}" \
+  --display-name="TennisForm API (Cloud Run runtime)"
+
+RUNTIME_SA="tennisform-api@${PROJECT_ID}.iam.gserviceaccount.com"
+# ...re-run the two add-iam-policy-binding commands above with this RUNTIME_SA...
+# ...and add to the deploy:  --service-account="${RUNTIME_SA}"
+```
+
+Deploying with `--service-account` while the grants still point at the default compute SA produces a revision that fails to start: the secret is resolved at instance start, so the symptom is a startup failure, not a request-time error. Grant first, then deploy.
+
+###### Step 5 — The flag mapping, in the direction that is easy to get backwards
+
+For `gcloud run deploy`, secrets exposed as environment variables use:
+
+```
+--update-secrets=ENV_VAR_NAME=SECRET_NAME:VERSION
+```
+
+**Left of `=` is the environment variable the *application* reads. Right of `=` is the *Secret Manager* resource, then `:` then the version.** Reversing the two halves is the common mistake and it does not fail in an obvious way — you get a container whose `Settings.__init__` raises `MissingSettingError` for the variable you thought you had set, or a secret-not-found startup failure naming a resource you never created.
+
+Here the two halves differ in spelling, which makes the direction checkable at a glance: env vars are `SCREAMING_SNAKE_CASE` (what `config.py` reads), secret names are `kebab-case` (what Step 2 created).
+
+```
+--update-secrets=SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,GEMINI_API_KEY=gemini-api-key:latest
+```
+
+`--set-secrets` vs `--update-secrets`: `--set-secrets` **replaces** the revision's entire secret set; `--update-secrets` adds/overwrites only the named entries and leaves any others intact. With exactly two secrets and both named, the two are equivalent today. `--update-secrets` is used below because it stays correct if a third secret is added later by a separate command. The invocation in `##### Deploy invocation` above uses `--set-secrets` with the same mapping — **that is not a contradiction, it is the same wiring spelled differently; do not pass both in one command.**
+
+`:latest` resolves at *instance start*, not at deploy time, so rotating a secret takes effect on the next cold start or new revision — not instantly on a running instance. Pin an explicit version number instead of `latest` if you need a deploy to be byte-reproducible.
+
+###### Step 6 — The complete, integrated deploy command
+
+This is the `##### Deploy invocation` command above, **dev/demo tier (§1.20.1a) unchanged**, with `--set-secrets` written in the `--update-secrets` form and the env-var portion made explicit. Same `--cpu=2 --memory=2Gi --min-instances=0 --max-instances=1 --concurrency=20 --timeout=300`; nothing about the tier decision is being revisited here. Run it from the repo root (the directory containing `backend/` and the `Dockerfile`), after Steps 0–4.
+
+```bash
+PROJECT_ID="<YOUR_GCP_PROJECT_ID>"
+
+gcloud run deploy tennisform-api \
+  --project="${PROJECT_ID}" \
+  --source=. \
+  --region=us-east1 \
+  --execution-environment=gen2 \
+  --cpu=2 \
+  --memory=2Gi \
+  --min-instances=0 \
+  --max-instances=1 \
+  --concurrency=20 \
+  --timeout=300 \
+  --port=8080 \
+  --allow-unauthenticated \
+  --set-env-vars=SUPABASE_URL=https://<YOUR_SUPABASE_PROJECT_REF>.supabase.co,POSE_MODEL_PATH=/app/backend/app/pose/models/pose_landmarker_full.task \
+  --update-secrets=SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest,GEMINI_API_KEY=gemini-api-key:latest
+```
+
+Why the env-var list is two entries and not twenty-three:
+
+- `SUPABASE_URL` is the **only non-secret variable the app requires** (`config.py:133`). Omit it and the container raises `MissingSettingError: SUPABASE_URL` when settings are constructed, and the revision never becomes ready.
+- `POSE_MODEL_PATH` is carried over verbatim from the existing documented invocation. As noted in Step 0 it is read by nothing; it is retained rather than quietly dropped.
+- Everything else in `backend/.env` is defaulted in `config.py`. **Set a tuning knob here only when you are deliberately overriding the default**, e.g. appending `,JOB_HEARTBEAT_STALE_S=240` — one at a time, with a reason, never as a bulk copy of the local `.env`.
+- Do **not** set `PORT`. Cloud Run injects it and rejects `PORT` in `--set-env-vars`.
+- `--set-env-vars` replaces the whole env-var set on each deploy; use `--update-env-vars` to add one without restating the others. If a *value* you add ever contains a comma, switch the whole flag to the alternate-delimiter form `--set-env-vars=^@^KEY1=v1@KEY2=v2`, because the default separator is a comma.
+
+###### Step 7 — Verify after deploying (still without printing any secret value)
+
+```bash
+# The revision's env-var and secret wiring, names only:
+gcloud run services describe tennisform-api \
+  --project="${PROJECT_ID}" --region=us-east1 \
+  --format="yaml(spec.template.spec.containers[].env)"
+
+# Health endpoint (Stage 2: the only unauthenticated surface):
+curl -sS "$(gcloud run services describe tennisform-api \
+  --project="${PROJECT_ID}" --region=us-east1 --format='value(status.url)')/health"
+```
+
+A boot failure caused by a missing variable is identifiable without guesswork: `MissingSettingError` names the offending variable (`config.py:74–79`) and it appears in the revision's startup logs.
+
+```bash
+gcloud run services logs read tennisform-api \
+  --project="${PROJECT_ID}" --region=us-east1 --limit=100
+```
+
+###### Rotation, later
+
+Rotation is a new *version* of the same secret — never a new secret, and never an edit to the deploy command:
+
+```bash
+read -rsp "Paste the NEW key (input hidden), then Enter: " SECRET_VALUE && echo
+printf '%s' "${SECRET_VALUE}" | gcloud secrets versions add gemini-api-key \
+  --project="${PROJECT_ID}" --data-file=-
+unset SECRET_VALUE
+
+# Then disable the old version once the new one is confirmed working:
+gcloud secrets versions disable <OLD_VERSION_NUMBER> --secret=gemini-api-key --project="${PROJECT_ID}"
+```
+
+Because the deploy pins `:latest`, a running instance keeps the old value until it is replaced. Force pickup with an explicit update (`gcloud run services update tennisform-api --region=us-east1 --update-secrets=...` with the same mapping) rather than assuming the rotation took effect. Disable rather than destroy the old version first — `disable` is reversible, `destroy` is not.
 
 ##### What this does not change
 

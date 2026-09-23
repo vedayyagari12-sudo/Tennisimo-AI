@@ -16,7 +16,11 @@ Shot type is INFERRED FROM TECHNIQUE, not from the ball.
 
 ## Stack
 - Frontend: Flutter (Dart), Material 3
-- Backend: FastAPI (Python 3.13), deployed on Render
+- Backend: FastAPI (Python 3.13), deployed on Google Cloud Run (`us-east1`)
+- Production backend URL: `https://tennisform-api-143709056949.us-east1.run.app`.
+  This URL is hardcoded client-side as the `baseUrl` constant in
+  frontend/lib/services/api_client.dart. There is no build-time override; if the
+  URL changes it must be edited by hand.
 - DB/Auth/Storage: Supabase (JWT ES256, verified via PyJWT + PyJWKClient)
 - Pose: MediaPipe Tasks PoseLandmarker (BlazePose `full` bundle, VIDEO running
   mode), pinned `mediapipe==0.10.35`, run server-side in FastAPI. The legacy
