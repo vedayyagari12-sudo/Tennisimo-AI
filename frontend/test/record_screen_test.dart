@@ -1,6 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tennisform_ai/screens/record_screen.dart';
+import 'package:tennisimo_ai/screens/record_screen.dart';
 
 /// Coverage for the camera-setup error wording.
 ///

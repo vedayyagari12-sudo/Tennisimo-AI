@@ -18,16 +18,16 @@ Future<void> main() async {
     url: supabaseUrl,
     publishableKey: supabasePublishableKey,
   );
-  runApp(const TennisFormApp());
+  runApp(const TennisimoApp());
 }
 
-class TennisFormApp extends StatelessWidget {
-  const TennisFormApp({super.key});
+class TennisimoApp extends StatelessWidget {
+  const TennisimoApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TennisForm AI',
+      title: 'Tennisimo AI',
       theme: buildAppTheme(),
       home: const AuthGate(),
     );

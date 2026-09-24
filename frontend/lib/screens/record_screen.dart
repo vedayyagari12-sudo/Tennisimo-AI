@@ -36,21 +36,21 @@ String cameraSetupErrorMessage(CameraException e) {
       // Android: the user dismissed or denied the runtime dialog; asking again
       // normally re-prompts. iOS: denied at the one and only prompt, after
       // which the OS will not ask again. The wording has to serve both.
-      return 'TennisForm AI needs camera access to record your swing. '
-          'Allow camera access when asked, or enable it for TennisForm AI in '
+      return 'Tennisimo AI needs camera access to record your swing. '
+          'Allow camera access when asked, or enable it for Tennisimo AI in '
           'your device Settings, then try again.';
     case 'CameraAccessDeniedWithoutPrompt':
       // iOS only, and terminal: the OS will not show the prompt again, so
       // retrying in-app cannot succeed. Send the user to Settings.
-      return 'Camera access for TennisForm AI is turned off. Open your device '
-          'Settings > TennisForm AI and turn on Camera, then come back. '
+      return 'Camera access for Tennisimo AI is turned off. Open your device '
+          'Settings > Tennisimo AI and turn on Camera, then come back. '
           'Trying again here will not bring the permission prompt back.';
     case 'CameraAccessRestricted':
       // iOS only: Screen Time or a device-management profile. The user may not
       // even be able to grant it themselves, so do not promise a retry works.
       return 'Camera access is restricted on this device, usually by Screen '
           'Time or a device management profile. It has to be allowed in '
-          'device Settings before TennisForm AI can record.';
+          'device Settings before Tennisimo AI can record.';
     default:
       return e.description ?? 'The camera could not be started.';
   }

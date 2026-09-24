@@ -1,4 +1,4 @@
-# tennisform_ai
+# Tennisimo AI
 
 A new Flutter project.
 

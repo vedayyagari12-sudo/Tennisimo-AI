@@ -25,7 +25,7 @@ class ResultsScreen extends StatelessWidget {
     // it costs a user nothing and adds no UI.
     assert(() {
       final String? note = feedback?.guard?.truncationDebugLine;
-      if (note != null) debugPrint('[TennisForm] $note');
+      if (note != null) debugPrint('[Tennisimo] $note');
       return true;
     }());
 

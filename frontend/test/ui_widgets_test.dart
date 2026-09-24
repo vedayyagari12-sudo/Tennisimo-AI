@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tennisform_ai/models/analysis_response.dart';
-import 'package:tennisform_ai/theme/app_theme.dart';
-import 'package:tennisform_ai/widgets/category_bars.dart';
-import 'package:tennisform_ai/widgets/score_ring.dart';
-import 'package:tennisform_ai/widgets/stat_tile.dart';
-import 'package:tennisform_ai/widgets/trend_chart.dart';
+import 'package:tennisimo_ai/models/analysis_response.dart';
+import 'package:tennisimo_ai/theme/app_theme.dart';
+import 'package:tennisimo_ai/widgets/category_bars.dart';
+import 'package:tennisimo_ai/widgets/score_ring.dart';
+import 'package:tennisimo_ai/widgets/stat_tile.dart';
+import 'package:tennisimo_ai/widgets/trend_chart.dart';
 
 /// Every widget under test is mounted on the real app theme, because the
 /// score ramp and the "not measured" muted style both come from it.

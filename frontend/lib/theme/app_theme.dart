@@ -31,6 +31,11 @@ abstract final class AppColors {
   static const Color secondary = Color(0xFFCCFF4D);
   static const Color onSecondary = Color(0xFF142000);
 
+  /// The ball in the Tennisimo mark. Same hue as [secondary]; named separately
+  /// because the brand mark is not "ball speed" and must not be re-pointed if
+  /// the speed accent ever moves.
+  static const Color ballChartreuse = Color(0xFFCCFF4D);
+
   static const Color onSurface = Color(0xFFE8F0EB);
 
   /// Secondary text, captions, and every "not measured" string.

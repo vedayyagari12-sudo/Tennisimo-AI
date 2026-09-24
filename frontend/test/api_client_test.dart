@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tennisform_ai/models/enums.dart';
-import 'package:tennisform_ai/services/api_client.dart';
+import 'package:tennisimo_ai/models/enums.dart';
+import 'package:tennisimo_ai/services/api_client.dart';
 
 void main() {
   group('flat error envelope carries retryable', () {

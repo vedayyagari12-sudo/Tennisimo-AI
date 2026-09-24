@@ -5,10 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = tennisform_ai
+PRODUCT_NAME = tennisimo_ai
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = ai.tennisform.tennisformAi
+PRODUCT_BUNDLE_IDENTIFIER = ai.tennisimo.tennisimoAi
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 ai.tennisform. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 ai.tennisimo. All rights reserved.

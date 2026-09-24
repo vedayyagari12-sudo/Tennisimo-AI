@@ -5,6 +5,7 @@ import '../models/analysis_response.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/score_ring.dart';
@@ -428,6 +429,8 @@ class _DashboardHeader extends StatelessWidget {
             ],
           ),
         ),
+        const AppLogo(size: 28),
+        const SizedBox(width: AppSpacing.xs),
         PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
           onSelected: (String value) {

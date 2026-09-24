@@ -1,5 +1,5 @@
-name: tennisform_ai
-description: "TennisForm AI — swing analysis client."
+name: tennisimo_ai
+description: "Tennisimo AI — swing analysis client."
 publish_to: 'none'
 
 version: 1.0.0+1

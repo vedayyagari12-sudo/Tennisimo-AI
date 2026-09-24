@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "ai.tennisform" "\0"
-            VALUE "FileDescription", "tennisform_ai" "\0"
+            VALUE "CompanyName", "ai.tennisimo" "\0"
+            VALUE "FileDescription", "Tennisimo AI" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "tennisform_ai" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 ai.tennisform. All rights reserved." "\0"
-            VALUE "OriginalFilename", "tennisform_ai.exe" "\0"
-            VALUE "ProductName", "tennisform_ai" "\0"
+            VALUE "InternalName", "Tennisimo AI" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 ai.tennisimo. All rights reserved." "\0"
+            VALUE "OriginalFilename", "tennisimo_ai.exe" "\0"
+            VALUE "ProductName", "Tennisimo AI" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

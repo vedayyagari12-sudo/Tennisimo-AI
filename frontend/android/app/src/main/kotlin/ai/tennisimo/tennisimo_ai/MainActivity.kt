@@ -1,4 +1,4 @@
-package ai.tennisform.tennisform_ai
+package ai.tennisimo.tennisimo_ai
 
 import io.flutter.embedding.android.FlutterActivity
 

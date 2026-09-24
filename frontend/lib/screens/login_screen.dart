@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../widgets/app_logo.dart';
+
 /// Supabase email/password sign-in. The session it establishes is the only
 /// identity the app ever sends: every backend call carries its JWT and nothing
 /// else identifying.
@@ -67,7 +69,9 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            Text('TennisForm AI', style: theme.textTheme.headlineMedium),
+            const AppLogo(size: 72),
+            const SizedBox(height: 16),
+            Text('Tennisimo AI', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 40),
             TextField(
               controller: emailController,

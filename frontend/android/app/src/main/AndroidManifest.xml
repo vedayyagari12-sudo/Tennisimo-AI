@@ -19,7 +19,7 @@
          manifest merging for pre-scoped-storage devices. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <application
-        android:label="tennisform_ai"
+        android:label="Tennisimo AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

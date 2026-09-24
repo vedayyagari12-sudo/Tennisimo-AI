@@ -1,10 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tennisform_ai/models/analysis_response.dart';
-import 'package:tennisform_ai/models/ball_speed.dart';
-import 'package:tennisform_ai/models/ball_speed_calibration.dart';
-import 'package:tennisform_ai/models/coaching_feedback.dart';
-import 'package:tennisform_ai/models/enums.dart';
-import 'package:tennisform_ai/models/metric_score.dart';
+import 'package:tennisimo_ai/models/analysis_response.dart';
+import 'package:tennisimo_ai/models/ball_speed.dart';
+import 'package:tennisimo_ai/models/ball_speed_calibration.dart';
+import 'package:tennisimo_ai/models/coaching_feedback.dart';
+import 'package:tennisimo_ai/models/enums.dart';
+import 'package:tennisimo_ai/models/metric_score.dart';
 
 void main() {
   group('enum parsing degrades safely', () {

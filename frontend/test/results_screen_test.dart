@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tennisform_ai/models/analysis_response.dart';
-import 'package:tennisform_ai/screens/results_screen.dart';
+import 'package:tennisimo_ai/models/analysis_response.dart';
+import 'package:tennisimo_ai/screens/results_screen.dart';
 
 /// Fixture in the shape the server really sends: five weighted categories,
 /// one of them unmeasurable.
