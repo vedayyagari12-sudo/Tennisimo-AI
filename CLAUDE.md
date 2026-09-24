@@ -1,4 +1,4 @@
-# Project: TennisForm AI
+# Project: Tennisimo AI
 
 ## What this app does
 Analyzes a user's tennis swing from a phone video. Extracts pose keypoints,
@@ -51,3 +51,19 @@ frontend/
     screens/
     services/
     models/
+
+## Known issues and decisions
+
+- DECISION: `video_player` stays, and with it the two permissions
+  androidx.media3 merges into the Android manifest -- `ACCESS_NETWORK_STATE`
+  and `WAKE_LOCK`. `video_player` is genuinely required: reading a picked
+  file's duration is mandatory for the upload ticket (`duration_s`), no file
+  picker reports it, and the only alternative would be fabricating the number.
+  Both are NORMAL (non-dangerous) permissions -- no runtime prompt. This is
+  deliberately NOT the same case as the `RECORD_AUDIO` /
+  `NSMicrophoneUsageDescription` reverted in `b2163ee`: that one had no code
+  path using it at all, which is what made it a store-review liability rather
+  than the cost of a needed feature.
+- UNRESOLVED: `RECORD_AUDIO` still merges into the APK from
+  `camera_android_camerax`'s own manifest despite `b2163ee`. Fully stripping it
+  would need `tools:node="remove"`. Recorded as a known issue, not a decision.

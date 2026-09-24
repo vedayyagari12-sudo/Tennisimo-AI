@@ -59,7 +59,16 @@ httpx>=0.28,<1.0
 # demuxer. PyAV owns all decoding (PIPELINE.md Stage 5).
 numpy>=2.2
 scipy>=1.13
-av>=12.0
+
+# EXACT PIN, and it is load-bearing. Uploads arrive as webm (VP8/VP9) from the
+# browser recorder, and decode support for those comes from the FFmpeg that the
+# wheel bundles having been built --enable-libvpx. That is a property of the
+# WHEEL, not of the PyAV API, so it is invisible to any range specifier: a
+# resolver is free to pick a newer av whose bundled FFmpeg dropped libvpx, pip
+# would install it cleanly, and the failure would surface at runtime on the
+# first upload rather than at install time. 18.1.0 is the version verified here
+# to carry the vp8/vp9/libvpx decoders.
+av==18.1.0
 
 # HEADLESS, deliberately. The GUI wheels map GTK/Qt/X11 shared objects we never
 # call, for roughly 40-60 MB of dead resident mapping. This pin REPLACES the

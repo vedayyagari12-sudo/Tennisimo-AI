@@ -1,0 +1,47 @@
+# Build context excludes. Read alongside the Dockerfile, which COPYs exactly
+# two things: backend/requirements*.txt, then all of backend/.
+#
+# SYNTAX WARNING: this is NOT .gitignore. Docker matches with Go
+# filepath.Match semantics, where `*` does not cross `/` and a bare
+# `__pycache__` anchors to the context ROOT only. Recursive excludes therefore
+# need an explicit `**/` prefix -- writing `__pycache__` here would silently
+# exclude nothing.
+#
+# These are SURGICAL excludes on purpose. An `*`-then-negate allowlist is
+# easier to get subtly wrong, and the failure mode is not a broken build: COPY
+# succeeds, the image ships, and it dies at runtime in production on the first
+# request that needs the missing file.
+#
+# NEVER add a pattern matching backend/app/pose/models/pose_landmarker_full.task
+# (the vendored 9.4 MB BlazePose bundle) or any of backend/app/**. The bundle is
+# resolved relative to the package dir and verified by size AND SHA-256 at load,
+# so it must be present and byte-exact. In particular: no `*.task`, and no
+# `models/` -- `models` is also the name of two live source packages
+# (backend/app/models, backend/app/pose/models).
+
+# --- Secrets. The whole reason this file exists. -------------------------
+# backend/.env holds real credentials and is gitignored, but gitignore has no
+# bearing on the build context: `COPY backend/ ./backend/` would bake it into
+# an image layer where it stays readable forever.
+**/.env
+**/.env.*
+
+# --- Python caches. Stale bytecode compiled against the host interpreter. -
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+
+# --- Not referenced by the Dockerfile's COPYs; context weight only. -------
+.git
+frontend
+docs
+
+# --- Tests. Not imported by app.main; the runtime image never runs them. --
+backend/tests
+
+# --- Build output: ~21 MB of debug frame JPEGs and CSVs, no app references.
+backend/build
+
+# --- Training/eval footage, ~76 MB total, never read at runtime. ----------
+# One of these holds unlicensed broadcast footage that must not enter an image.
+tennis_clips*
