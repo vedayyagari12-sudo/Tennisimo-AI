@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>TennisForm AI needs camera access to record your tennis swing so it can be analyzed for coaching feedback.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TennisForm AI needs microphone access because recording your swing captures audio alongside the video.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

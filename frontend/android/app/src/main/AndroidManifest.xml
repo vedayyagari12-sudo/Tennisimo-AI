@@ -1,4 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required by the Record screen to capture the user's swing video.
+         The camera_android_camerax plugin also declares these in its own
+         manifest, but they are declared explicitly here so the app's full
+         permission surface is visible in this file.
+
+         No storage permission is declared: camera_android_camerax writes the
+         recording to app-private storage, and it already contributes
+         WRITE_EXTERNAL_STORAGE (capped at android:maxSdkVersion="28") via
+         manifest merging for pre-scoped-storage devices. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application
         android:label="tennisform_ai"
         android:name="${applicationName}"
