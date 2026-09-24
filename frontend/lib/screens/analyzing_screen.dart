@@ -1,30 +1,34 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/analysis_response.dart';
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
+import '../models/video_clip.dart';
 import '../services/api_client.dart';
 import '../services/supabase_storage.dart';
+import '../services/video_intake.dart';
 import 'results_screen.dart';
 
 /// Which half of the job broke, so the retry copy can say something true.
 enum _Stage { uploading, analysing }
 
 /// Uploads the clip, queues the analysis, then polls to completion.
+///
+/// Takes a [VideoClip], so the live-recording path and the file-pick path meet
+/// here and share one implementation from this point on. Nothing below this
+/// line can tell which one produced the clip, or which platform it is running
+/// on — that is the point.
 class AnalyzingScreen extends StatefulWidget {
   const AnalyzingScreen({
     super.key,
-    required this.videoPath,
-    required this.durationSeconds,
+    required this.clip,
     required this.handednessHint,
     required this.labelHint,
     this.calibration,
   });
 
-  final String videoPath;
-  final double durationSeconds;
+  final VideoClip clip;
   final Handedness handednessHint;
   final ShotType labelHint;
   final BallSpeedCalibration? calibration;
@@ -56,30 +60,32 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
       _statusLine = 'Preparing your clip…';
     });
 
-    final File file = File(widget.videoPath);
-    final int sizeBytes;
-    try {
-      sizeBytes = await file.length();
-    } catch (e) {
+    // Last gate before anything leaves the device. The file-pick path already
+    // ran these checks at pick time; a recording has never been checked at all,
+    // and a long clip at a high bit rate really can clear 50 MiB. Failing here
+    // costs the user nothing — no ticket is requested and no bytes are sent —
+    // whereas the same clip refused by the server costs a whole upload first.
+    final String? reason = videoRejectionReason(
+      contentType: widget.clip.contentType,
+      sizeBytes: widget.clip.sizeBytes,
+      durationSeconds: widget.clip.durationSeconds,
+    );
+    if (reason != null) {
       _fail(
         _Stage.uploading,
-        ApiFailure(
-          kind: ApiFailureKind.badResponse,
-          message: 'The recorded clip could not be read from this device. ($e)',
-        ),
+        ApiFailure(kind: ApiFailureKind.badResponse, message: reason),
       );
       return;
     }
 
-    // iOS records .mov, Android .mp4; both are accepted content types.
-    final bool isQuickTime = widget.videoPath.toLowerCase().endsWith('.mov');
-    final String contentType = isQuickTime ? 'video/quicktime' : 'video/mp4';
-
     _setStatus('Requesting an upload slot…');
     final ApiResult<UploadTicket> ticket = await requestUploadTicket(
-      contentType: contentType,
-      sizeBytes: sizeBytes,
-      durationS: widget.durationSeconds,
+      // Sniffed from the clip's own bytes. Never a per-platform assumption:
+      // Android Chrome records WebM, iOS Safari records MP4, and a picked file
+      // is whatever the user picked.
+      contentType: widget.clip.contentType,
+      sizeBytes: widget.clip.sizeBytes,
+      durationS: widget.clip.durationSeconds,
     );
     if (!mounted) return;
     if (!ticket.isOk) {
@@ -91,7 +97,8 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
     final ApiFailure? uploadFailure = await uploadVideoToSignedUrl(
       storagePath: ticket.data!.storagePath,
       uploadToken: ticket.data!.uploadToken,
-      file: file,
+      bytes: widget.clip.bytes,
+      contentType: widget.clip.contentType,
     );
     if (!mounted) return;
     if (uploadFailure != null) {
@@ -183,7 +190,9 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
         const SizedBox(height: 8),
         Text(
           _stage == _Stage.uploading
-              ? 'Keep the app open while the clip uploads.'
+              ? (kIsWeb
+                  ? 'Keep this tab open while the clip uploads.'
+                  : 'Keep the app open while the clip uploads.')
               : 'This usually takes under a minute.',
           textAlign: TextAlign.center,
           style: theme.textTheme.bodySmall,

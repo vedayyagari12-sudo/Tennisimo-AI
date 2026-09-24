@@ -1,10 +1,15 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
+import '../models/video_clip.dart';
+import '../services/video_file_picker.dart';
+import '../services/video_intake.dart';
 import 'analyzing_screen.dart';
 import 'calibration_screen.dart';
 
@@ -56,6 +61,77 @@ String cameraSetupErrorMessage(CameraException e) {
   }
 }
 
+/// Error codes that mean "this browser cannot record video", whatever else is
+/// true about the camera.
+///
+/// `cameraNotSupported` is the literal string `camera_web` produces:
+/// `CameraErrorCode.notSupported.toString()` is `'cameraNotSupported'`, and
+/// `CameraWebPlugin.startVideoCapturing` rethrows it as
+/// `PlatformException(code: e.code.toString())`, which `CameraController`
+/// turns into `CameraException(e.code, e.message)`. It is raised by
+/// `Camera._videoMimeType`, which asks `MediaRecorder.isTypeSupported` for
+/// WebM-VP9, MP4 and WebM in turn and gives up if the browser supports none.
+///
+/// `notSupported` is accepted as well, purely so a future rename of that
+/// `toString()` cannot silently turn a handled case back into a raw exception
+/// on a user's screen.
+const Set<String> kRecordingUnsupportedCodes = <String>{
+  'cameraNotSupported',
+  'notSupported',
+};
+
+/// Shown when the browser has no usable MediaRecorder.
+///
+/// Says what to do next instead of apologising, because there IS a complete
+/// path forward: the file-pick intake runs the identical analysis.
+const String kRecordingUnsupportedMessage =
+    'This browser cannot record video. Film the swing with your normal camera '
+    'app and choose the file below instead — it is analysed exactly the same '
+    'way.';
+
+/// Shown when a clip was captured but is not in a container we can send.
+const String kRecordedFormatUnusableMessage =
+    'This device recorded the swing in a format the analyser cannot read. '
+    'Film it with your normal camera app and choose the file instead.';
+
+/// PURE. True when [error] means video recording is unavailable here.
+///
+/// Takes `Object` rather than a typed exception because the failure arrives in
+/// more than one shape. `CameraController.startVideoRecording` converts a
+/// `PlatformException` into a `CameraException`, but `camera_web`'s own
+/// `startVideoCapturing` is not `async` and returns `camera.startVideoRecording()`
+/// without awaiting it, so a `CameraWebException` raised inside that future
+/// escapes its `try` untranslated and arrives here as itself. Matching on the
+/// string is the only way to catch that third shape without importing
+/// `camera_web`, which is a web-only package and would not compile for Android.
+bool isRecordingUnsupportedError(Object error) {
+  final String? code = switch (error) {
+    final CameraException e => e.code,
+    final PlatformException e => e.code,
+    _ => null,
+  };
+  if (code != null && kRecordingUnsupportedCodes.contains(code)) return true;
+
+  // Untranslated CameraWebException: its toString carries the code and the
+  // description listing the mime types the browser refused.
+  final String text = error.toString();
+  return text.contains('cameraNotSupported') ||
+      text.contains('does not support any of the following video types');
+}
+
+/// PURE. The message to show when recording fails to start.
+///
+/// The unsupported case gets the fallback wording; everything else keeps the
+/// platform's own description, which for a real camera fault is more useful
+/// than anything this app could invent.
+String recordingFailureMessage(Object error) {
+  if (isRecordingUnsupportedError(error)) return kRecordingUnsupportedMessage;
+  if (error is CameraException) {
+    return error.description ?? 'Recording could not start.';
+  }
+  return 'Recording could not start. ($error)';
+}
+
 /// Camera capture screen: shot-type and handedness hints, framing guidance,
 /// optional court calibration, and a capped recording.
 ///
@@ -76,6 +152,20 @@ class _RecordScreenState extends State<RecordScreen> {
   bool _isRecording = false;
   Duration _elapsed = Duration.zero;
   Timer? _ticker;
+
+  /// Set once the browser has told us it cannot record. Recording controls are
+  /// withdrawn rather than left to fail again, and the file-pick path is
+  /// promoted in their place.
+  bool _recordingUnsupported = false;
+
+  /// True while the file chooser is open or the chosen file is being read and
+  /// measured. Drives a real spinner over a real wait — there is no percentage,
+  /// because nothing here reports one.
+  bool _picking = false;
+
+  /// Why the last chosen file was refused, shown inline next to the button that
+  /// produced it. Null when there is nothing to say.
+  String? _pickError;
 
   ShotType _shotType = ShotType.forehandTopspin;
   /// NO DEFAULT, deliberately. A defaulted hint is indistinguishable from a
@@ -157,9 +247,17 @@ class _RecordScreenState extends State<RecordScreen> {
 
     try {
       await controller.startVideoRecording();
-    } on CameraException catch (e) {
+    } catch (e) {
+      // Deliberately catches Object: on web the failure can arrive as a
+      // CameraException, a PlatformException or an untranslated
+      // CameraWebException. See [isRecordingUnsupportedError].
       if (!mounted) return;
-      _showSnack(e.description ?? 'Recording could not start.');
+      final bool unsupported = isRecordingUnsupportedError(e);
+      setState(() {
+        _recordingUnsupported = unsupported;
+        if (unsupported) _pickError = null;
+      });
+      if (!unsupported) _showSnack(recordingFailureMessage(e));
       return;
     }
 
@@ -204,11 +302,67 @@ class _RecordScreenState extends State<RecordScreen> {
       _elapsed = Duration.zero;
     });
 
+    // Bytes, not a path. On web `XFile.path` is a `blob:` URL that no file API
+    // can open, and the upload leg needs the bytes regardless.
+    final Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('The recorded clip could not be read. ($e)');
+      return;
+    }
+
+    // The recorder's container, read back out of what it actually wrote:
+    // Android Chrome writes WebM, iOS Safari writes MP4, the native plugins
+    // write MP4 or QuickTime. None of that is assumed here.
+    final String? contentType = sniffVideoContentType(bytes);
+    if (!mounted) return;
+    if (contentType == null) {
+      setState(() => _pickError = kRecordedFormatUnusableMessage);
+      return;
+    }
+
+    await _startAnalysis(
+      VideoClip(
+        bytes: bytes,
+        contentType: contentType,
+        durationSeconds: recorded.inMilliseconds / 1000.0,
+        displayName: 'Recorded swing',
+      ),
+    );
+  }
+
+  /// Opens the platform file chooser, then hands the result to the same
+  /// downstream flow a recording uses.
+  Future<void> _pickVideo() async {
+    if (_handedness == null || _picking || _isRecording) return;
+    setState(() {
+      _picking = true;
+      _pickError = null;
+    });
+
+    final VideoPickOutcome outcome = await pickVideoClip();
+    if (!mounted) return;
+    setState(() => _picking = false);
+
+    switch (outcome) {
+      case VideoPickCancelled():
+        return;
+      case VideoPickRejected(message: final String message):
+        setState(() => _pickError = message);
+      case VideoPickSucceeded(clip: final VideoClip clip):
+        await _startAnalysis(clip);
+    }
+  }
+
+  /// THE single downstream entry point. Both intake paths end here, so
+  /// calibration, hints and analysis behave identically whichever was used.
+  Future<void> _startAnalysis(VideoClip clip) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (BuildContext context) => AnalyzingScreen(
-          videoPath: file.path,
-          durationSeconds: recorded.inMilliseconds / 1000.0,
+          clip: clip,
           handednessHint: _handedness!,
           labelHint: _shotType,
           calibration: _calibration,
@@ -303,7 +457,7 @@ class _RecordScreenState extends State<RecordScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
-                'Choose your racket hand to start recording.',
+                'Choose your racket hand to record or choose a file.',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.error),
               ),
@@ -385,33 +539,126 @@ class _RecordScreenState extends State<RecordScreen> {
     // until the racket hand is an explicit user choice rather than a default.
     final bool ready = _controller != null &&
         _controller!.value.isInitialized &&
-        _handedness != null;
+        _handedness != null &&
+        !_picking;
     final Duration remaining = kMaxRecordingDuration - _elapsed;
 
     return Column(
       children: <Widget>[
-        if (_isRecording)
-          LinearProgressIndicator(
-            value: (_elapsed.inMilliseconds /
-                    kMaxRecordingDuration.inMilliseconds)
-                .clamp(0.0, 1.0),
+        if (!_recordingUnsupported) ...<Widget>[
+          if (_isRecording)
+            LinearProgressIndicator(
+              value: (_elapsed.inMilliseconds /
+                      kMaxRecordingDuration.inMilliseconds)
+                  .clamp(0.0, 1.0),
+            ),
+          if (_isRecording) const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: !ready
+                ? null
+                : (_isRecording ? _stopRecording : _startRecording),
+            icon: Icon(_isRecording ? Icons.stop : Icons.fiber_manual_record),
+            label: Text(
+              _isRecording
+                  ? 'Stop (${remaining.inSeconds.clamp(0, 15)}s left)'
+                  : 'Record',
+            ),
           ),
-        if (_isRecording) const SizedBox(height: 8),
-        FilledButton.icon(
-          onPressed:
-              !ready ? null : (_isRecording ? _stopRecording : _startRecording),
-          icon: Icon(_isRecording ? Icons.stop : Icons.fiber_manual_record),
-          label: Text(
-            _isRecording
-                ? 'Stop (${remaining.inSeconds.clamp(0, 15)}s left)'
-                : 'Record',
+          const SizedBox(height: 6),
+          Text(
+            'Recording stops automatically at '
+            '${kMaxRecordingDuration.inSeconds} seconds.',
+            style: theme.textTheme.bodySmall,
           ),
-        ),
+        ],
+        if (!_isRecording) ...<Widget>[
+          const SizedBox(height: 20),
+          _buildFileIntake(theme),
+        ],
+      ],
+    );
+  }
+
+  /// The second way in: a video the user already has.
+  ///
+  /// Weighting differs by platform, and only by platform. On a phone app the
+  /// live camera is the point, so this stays a secondary outlined action. On
+  /// web — and on any build where the browser has just told us it cannot record
+  /// — it is the primary way in and is drawn as one, because presenting a
+  /// disabled record button as the main action would be lying about what works.
+  Widget _buildFileIntake(ThemeData theme) {
+    final bool canPick = _handedness != null && !_picking && !_isRecording;
+    final bool promote = kIsWeb || _recordingUnsupported;
+    final String? error = _pickError;
+
+    final Widget button = promote
+        ? FilledButton.tonalIcon(
+            onPressed: canPick ? _pickVideo : null,
+            icon: const Icon(Icons.video_library_outlined),
+            label: const Text('Choose a video file'),
+          )
+        : OutlinedButton.icon(
+            onPressed: canPick ? _pickVideo : null,
+            icon: const Icon(Icons.video_library_outlined),
+            label: const Text('Choose a video file'),
+          );
+
+    return Column(
+      children: <Widget>[
+        if (_recordingUnsupported) ...<Widget>[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.errorContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Icon(Icons.videocam_off_outlined,
+                    size: 20, color: theme.colorScheme.onErrorContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    kRecordingUnsupportedMessage,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (_picking) ...<Widget>[
+          const SizedBox(
+            height: 20,
+            width: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(height: 8),
+          Text('Reading the video…', style: theme.textTheme.bodySmall),
+          const SizedBox(height: 8),
+        ],
+        button,
         const SizedBox(height: 6),
         Text(
-          'Recording stops automatically at 15 seconds.',
+          'MP4, MOV or WebM, up to ${formatMegabytes(kMaxUploadBytes)} and '
+          '${kMaxClipSeconds.toStringAsFixed(0)} seconds. A chosen file is '
+          'analysed without ball speed — calibration needs the live camera.',
+          textAlign: TextAlign.center,
           style: theme.textTheme.bodySmall,
         ),
+        if (error != null) ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            error,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.error),
+          ),
+        ],
       ],
     );
   }
