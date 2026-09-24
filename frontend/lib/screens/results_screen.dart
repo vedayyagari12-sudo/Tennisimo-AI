@@ -603,7 +603,12 @@ class _RangeBar extends StatelessWidget {
                 child: Container(
                   height: 4,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
+                    // Was `primaryContainer`, which on the dark theme is
+                    // DARKER than the track behind it — the ideal band read as
+                    // a hole rather than a highlight. A translucent primary
+                    // keeps it a dim green segment that the solid primary
+                    // value marker still stands clear of.
+                    color: theme.colorScheme.primary.withValues(alpha: 0.38),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),

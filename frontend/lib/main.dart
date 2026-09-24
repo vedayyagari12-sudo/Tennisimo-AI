@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'screens/history_screen.dart';
+import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
-import 'screens/record_screen.dart';
+import 'theme/app_theme.dart';
 
 /// REPLACE ME: the Supabase project URL, e.g. `https://your-ref.supabase.co`
 const String supabaseUrl = 'https://qrjpheqayeudazcrqxpl.supabase.co';
@@ -28,10 +28,7 @@ class TennisFormApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'TennisForm AI',
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF2E7D32),
-        useMaterial3: true,
-      ),
+      theme: buildAppTheme(),
       home: const AuthGate(),
     );
   }
@@ -48,57 +45,8 @@ class AuthGate extends StatelessWidget {
       builder: (BuildContext context, AsyncSnapshot<AuthState> snapshot) {
         final Session? session = snapshot.data?.session ??
             Supabase.instance.client.auth.currentSession;
-        return session == null ? const LoginScreen() : const HomeScreen();
+        return session == null ? const LoginScreen() : const HomeShell();
       },
-    );
-  }
-}
-
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('TennisForm AI'),
-        actions: <Widget>[
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () => Supabase.instance.client.auth.signOut(),
-          ),
-        ],
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              FilledButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (BuildContext context) => const RecordScreen(),
-                  ),
-                ),
-                icon: const Icon(Icons.videocam),
-                label: const Text('Record a swing'),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (BuildContext context) => const HistoryScreen(),
-                  ),
-                ),
-                icon: const Icon(Icons.history),
-                label: const Text('History'),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
