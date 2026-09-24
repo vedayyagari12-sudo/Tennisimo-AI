@@ -1,15 +1,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Required by the Record screen to capture the user's swing video.
-         The camera_android_camerax plugin also declares these in its own
-         manifest, but they are declared explicitly here so the app's full
+    <!-- CAMERA is required by the Record screen to capture the user's swing
+         video. The camera_android_camerax plugin also declares it in its own
+         manifest, but it is declared explicitly here so the app's full
          permission surface is visible in this file.
+
+         RECORD_AUDIO is deliberately NOT declared, and this is not an
+         oversight: the Record screen builds its CameraController with
+         `enableAudio: false` (see lib/screens/record_screen.dart), and
+         camera_android_camerax gates its runtime microphone request on that
+         flag, so the app never requests RECORD_AUDIO. The analysis pipeline is
+         purely visual and has no audio path. Declaring an unused permission is
+         a store-review risk, so do not add it back without first changing
+         `enableAudio`.
 
          No storage permission is declared: camera_android_camerax writes the
          recording to app-private storage, and it already contributes
          WRITE_EXTERNAL_STORAGE (capped at android:maxSdkVersion="28") via
          manifest merging for pre-scoped-storage devices. -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application
         android:label="tennisform_ai"
         android:name="${applicationName}"
