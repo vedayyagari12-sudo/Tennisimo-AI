@@ -63,6 +63,56 @@ HISTORY_MAX_LIMIT: Final[int] = 100
 #: comparison (DATABASE_SETUP.md Part 2.1).
 STORAGE_BUCKET_DEFAULT: Final[str] = "swing-videos"
 
+#: Environment variable holding the browser CORS allowlist: a comma-separated
+#: list of scheme+host+port origins, e.g.
+#: ``https://app.example.com,http://localhost:5173``.
+#:
+#: FAIL CLOSED. Unset, empty, or all-blank means an EMPTY allowlist: no browser
+#: origin is permitted. There is deliberately no ``["*"]`` default -- a wildcard
+#: default would silently expose a bearer-token API to every page on the web the
+#: moment someone forgot to set the variable, and the failure mode of the safe
+#: default (a browser CORS error in the console on day one) is loud and
+#: five-seconds-to-diagnose, while the failure mode of the unsafe default is
+#: silent and permanent.
+CORS_ALLOWED_ORIGINS_ENV: Final[str] = "CORS_ALLOWED_ORIGINS"
+
+#: Methods the API actually serves: ``GET`` (``/v1/analyses``,
+#: ``/v1/analyses/{id}``) and ``POST`` (``/v1/uploads/ticket``,
+#: ``/v1/analyses``). ``OPTIONS`` is answered by the CORS middleware itself and
+#: must not be listed. No route uses PUT/PATCH/DELETE, so a wildcard here would
+#: only advertise verbs that return 405.
+CORS_ALLOWED_METHODS: Final[tuple[str, ...]] = ("GET", "POST")
+
+#: Request headers the client actually sends. ``Authorization`` carries the
+#: Supabase access token (Stage 2); ``Content-Type`` is needed because a JSON
+#: body is not a CORS-simple content type and so is preflighted.
+CORS_ALLOWED_HEADERS: Final[tuple[str, ...]] = ("Authorization", "Content-Type")
+
+#: Response headers browser JS must be able to READ. Without an explicit
+#: expose list the fetch/XHR layer hides every non-CORS-safelisted response
+#: header, so ``X-Request-Id`` (the correlation id on every response, including
+#: the error envelope) and ``Retry-After`` (sent with ``429 queue_full``) would
+#: be invisible to a web client even though the server sent them.
+CORS_EXPOSED_HEADERS: Final[tuple[str, ...]] = ("X-Request-Id", "Retry-After")
+
+
+def parse_cors_origins(raw: str | None) -> list[str]:
+    """Split a comma-separated origin list, trimming blanks, preserving order.
+
+    ``None``, ``""`` and ``",  ,"`` all yield ``[]`` -- the fail-closed empty
+    allowlist described on :data:`CORS_ALLOWED_ORIGINS_ENV`. Duplicates are
+    collapsed so the emitted ``Access-Control-Allow-Origin`` match set has no
+    redundant entries.
+    """
+    if not raw:
+        return []
+    origins: list[str] = []
+    for chunk in raw.split(","):
+        origin = chunk.strip()
+        if origin and origin not in origins:
+            origins.append(origin)
+    return origins
+
 
 class MissingSettingError(RuntimeError):
     """A required environment variable is absent or empty.

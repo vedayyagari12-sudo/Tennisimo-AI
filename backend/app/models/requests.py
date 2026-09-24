@@ -47,9 +47,25 @@ from app.models.enums import (
 
 #: Accepted upload MIME types and the extension each maps to. The server
 #: chooses the path, so this map is also the extension authority (Stage 1).
+#:
+#: The three entries are the three things a real capture surface emits:
+#: ``video/mp4`` from the Flutter camera plugin and from iOS Safari's
+#: MediaRecorder, ``video/quicktime`` from an iOS photo-library pick, and
+#: ``video/webm`` from Android Chrome's MediaRecorder, which has no MP4 muxer
+#: and produces Matroska/WebM with a VP8 or VP9 video track.
+#:
+#: ``video/webm`` is listed only because the decode path was checked rather than
+#: assumed: Stage 5 (``app/pose/video_io.py``) and Stage 10
+#: (``app/ball/frames.py``) both demux with PyAV, whose bundled FFmpeg is built
+#: ``--enable-libvpx`` and carries the matroska/webm demuxer on both the local
+#: Windows wheel and the manylinux wheel the container installs. Accepting a
+#: MIME type the pipeline cannot decode would move the failure from a clear
+#: 400 at the ticket endpoint to a DECODE_FAILED after the user has waited out
+#: an upload. See ``tests/unit/pose/test_webm_decode.py``.
 ALLOWED_CONTENT_TYPES: Final[dict[str, str]] = {
     "video/mp4": "mp4",
     "video/quicktime": "mov",
+    "video/webm": "webm",
 }
 
 #: Stage 3 calibration gates. Named so no other module holds the literals.
@@ -81,7 +97,14 @@ class UploadTicketRequest(BaseModel):
 
 
 class UploadTicketResponse(BaseModel):
-    storage_path: str = Field(description="Canonical path: swing-videos/{user_id}/{uuid4}.mp4")
+    storage_path: str = Field(
+        description=(
+            "Canonical path: swing-videos/{user_id}/{uuid4}.{ext}, where {ext} is "
+            "the extension ALLOWED_CONTENT_TYPES maps the requested content_type "
+            "to (mp4, mov or webm). The server chooses the whole path; the client "
+            "echoes it back verbatim on POST /v1/analyses."
+        )
+    )
     upload_url: str = Field(description="Supabase Storage signed upload URL.")
     upload_token: str = Field(description="Token to pass to the Supabase Storage client.")
     expires_at: datetime = Field(description="UTC expiry of the signed URL.")

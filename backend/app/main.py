@@ -15,18 +15,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.api import routes_analyses, routes_uploads
 from app.api.auth import SupabaseJwtVerifier
 from app.api.errors import RequestIdMiddleware, register_exception_handlers
-from app.config import get_settings
+from app.config import (
+    CORS_ALLOWED_HEADERS,
+    CORS_ALLOWED_METHODS,
+    CORS_ALLOWED_ORIGINS_ENV,
+    CORS_EXPOSED_HEADERS,
+    get_settings,
+    parse_cors_origins,
+)
 from app.services.orchestrator import JobOrchestrator
 from app.services.repository import SupabaseRepository
 from app.services.storage import SupabaseStorageClient
@@ -107,10 +116,45 @@ def create_app() -> FastAPI:
     # 1. Correlation id on EVERY response, including 2xx.
     app.add_middleware(RequestIdMiddleware)
 
-    # 2. The error envelope. Before any route, without exception.
+    # 2. CORS. Added AFTER RequestIdMiddleware on purpose: Starlette's
+    #    `add_middleware` inserts at position 0 and the stack is built so that
+    #    the LAST-added class ends up OUTERMOST. CORS must be outermost, or a
+    #    preflight OPTIONS never reaches it and -- worse -- an error response
+    #    produced by an inner layer goes back without the
+    #    `Access-Control-Allow-Origin` header, which the browser turns into an
+    #    opaque network failure instead of the flat error envelope the client
+    #    knows how to render.
+    app.add_middleware(
+        CORSMiddleware,
+        # Read from the raw environment rather than `get_settings()` so that
+        # importing this module still does not require SUPABASE_URL et al. to be
+        # populated (see `lifespan`). Empty list == no origin allowed: the
+        # variable is not set, so nothing is permitted.
+        allow_origins=parse_cors_origins(os.environ.get(CORS_ALLOWED_ORIGINS_ENV)),
+        # FALSE, deliberately, and this is the decision the wildcard question
+        # hangs on. Auth here is a Supabase access token that the client puts in
+        # an `Authorization: Bearer ...` header (app/api/auth.py). That is an
+        # ordinary request header, not an ambient credential: it is attached by
+        # application code, not by the browser, so it crosses origins with
+        # `credentials: "omit"` just fine. Nothing in this API reads a cookie,
+        # sets a cookie, or uses TLS client certs -- the three things
+        # `allow_credentials=True` actually exists for. Leaving it False means
+        # the "`*` plus credentials" combination that browsers reject outright
+        # is unreachable by construction, and it removes the CSRF surface that
+        # credentialed CORS would add. If a cookie session is ever introduced,
+        # this flips to True and `allow_origins` must stay explicit -- never
+        # `["*"]`, and never `allow_origin_regex=".*"`, which is the same
+        # mistake wearing a hat.
+        allow_credentials=False,
+        allow_methods=list(CORS_ALLOWED_METHODS),
+        allow_headers=list(CORS_ALLOWED_HEADERS),
+        expose_headers=list(CORS_EXPOSED_HEADERS),
+    )
+
+    # 3. The error envelope. Before any route, without exception.
     register_exception_handlers(app)
 
-    # 3. Routes.
+    # 4. Routes.
     app.include_router(routes_uploads.router)
     app.include_router(routes_analyses.router)
 
