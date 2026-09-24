@@ -12,7 +12,14 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// The mark: a chartreuse ball with two seams and a green bolt through it.
+/// The mark: a ball with two seams and a bolt through it.
+///
+/// The two fills follow the build-time brand flavor: the ball takes
+/// [AppColors.ballAccent] and the bolt [AppColors.primary], so the default
+/// build draws a chartreuse ball with a green bolt and the alternate palette
+/// draws a yellow ball with a powder-blue bolt. The ball keeps the warm,
+/// ball-coloured token in both because a tennis ball that is not ball-coloured
+/// stops reading as a ball; the bolt is the accent that moves.
 ///
 /// The seams and the bolt's separation edge are painted in [background], which
 /// defaults to the theme surface — pass the card colour when the mark sits on
@@ -88,7 +95,7 @@ class AppLogoPainter extends CustomPainter {
       centre,
       r,
       Paint()
-        ..color = AppColors.ballChartreuse
+        ..color = AppColors.ballAccent
         ..isAntiAlias = true,
     );
 

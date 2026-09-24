@@ -32,18 +32,18 @@ CategoryScore _category({
 void main() {
   group('scoreColor ramp', () {
     test('the boundaries fall on the documented side', () {
-      expect(scoreColor(100), AppColors.primary);
-      expect(scoreColor(80), AppColors.primary);
+      expect(scoreColor(100), AppColors.scoreHigh);
+      expect(scoreColor(80), AppColors.scoreHigh);
       expect(scoreColor(79.9), AppColors.scoreMid);
       expect(scoreColor(60), AppColors.scoreMid);
-      expect(scoreColor(59.9), AppColors.error);
-      expect(scoreColor(0), AppColors.error);
+      expect(scoreColor(59.9), AppColors.scoreLow);
+      expect(scoreColor(0), AppColors.scoreLow);
     });
 
     test('a null score is muted, never the "bad" red', () {
       // Null means not measurable. It is not a failing score.
       expect(scoreColor(null), AppColors.onSurfaceVariant);
-      expect(scoreColor(null), isNot(AppColors.error));
+      expect(scoreColor(null), isNot(AppColors.scoreLow));
     });
   });
 

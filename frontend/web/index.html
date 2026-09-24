@@ -18,7 +18,26 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description"
+        content="Analyse your tennis swing from a phone video.">
+
+  <!--
+    Pre-boot chrome. A static file cannot read a --dart-define, so this is
+    the one colour both brand flavors share: a hue-neutral near-black that
+    sits within ~2.7 CIE76 of each flavor's surface, i.e. indistinguishable
+    from either at this luminance. Painting it here, before
+    flutter_bootstrap.js runs, is what stops the browser flashing its
+    default white canvas on first paint.
+  -->
+  <meta name="theme-color" content="#0E1415">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background-color: #0E1415;
+    }
+  </style>
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">

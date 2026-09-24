@@ -40,7 +40,7 @@ void main() {
             x: 62.5,
             y: 62.5,
             radius: 50,
-            color: AppColors.ballChartreuse,
+            color: AppColors.ballAccent,
           )
           ..arc(
             rect: const Rect.fromLTRB(-37.5, 0, 45, 125),
@@ -70,7 +70,7 @@ void main() {
       expect(
         find.byType(AppLogo),
         paints
-          ..circle(color: AppColors.ballChartreuse)
+          ..circle(color: AppColors.ballAccent)
           ..arc(color: AppColors.surfaceContainer)
           ..arc(color: AppColors.surfaceContainer)
           ..path(color: AppColors.surfaceContainer)
