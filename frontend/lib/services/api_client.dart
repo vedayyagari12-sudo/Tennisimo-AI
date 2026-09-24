@@ -14,11 +14,24 @@ import '../models/enums.dart';
 /// HTTPS URL, so it is not a secret — same category as [supabaseUrl] in
 /// main.dart.
 ///
-/// There is currently NO build-time override for this value: the app defines
-/// no `--dart-define` / `String.fromEnvironment` hook anywhere, so pointing the
-/// client at a different backend (local dev, a future staging environment)
-/// means editing this literal. That gap is known and tracked separately.
-const String baseUrl = 'https://tennisform-api-143709056949.us-east1.run.app';
+/// The value is overridable at BUILD time via the `API_BASE_URL`
+/// `--dart-define`, so pointing the client at a different backend (local dev, a
+/// future staging environment) no longer means editing this literal:
+///
+/// ```
+/// flutter run   --dart-define=API_BASE_URL=http://localhost:8080
+/// flutter build apk --dart-define=API_BASE_URL=https://staging.example.com
+/// flutter test  --dart-define=API_BASE_URL=https://staging.example.com
+/// ```
+///
+/// With no flag passed, [defaultValue] applies and the app talks to the real
+/// production endpoint exactly as before. Note this is a COMPILE-time constant
+/// baked in by the flag — not `Platform.environment`, which would only see the
+/// build machine's shell and is not available on every target anyway.
+const String baseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://tennisform-api-143709056949.us-east1.run.app',
+);
 
 /// Poll cadence, per PIPELINE.md Stage 19 / Appendix A.
 ///

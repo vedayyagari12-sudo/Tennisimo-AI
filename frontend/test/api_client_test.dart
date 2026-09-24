@@ -268,5 +268,24 @@ void main() {
       expect(parsed.scheme, 'https');
       expect(parsed.host, isNotEmpty);
     });
+
+    // Reads the SAME `--dart-define` key independently of api_client.dart, so
+    // the assertion below is not just the constant compared against itself.
+    //
+    // Run with no flag, this pins the default (production stays production).
+    // Run as
+    //   flutter test --dart-define=API_BASE_URL=https://staging.example.com
+    // it is the only thing that actually proves the override mechanism works:
+    // the constant must come back as the injected value, not the default.
+    // A compile-time constant's *source* is not inspectable at runtime, so a
+    // second test invocation carrying the flag is the real coverage here.
+    test('baseUrl resolves from the API_BASE_URL dart-define', () {
+      const String injected = String.fromEnvironment('API_BASE_URL');
+      if (injected.isEmpty) {
+        expect(baseUrl, 'https://tennisform-api-143709056949.us-east1.run.app');
+      } else {
+        expect(baseUrl, injected);
+      }
+    });
   });
 }
