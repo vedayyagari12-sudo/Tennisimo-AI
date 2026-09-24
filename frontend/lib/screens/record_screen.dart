@@ -11,6 +11,51 @@ import 'calibration_screen.dart';
 /// Hard recording cap. Well under the server's 60 s intake limit.
 const Duration kMaxRecordingDuration = Duration(seconds: 15);
 
+/// Turns a [CameraException] from camera setup into a user-facing message.
+///
+/// Pure: code in, string out. No I/O, no widget dependency, so the
+/// permission-denial wording is unit-testable without a camera or a device.
+///
+/// The plugin passes the platform's error code through untouched
+/// (`camera` 0.11.4 `CameraController._initializeWithDescription` rethrows as
+/// `CameraException(e.code, e.message)`), so these are the literal codes
+/// emitted by `camera_android_camerax` `CameraPermissionsManager` and
+/// `camera_avfoundation` `CameraPermissionManager`.
+///
+/// Only the camera-permission family is handled. The audio family
+/// (`AudioAccessDenied` and friends) is deliberately absent: both platforms
+/// gate the microphone request on `enableAudio`, which this screen sets to
+/// false, so those codes cannot be produced here. See [_setUpCamera].
+///
+/// Everything else — no camera hardware, camera held by another app, an
+/// unexpected platform failure — keeps the previous generic behaviour of
+/// showing the platform's own description.
+String cameraSetupErrorMessage(CameraException e) {
+  switch (e.code) {
+    case 'CameraAccessDenied':
+      // Android: the user dismissed or denied the runtime dialog; asking again
+      // normally re-prompts. iOS: denied at the one and only prompt, after
+      // which the OS will not ask again. The wording has to serve both.
+      return 'TennisForm AI needs camera access to record your swing. '
+          'Allow camera access when asked, or enable it for TennisForm AI in '
+          'your device Settings, then try again.';
+    case 'CameraAccessDeniedWithoutPrompt':
+      // iOS only, and terminal: the OS will not show the prompt again, so
+      // retrying in-app cannot succeed. Send the user to Settings.
+      return 'Camera access for TennisForm AI is turned off. Open your device '
+          'Settings > TennisForm AI and turn on Camera, then come back. '
+          'Trying again here will not bring the permission prompt back.';
+    case 'CameraAccessRestricted':
+      // iOS only: Screen Time or a device-management profile. The user may not
+      // even be able to grant it themselves, so do not promise a retry works.
+      return 'Camera access is restricted on this device, usually by Screen '
+          'Time or a device management profile. It has to be allowed in '
+          'device Settings before TennisForm AI can record.';
+    default:
+      return e.description ?? 'The camera could not be started.';
+  }
+}
+
 /// Camera capture screen: shot-type and handedness hints, framing guidance,
 /// optional court calibration, and a capped recording.
 ///
@@ -71,6 +116,11 @@ class _RecordScreenState extends State<RecordScreen> {
         orElse: () => cameras.first,
       );
       // ResolutionPreset only; frame rate is left entirely to the device.
+      //
+      // `enableAudio: false` also means neither platform ever requests the
+      // microphone: camerax asks for CAMERA only, and avfoundation skips
+      // `requestAudioPermission` entirely. So no Audio* error code can reach
+      // the catch below. See [cameraSetupErrorMessage].
       final CameraController controller = CameraController(
         camera,
         ResolutionPreset.high,
@@ -88,7 +138,7 @@ class _RecordScreenState extends State<RecordScreen> {
     } on CameraException catch (e) {
       if (!mounted) return;
       setState(() {
-        _cameraError = e.description ?? 'The camera could not be started.';
+        _cameraError = cameraSetupErrorMessage(e);
         _initializing = false;
       });
     } catch (e) {
