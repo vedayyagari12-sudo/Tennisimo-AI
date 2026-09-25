@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
+import '../widgets/content_width.dart';
 
 /// Court calibration: tap the two ends of a court reference line on a frozen
 /// preview, confirm the drawn segment, and hand back a [BallSpeedCalibration].
@@ -108,92 +109,94 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: <Widget>[
-          Text(
-            'Optional. Calibration is only used for the ball-speed reading — '
-            'skip it and your swing analysis is exactly the same.',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 16),
-          Text('Reference line', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          ...CourtReference.values.map((CourtReference reference) {
-            final bool selected = _reference == reference;
-            return ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(selected
-                  ? Icons.radio_button_checked
-                  : Icons.radio_button_unchecked),
-              title: Text(reference.label),
-              subtitle: Text(reference.description),
-              selected: selected,
-              onTap: () => setState(() => _reference = reference),
-            );
-          }),
-          const SizedBox(height: 8),
-          Text(
-            _pointA == null
-                ? 'Tap the first end of the line on the image below.'
-                : (_pointB == null
-                    ? 'Now tap the other end.'
-                    : 'Tap again to start over.'),
-            style: theme.textTheme.titleSmall,
-          ),
-          const SizedBox(height: 8),
-          _buildTapSurface(),
-          if (tooClose) ...<Widget>[
+      body: ContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: <Widget>[
+            Text(
+              'Optional. Calibration is only used for the ball-speed reading — '
+              'skip it and your swing analysis is exactly the same.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            Text('Reference line', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            ...CourtReference.values.map((CourtReference reference) {
+              final bool selected = _reference == reference;
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked),
+                title: Text(reference.label),
+                subtitle: Text(reference.description),
+                selected: selected,
+                onTap: () => setState(() => _reference = reference),
+              );
+            }),
             const SizedBox(height: 8),
             Text(
-              'Those two taps are too close together to give a usable scale. '
-              'Tap the full length of the line.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.error),
+              _pointA == null
+                  ? 'Tap the first end of the line on the image below.'
+                  : (_pointB == null
+                      ? 'Now tap the other end.'
+                      : 'Tap again to start over.'),
+              style: theme.textTheme.titleSmall,
             ),
-          ],
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'Moving the phone after calibrating invalidates it. If you move '
-                'the camera, tap the two points again.',
-                style: theme.textTheme.bodyMedium,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: FilledButton(
-                  onPressed: (bothTapped && !tooClose) ? _confirm : null,
-                  child: const Text('Use these points'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _skip,
-                  child: const Text('Skip calibration'),
-                ),
+            const SizedBox(height: 8),
+            _buildTapSurface(),
+            if (tooClose) ...<Widget>[
+              const SizedBox(height: 8),
+              Text(
+                'Those two taps are too close together to give a usable scale. '
+                'Tap the full length of the line.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error),
               ),
             ],
-          ),
-          const SizedBox(height: 8),
-          Center(
-            child: TextButton(
-              onPressed: bothTapped
-                  ? () => setState(() {
-                        _pointA = null;
-                        _pointB = null;
-                      })
-                  : null,
-              child: const Text('Clear taps'),
+            const SizedBox(height: 16),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Moving the phone after calibrating invalidates it. If you move '
+                  'the camera, tap the two points again.',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: FilledButton(
+                    onPressed: (bothTapped && !tooClose) ? _confirm : null,
+                    child: const Text('Use these points'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _skip,
+                    child: const Text('Skip calibration'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: TextButton(
+                onPressed: bothTapped
+                    ? () => setState(() {
+                          _pointA = null;
+                          _pointB = null;
+                        })
+                    : null,
+                child: const Text('Clear taps'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

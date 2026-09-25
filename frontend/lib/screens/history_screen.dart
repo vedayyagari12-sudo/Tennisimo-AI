@@ -4,6 +4,7 @@ import '../models/analysis_response.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
+import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/section_header.dart';
 import '../widgets/trend_chart.dart';
@@ -74,7 +75,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     if (!result.isOk) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.failure!.plainLanguage)),
+        SnackBar(content: Text(result.failure!.plainLanguageWithDebugDetail)),
       );
       return;
     }
@@ -102,9 +103,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: RefreshIndicator(
-          onRefresh: _load,
-          child: _buildBody(),
+        child: ContentWidth(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: _buildBody(),
+          ),
         ),
       ),
     );
@@ -141,7 +144,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           EmptyState(
             icon: Icons.cloud_off,
             headline: 'Could not load your history',
-            supporting: failure.plainLanguage,
+            supporting: failure.plainLanguageWithDebugDetail,
             actionLabel: 'Try again',
             onAction: _load,
           ),

@@ -7,6 +7,7 @@ import '../models/ball_speed.dart';
 import '../models/coaching_feedback.dart';
 import '../models/enums.dart';
 import '../models/metric_score.dart';
+import '../widgets/content_width.dart';
 
 /// Renders one finished analysis.
 class ResultsScreen extends StatelessWidget {
@@ -31,58 +32,60 @@ class ResultsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Your swing')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: <Widget>[
-          // Sits above every number it qualifies, so a degraded analysis is
-          // never read as a normal one.
-          if (analysis.status == AnalysisStatus.partial) ...<Widget>[
-            const _PartialBanner(),
+      body: ContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: <Widget>[
+            // Sits above every number it qualifies, so a degraded analysis is
+            // never read as a normal one.
+            if (analysis.status == AnalysisStatus.partial) ...<Widget>[
+              const _PartialBanner(),
+              const SizedBox(height: 16),
+            ],
+            if (analysis.status == AnalysisStatus.unrecognized) ...<Widget>[
+              const _UnrecognizedStatusBanner(),
+              const SizedBox(height: 16),
+            ],
+            _ShotHeader(analysis: analysis),
             const SizedBox(height: 16),
-          ],
-          if (analysis.status == AnalysisStatus.unrecognized) ...<Widget>[
-            const _UnrecognizedStatusBanner(),
-            const SizedBox(height: 16),
-          ],
-          _ShotHeader(analysis: analysis),
-          const SizedBox(height: 16),
-          if (feedback != null && feedback.summary.isNotEmpty) ...<Widget>[
-            _SectionCard(
-              title: 'Coach summary',
-              child: Text(feedback.summary),
-            ),
-            const SizedBox(height: 16),
-          ],
-          ..._buildBallSpeed(context),
-          if (feedback != null && feedback.strengths.isNotEmpty) ...<Widget>[
-            _SectionCard(
-              title: 'What is working',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: feedback.strengths
-                    .map((String s) => _Bullet(text: s))
-                    .toList(),
+            if (feedback != null && feedback.summary.isNotEmpty) ...<Widget>[
+              _SectionCard(
+                title: 'Coach summary',
+                child: Text(feedback.summary),
               ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          if (feedback != null && feedback.improvements.isNotEmpty) ...<Widget>[
-            ...feedback.improvements.map(
-              (Improvement improvement) => Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: _ImprovementCard(improvement: improvement),
+              const SizedBox(height: 16),
+            ],
+            ..._buildBallSpeed(context),
+            if (feedback != null && feedback.strengths.isNotEmpty) ...<Widget>[
+              _SectionCard(
+                title: 'What is working',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: feedback.strengths
+                      .map((String s) => _Bullet(text: s))
+                      .toList(),
+                ),
               ),
-            ),
+              const SizedBox(height: 16),
+            ],
+            if (feedback != null && feedback.improvements.isNotEmpty) ...<Widget>[
+              ...feedback.improvements.map(
+                (Improvement improvement) => Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: _ImprovementCard(improvement: improvement),
+                ),
+              ),
+            ],
+            // Category summary first, individual metrics after: the categories
+            // are the breakdown of the overall score shown in the header above,
+            // so they read as the "why" of that number, and the metric list
+            // below is the detail behind them. It does not replace the metric
+            // list.
+            _CategoriesSection(categories: analysis.categories),
+            if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
+            _MetricsSection(metrics: analysis.metrics),
           ],
-          // Category summary first, individual metrics after: the categories
-          // are the breakdown of the overall score shown in the header above,
-          // so they read as the "why" of that number, and the metric list
-          // below is the detail behind them. It does not replace the metric
-          // list.
-          _CategoriesSection(categories: analysis.categories),
-          if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
-          _MetricsSection(metrics: analysis.metrics),
-        ],
+        ),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -94,9 +95,13 @@ class ApiFailure {
     this.errorCode,
     this.statusCode,
     this.retryable,
+    this.technicalDetail,
   });
 
   final ApiFailureKind kind;
+
+  /// Prose fit to put in front of a 15-year-old. NEVER contains an exception
+  /// class name, a stack blob, or a URL — those go in [technicalDetail].
   final String message;
   final String? errorCode;
   final int? statusCode;
@@ -108,10 +113,75 @@ class ApiFailure {
   /// simply omit the key.
   final bool? retryable;
 
+  /// The raw underlying cause — exception `toString()`, request URL and all.
+  ///
+  /// Kept, because it is the genuinely useful part when something breaks, but
+  /// it is NEVER part of [message] or [plainLanguage]: a Dart exception class
+  /// name and an internal Cloud Run URL are noise to a student and leak
+  /// infrastructure detail into the UI. It surfaces through
+  /// [plainLanguageWithDebugDetail], which reveals it in debug builds only.
+  final String? technicalDetail;
+
   /// Message fit for a user, resolving a known `error_code` to plain language.
   String get plainLanguage =>
       errorCodeToPlainLanguage(errorCode, fallback: message);
+
+  /// [plainLanguage], with [technicalDetail] appended in debug builds only.
+  ///
+  /// A [kDebugMode] gate was chosen over a "Details" disclosure control: the
+  /// audience for the detail is whoever is running `flutter run`, and a
+  /// permanent expander would add new surface to a designed screen for a string
+  /// no end user can act on. Release builds show the clean prose and nothing
+  /// else.
+  String get plainLanguageWithDebugDetail {
+    final String? detail = technicalDetail;
+    if (!kDebugMode || detail == null || detail.isEmpty) return plainLanguage;
+    return '$plainLanguage\n\n[debug] $detail';
+  }
 }
+
+/// Plain-language copy for "the request never got an answer from the server".
+///
+/// On the web this is deliberately vaguer than on mobile, and that vagueness is
+/// the honest reading of what the browser tells us. A cross-origin request the
+/// server does not allow and a genuinely dead network BOTH arrive here as an
+/// indistinguishable "Failed to fetch" — the browser hides the real cause from
+/// JavaScript by design. So "check your connection" on web confidently states
+/// something that is often false, and sends the user off to debug wifi that is
+/// working fine. No attempt is made to detect the cross-origin case; from here
+/// it cannot be detected, and claiming otherwise would be the same mistake
+/// again.
+///
+/// Mobile has no such opacity, the connection really is the likely cause there,
+/// and that copy is unchanged.
+///
+/// [isWeb] defaults to [kIsWeb] and is a parameter only so both branches are
+/// testable from the VM test runner.
+String unreachableServerMessage({
+  String lead = 'Could not reach the server.',
+  bool isWeb = kIsWeb,
+}) {
+  if (isWeb) {
+    return '$lead That might be your internet connection, or the server '
+        'might not be letting this page talk to it yet. Try again in a '
+        'minute.';
+  }
+  return '$lead Check your connection.';
+}
+
+/// The [ApiFailureKind.network] failure for a thrown [error].
+///
+/// One place, so no call site can go back to pasting `$e` into user-facing
+/// copy: the exception text lands in [ApiFailure.technicalDetail] instead.
+ApiFailure networkFailure(
+  Object error, {
+  String lead = 'Could not reach the server.',
+}) =>
+    ApiFailure(
+      kind: ApiFailureKind.network,
+      message: unreachableServerMessage(lead: lead),
+      technicalDetail: '$error',
+    );
 
 /// Success-or-failure wrapper. Exactly one of [data] / [failure] is non-null.
 class ApiResult<T> {
@@ -263,10 +333,7 @@ Future<ApiResult<UploadTicket>> requestUploadTicket({
       uploadToken: '${body['upload_token'] ?? ''}',
     ));
   } catch (e) {
-    return ApiResult<UploadTicket>.err(ApiFailure(
-      kind: ApiFailureKind.network,
-      message: 'Could not reach the server. Check your connection. ($e)',
-    ));
+    return ApiResult<UploadTicket>.err(networkFailure(e));
   }
 }
 
@@ -321,10 +388,7 @@ Future<ApiResult<CreateAnalysisResult>> createAnalysis({
       ballSpeedRequested: body['ball_speed_requested'] == true,
     ));
   } catch (e) {
-    return ApiResult<CreateAnalysisResult>.err(ApiFailure(
-      kind: ApiFailureKind.network,
-      message: 'Could not reach the server. Check your connection. ($e)',
-    ));
+    return ApiResult<CreateAnalysisResult>.err(networkFailure(e));
   }
 }
 
@@ -418,10 +482,7 @@ Future<ApiResult<PollUpdate>> fetchAnalysis(String analysisId) async {
       failure: jobFailure,
     ));
   } catch (e) {
-    return ApiResult<PollUpdate>.err(ApiFailure(
-      kind: ApiFailureKind.network,
-      message: 'Could not reach the server. Check your connection. ($e)',
-    ));
+    return ApiResult<PollUpdate>.err(networkFailure(e));
   }
 }
 
@@ -510,6 +571,9 @@ Future<ApiResult<AnalysisResponse>> pollUntilComplete(
             'check your history in a minute.'
         : 'Lost contact with the server while analysing. '
             '${lastTransient.message}',
+    // The last blip's raw cause is the most useful thing about this timeout,
+    // so it is carried forward rather than dropped.
+    technicalDetail: lastTransient?.technicalDetail,
   ));
 }
 
@@ -550,10 +614,7 @@ Future<ApiResult<List<AnalysisSummary>>> fetchHistory({int limit = 50}) async {
             AnalysisSummary.fromJson(e.cast<String, dynamic>()))
         .toList());
   } catch (e) {
-    return ApiResult<List<AnalysisSummary>>.err(ApiFailure(
-      kind: ApiFailureKind.network,
-      message: 'Could not reach the server. Check your connection. ($e)',
-    ));
+    return ApiResult<List<AnalysisSummary>>.err(networkFailure(e));
   }
 }
 

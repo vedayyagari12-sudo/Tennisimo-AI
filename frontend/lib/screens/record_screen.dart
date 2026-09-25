@@ -10,6 +10,7 @@ import '../models/enums.dart';
 import '../models/video_clip.dart';
 import '../services/video_file_picker.dart';
 import '../services/video_intake.dart';
+import '../widgets/content_width.dart';
 import 'analyzing_screen.dart';
 import 'calibration_screen.dart';
 
@@ -399,72 +400,74 @@ class _RecordScreenState extends State<RecordScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Record a swing')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: <Widget>[
-          const _SetupHintCard(),
-          const SizedBox(height: 16),
-          _buildPreview(theme),
-          const SizedBox(height: 16),
-          _buildRecordControls(theme),
-          const SizedBox(height: 24),
-          Text('Shot type', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 4),
-          Text(
-            'A hint for the analysis. The shot is still inferred from your '
-            'technique.',
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: ShotType.selectable.map((ShotType type) {
-              return ChoiceChip(
-                label: Text(type.label),
-                selected: _shotType == type,
-                onSelected: _isRecording
-                    ? null
-                    : (bool _) => setState(() => _shotType = type),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 24),
-          Text('Handedness', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
-          SegmentedButton<Handedness>(
-            segments: const <ButtonSegment<Handedness>>[
-              ButtonSegment<Handedness>(
-                value: Handedness.right,
-                label: Text('Right'),
-              ),
-              ButtonSegment<Handedness>(
-                value: Handedness.left,
-                label: Text('Left'),
-              ),
-            ],
-            emptySelectionAllowed: true,
-            selected: _handedness == null
-                ? const <Handedness>{}
-                : <Handedness>{_handedness!},
-            onSelectionChanged: _isRecording
-                ? null
-                : (Set<Handedness> selection) => setState(
-                    () => _handedness =
-                        selection.isEmpty ? null : selection.first),
-          ),
-          if (_handedness == null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Choose your racket hand to record or choose a file.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.error),
-              ),
+      body: ContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: <Widget>[
+            const _SetupHintCard(),
+            const SizedBox(height: 16),
+            _buildPreview(theme),
+            const SizedBox(height: 16),
+            _buildRecordControls(theme),
+            const SizedBox(height: 24),
+            Text('Shot type', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'A hint for the analysis. The shot is still inferred from your '
+              'technique.',
+              style: theme.textTheme.bodySmall,
             ),
-          const SizedBox(height: 24),
-          _buildCalibrationSection(theme),
-        ],
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: ShotType.selectable.map((ShotType type) {
+                return ChoiceChip(
+                  label: Text(type.label),
+                  selected: _shotType == type,
+                  onSelected: _isRecording
+                      ? null
+                      : (bool _) => setState(() => _shotType = type),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 24),
+            Text('Handedness', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            SegmentedButton<Handedness>(
+              segments: const <ButtonSegment<Handedness>>[
+                ButtonSegment<Handedness>(
+                  value: Handedness.right,
+                  label: Text('Right'),
+                ),
+                ButtonSegment<Handedness>(
+                  value: Handedness.left,
+                  label: Text('Left'),
+                ),
+              ],
+              emptySelectionAllowed: true,
+              selected: _handedness == null
+                  ? const <Handedness>{}
+                  : <Handedness>{_handedness!},
+              onSelectionChanged: _isRecording
+                  ? null
+                  : (Set<Handedness> selection) => setState(
+                      () => _handedness =
+                          selection.isEmpty ? null : selection.first),
+            ),
+            if (_handedness == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Choose your racket hand to record or choose a file.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.error),
+                ),
+              ),
+            const SizedBox(height: 24),
+            _buildCalibrationSection(theme),
+          ],
+        ),
       ),
     );
   }

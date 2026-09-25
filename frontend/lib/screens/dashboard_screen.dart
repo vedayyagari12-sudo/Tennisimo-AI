@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
+import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
@@ -114,7 +115,7 @@ class DashboardScreenState extends State<DashboardScreen> {
 
     if (!result.isOk) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.failure!.plainLanguage)),
+        SnackBar(content: Text(result.failure!.plainLanguageWithDebugDetail)),
       );
       return;
     }
@@ -142,9 +143,11 @@ class DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: RefreshIndicator(
-          onRefresh: _load,
-          child: _buildBody(),
+        child: ContentWidth(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: _buildBody(),
+          ),
         ),
       ),
     );
@@ -176,7 +179,7 @@ class DashboardScreenState extends State<DashboardScreen> {
           EmptyState(
             icon: Icons.cloud_off,
             headline: 'Could not load your sessions',
-            supporting: failure.plainLanguage,
+            supporting: failure.plainLanguageWithDebugDetail,
             actionLabel: 'Try again',
             onAction: _load,
           ),

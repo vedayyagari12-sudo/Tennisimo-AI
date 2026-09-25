@@ -8,6 +8,7 @@ import '../models/video_clip.dart';
 import '../services/api_client.dart';
 import '../services/supabase_storage.dart';
 import '../services/video_intake.dart';
+import '../widgets/content_width.dart';
 import 'results_screen.dart';
 
 /// Which half of the job broke, so the retry copy can say something true.
@@ -170,10 +171,12 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
     final ApiFailure? failure = _failure;
     return Scaffold(
       appBar: AppBar(title: const Text('Analysing')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: failure == null ? _buildProgress() : _buildError(failure),
+      body: ContentWidth(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: failure == null ? _buildProgress() : _buildError(failure),
+          ),
         ),
       ),
     );
@@ -226,7 +229,7 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
         ),
         const SizedBox(height: 12),
         Text(
-          failure.plainLanguage,
+          failure.plainLanguageWithDebugDetail,
           textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium,
         ),

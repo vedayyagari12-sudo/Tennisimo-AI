@@ -64,9 +64,6 @@ Future<ApiFailure?> uploadVideoToSignedUrl({
       message: 'Upload failed: ${e.message}',
     );
   } catch (e) {
-    return ApiFailure(
-      kind: ApiFailureKind.network,
-      message: 'Upload failed. Check your connection. ($e)',
-    );
+    return networkFailure(e, lead: 'Upload failed.');
   }
 }
