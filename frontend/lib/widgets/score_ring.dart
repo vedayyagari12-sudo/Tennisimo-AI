@@ -35,8 +35,11 @@ class ScoreRing extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final AppPalette palette = context.palette;
     final double? value = score;
-    final Color arcColor = scoreColor(value);
+    // The arc is a 12px-wide ring: a large filled area, so it takes the fill
+    // tier, not the text step the numeral beside it would use.
+    final Color arcColor = palette.scoreFillColor(value);
     final double target =
         value == null ? 0.0 : (value / 100).clamp(0.0, 1.0).toDouble();
 

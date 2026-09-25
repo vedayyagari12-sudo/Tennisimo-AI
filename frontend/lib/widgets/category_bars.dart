@@ -36,8 +36,12 @@ class _CategoryBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final AppPalette palette = context.palette;
     final double? score = category.score;
-    final Color colour = scoreColor(score);
+    // Two tiers, two roles: the numeral is a small mark on the card, the bar
+    // is a filled area. Using one step for both is what looks wrong first.
+    final Color numeralColour = palette.scoreColor(score);
+    final Color barColour = palette.scoreFillColor(score);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -58,7 +62,7 @@ class _CategoryBar extends StatelessWidget {
                   ? theme.textTheme.bodySmall
                       ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
                   : theme.textTheme.titleMedium?.copyWith(
-                      color: colour,
+                      color: numeralColour,
                       fontFeatures: kTabularFigures,
                     ),
             ),
@@ -74,7 +78,7 @@ class _CategoryBar extends StatelessWidget {
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
                 widthFactor: (score / 100).clamp(0.0, 1.0),
-                child: Container(color: colour),
+                child: Container(color: barColour),
               ),
             ),
           ),

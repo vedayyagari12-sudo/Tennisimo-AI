@@ -252,7 +252,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ? 'No scored session yet'
                       : 'Best score ${best.round()}',
                   style: theme.textTheme.titleMedium?.copyWith(
-                    color: scoreColor(best),
+                    color: context.palette.scoreColor(best),
                     fontFeatures: kTabularFigures,
                   ),
                 ),
@@ -399,15 +399,18 @@ class _ScoreChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final AppPalette palette = context.palette;
     final double? value = score;
-    final Color colour = scoreColor(value);
+    // Text tier for the numeral, fill tier for the wash behind it.
+    final Color colour = palette.scoreColor(value);
+    final Color wash = palette.scoreFillColor(value);
 
     return Container(
       width: 44,
       height: 44,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: colour.withValues(alpha: value == null ? 0.08 : 0.16),
+        color: wash.withValues(alpha: value == null ? 0.08 : 0.16),
         borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
       ),
       child: Text(

@@ -3,7 +3,13 @@ import 'dart:ui' show PictureRecorder;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
+import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/widgets/app_logo.dart';
+
+/// `_host` builds the dark theme, so the mark is painted from the dark set.
+/// These tokens are no longer `const` — brightness is a runtime value, so the
+/// palette cannot be — which is why the `const` came off the call sites below.
+final AppPalette _palette = paletteFor(kBrandFlavor, Brightness.dark);
 
 /// The mark has to be the *same drawing* as the launcher icon, so the geometry
 /// is asserted numerically rather than eyeballed: ball radius 0.400 of the
@@ -40,23 +46,23 @@ void main() {
             x: 62.5,
             y: 62.5,
             radius: 50,
-            color: AppColors.ballAccent,
+            color: _palette.ballAccent,
           )
           ..arc(
             rect: const Rect.fromLTRB(-37.5, 0, 45, 125),
-            color: AppColors.surface,
+            color: _palette.surface,
             strokeWidth: 3.5,
             style: PaintingStyle.stroke,
           )
           ..arc(
             rect: const Rect.fromLTRB(80, 0, 162.5, 125),
-            color: AppColors.surface,
+            color: _palette.surface,
             strokeWidth: 3.5,
             style: PaintingStyle.stroke,
           )
           // The oversized separation edge, then the bolt.
-          ..path(color: AppColors.surface)
-          ..path(color: AppColors.primary),
+          ..path(color: _palette.surface)
+          ..path(color: _palette.primaryFill),
       );
     });
 
@@ -64,17 +70,17 @@ void main() {
       WidgetTester tester,
     ) async {
       await tester.pumpWidget(
-        _host(const AppLogo(size: 100, background: AppColors.surfaceContainer)),
+        _host(AppLogo(size: 100, background: _palette.surfaceContainer)),
       );
 
       expect(
         find.byType(AppLogo),
         paints
-          ..circle(color: AppColors.ballAccent)
-          ..arc(color: AppColors.surfaceContainer)
-          ..arc(color: AppColors.surfaceContainer)
-          ..path(color: AppColors.surfaceContainer)
-          ..path(color: AppColors.primary),
+          ..circle(color: _palette.ballAccent)
+          ..arc(color: _palette.surfaceContainer)
+          ..arc(color: _palette.surfaceContainer)
+          ..path(color: _palette.surfaceContainer)
+          ..path(color: _palette.primaryFill),
       );
     });
 
@@ -91,20 +97,38 @@ void main() {
   });
 
   group('AppLogoPainter', () {
-    test('repaints only when the background colour changes', () {
-      const AppLogoPainter a = AppLogoPainter(background: AppColors.surface);
-      const AppLogoPainter b = AppLogoPainter(background: AppColors.surface);
-      const AppLogoPainter c =
-          AppLogoPainter(background: AppColors.surfaceContainer);
+    test('repaints when any of its three colours changes', () {
+      AppLogoPainter painter(AppPalette p, {Color? background}) =>
+          AppLogoPainter(
+            background: background ?? p.surface,
+            ball: p.ballAccent,
+            bolt: p.primaryFill,
+          );
+
+      final AppLogoPainter a = painter(_palette);
+      final AppLogoPainter b = painter(_palette);
+      final AppLogoPainter c =
+          painter(_palette, background: _palette.surfaceContainer);
+      // A brightness flip changes the ball and the bolt, not the background
+      // alone: if shouldRepaint only watched the background, the mark would
+      // keep the other canvas's ball on screen.
+      final AppLogoPainter d = painter(
+        paletteFor(kBrandFlavor, Brightness.light),
+        background: _palette.surface,
+      );
 
       expect(a.shouldRepaint(b), isFalse);
       expect(a.shouldRepaint(c), isTrue);
+      expect(a.shouldRepaint(d), isTrue);
     });
 
     test('an empty box paints nothing rather than throwing', () {
       final PictureRecorder recorder = PictureRecorder();
-      const AppLogoPainter(background: AppColors.surface)
-          .paint(Canvas(recorder), Size.zero);
+      AppLogoPainter(
+        background: _palette.surface,
+        ball: _palette.ballAccent,
+        bolt: _palette.primaryFill,
+      ).paint(Canvas(recorder), Size.zero);
 
       expect(recorder.endRecording(), isNotNull);
     });

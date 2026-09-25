@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/models/analysis_response.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
+import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/widgets/category_bars.dart';
 import 'package:tennisimo_ai/widgets/score_ring.dart';
 import 'package:tennisimo_ai/widgets/stat_tile.dart';
@@ -32,18 +33,46 @@ CategoryScore _category({
 void main() {
   group('scoreColor ramp', () {
     test('the boundaries fall on the documented side', () {
-      expect(scoreColor(100), AppColors.scoreHigh);
-      expect(scoreColor(80), AppColors.scoreHigh);
-      expect(scoreColor(79.9), AppColors.scoreMid);
-      expect(scoreColor(60), AppColors.scoreMid);
-      expect(scoreColor(59.9), AppColors.scoreLow);
-      expect(scoreColor(0), AppColors.scoreLow);
+      // Both tiers, in every flavor on every canvas: the thresholds are the
+      // contract, the colours behind them are not.
+      for (final AppPalette palette in kAllPalettes) {
+        expect(palette.scoreColor(100), palette.scoreHigh);
+        expect(palette.scoreColor(80), palette.scoreHigh);
+        expect(palette.scoreColor(79.9), palette.scoreMid);
+        expect(palette.scoreColor(60), palette.scoreMid);
+        expect(palette.scoreColor(59.9), palette.scoreLow);
+        expect(palette.scoreColor(0), palette.scoreLow);
+
+        expect(palette.scoreFillColor(100), palette.scoreHighFill);
+        expect(palette.scoreFillColor(80), palette.scoreHighFill);
+        expect(palette.scoreFillColor(79.9), palette.scoreMidFill);
+        expect(palette.scoreFillColor(60), palette.scoreMidFill);
+        expect(palette.scoreFillColor(59.9), palette.scoreLowFill);
+        expect(palette.scoreFillColor(0), palette.scoreLowFill);
+      }
     });
 
     test('a null score is muted, never the "bad" red', () {
       // Null means not measurable. It is not a failing score.
-      expect(scoreColor(null), AppColors.onSurfaceVariant);
-      expect(scoreColor(null), isNot(AppColors.scoreLow));
+      for (final AppPalette palette in kAllPalettes) {
+        expect(palette.scoreColor(null), palette.onSurfaceVariant);
+        expect(palette.scoreColor(null), isNot(palette.scoreLow));
+        expect(palette.scoreFillColor(null), palette.onSurfaceVariant);
+        expect(palette.scoreFillColor(null), isNot(palette.scoreLowFill));
+      }
+    });
+  });
+
+  group('the hosted theme carries its palette', () {
+    testWidgets('a widget under buildAppTheme reads the compiled flavor',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(_host(const SizedBox.shrink()));
+
+      final BuildContext context = tester.element(find.byType(SizedBox).first);
+      expect(
+        context.palette,
+        same(paletteFor(kBrandFlavor, Brightness.dark)),
+      );
     });
   });
 

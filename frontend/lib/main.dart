@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'theme/app_theme.dart';
+import 'theme/theme_controller.dart';
 
 /// REPLACE ME: the Supabase project URL, e.g. `https://your-ref.supabase.co`
 const String supabaseUrl = 'https://qrjpheqayeudazcrqxpl.supabase.co';
@@ -18,18 +19,43 @@ Future<void> main() async {
     url: supabaseUrl,
     publishableKey: supabasePublishableKey,
   );
-  runApp(const TennisimoApp());
+  // The remembered light/dark choice, read before the first frame so the app
+  // does not flash the wrong canvas on launch. A failure to read degrades to
+  // ThemeMode.system rather than blocking startup.
+  final ThemeController themeController = ThemeController();
+  await themeController.load();
+
+  runApp(TennisimoApp(themeController: themeController));
 }
 
 class TennisimoApp extends StatelessWidget {
-  const TennisimoApp({super.key});
+  const TennisimoApp({super.key, required this.themeController});
+
+  /// Owns the light/dark choice. Handed in rather than constructed here so a
+  /// test can drive a theme switch directly.
+  final ThemeController themeController;
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Tennisimo AI',
-      theme: buildAppTheme(),
-      home: const AuthGate(),
+    // ThemeScope sits ABOVE MaterialApp so the overflow menu can reach the
+    // controller, and ListenableBuilder sits above MaterialApp too so a mode
+    // change rebuilds MaterialApp itself. That is what propagates the new
+    // ThemeData — and with it the AppPalette extension — to every widget in
+    // the tree, instead of leaving already-built widgets on the old colours.
+    return ThemeScope(
+      controller: themeController,
+      child: ListenableBuilder(
+        listenable: themeController,
+        builder: (BuildContext context, Widget? child) {
+          return MaterialApp(
+            title: 'Tennisimo AI',
+            theme: buildAppTheme(brightness: Brightness.light),
+            darkTheme: buildAppTheme(brightness: Brightness.dark),
+            themeMode: themeController.mode,
+            home: const AuthGate(),
+          );
+        },
+      ),
     );
   }
 }

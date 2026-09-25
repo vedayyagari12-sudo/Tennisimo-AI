@@ -15,11 +15,15 @@ import '../theme/app_theme.dart';
 /// The mark: a ball with two seams and a bolt through it.
 ///
 /// The two fills follow the build-time brand flavor: the ball takes
-/// [AppColors.ballAccent] and the bolt [AppColors.primary], so the default
-/// build draws a chartreuse ball with a green bolt and the alternate palette
-/// draws a yellow ball with a powder-blue bolt. The ball keeps the warm,
-/// ball-coloured token in both because a tennis ball that is not ball-coloured
-/// stops reading as a ball; the bolt is the accent that moves.
+/// [AppPalette.ballAccent] and the bolt [AppPalette.primaryFill], so the
+/// default build draws a chartreuse ball with a green bolt and the alternate
+/// palette draws a yellow ball with a powder-blue bolt. The ball keeps the
+/// warm, ball-coloured token in both because a tennis ball that is not
+/// ball-coloured stops reading as a ball; the bolt is the accent that moves.
+///
+/// Both are fill-tier tokens and both are re-stepped per brightness: the dark
+/// set's chartreuse ball would have almost no edge against the light set's tan
+/// canvas, so the light set uses a deeper step of the same hue.
 ///
 /// The seams and the bolt's separation edge are painted in [background], which
 /// defaults to the theme surface — pass the card colour when the mark sits on
@@ -35,13 +39,19 @@ class AppLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color resolved =
-        background ?? Theme.of(context).colorScheme.surface;
+    // Read through the theme, so flipping light/dark rebuilds the mark instead
+    // of leaving a ball stepped for the other canvas on screen.
+    final AppPalette palette = context.palette;
+    final Color resolved = background ?? palette.surface;
     return SizedBox(
       width: size,
       height: size,
       child: CustomPaint(
-        painter: AppLogoPainter(background: resolved),
+        painter: AppLogoPainter(
+          background: resolved,
+          ball: palette.ballAccent,
+          bolt: palette.primaryFill,
+        ),
         isComplex: false,
       ),
     );
@@ -50,10 +60,20 @@ class AppLogo extends StatelessWidget {
 
 /// Paints the mark. Public so it can be exercised directly in tests.
 class AppLogoPainter extends CustomPainter {
-  const AppLogoPainter({required this.background});
+  const AppLogoPainter({
+    required this.background,
+    required this.ball,
+    required this.bolt,
+  });
 
   /// The colour of the seams and of the bolt's separation edge.
   final Color background;
+
+  /// The ball fill. Fill tier — this is a large solid area.
+  final Color ball;
+
+  /// The bolt fill. Fill tier, for the same reason.
+  final Color bolt;
 
   /// Ball radius, as a fraction of the side.
   static const double _ballRadiusRatio = 0.400;
@@ -90,12 +110,14 @@ class AppLogoPainter extends CustomPainter {
     final Offset centre = Offset(size.width / 2, size.height / 2);
     final double r = side * _ballRadiusRatio;
 
-    // The ball.
+    // The ball. `ball`, not a token read here: a painter that reached for a
+    // global would keep the pre-switch colour until something else repainted
+    // it.
     canvas.drawCircle(
       centre,
       r,
       Paint()
-        ..color = AppColors.ballAccent
+        ..color = ball
         ..isAntiAlias = true,
     );
 
@@ -134,18 +156,18 @@ class AppLogoPainter extends CustomPainter {
 
     // The bolt, drawn twice: an oversized copy in the background colour cuts it
     // free of the ball, then the bolt itself on top.
-    final List<Offset> bolt = _boltPoints(centre, r);
+    final List<Offset> boltOutline = _boltPoints(centre, r);
 
     canvas.drawPath(
-      _polygon(_scaleAbout(bolt, centre, _boltEdgeScale)),
+      _polygon(_scaleAbout(boltOutline, centre, _boltEdgeScale)),
       Paint()
         ..color = background
         ..isAntiAlias = true,
     );
     canvas.drawPath(
-      _polygon(bolt),
+      _polygon(boltOutline),
       Paint()
-        ..color = AppColors.primary
+        ..color = bolt
         ..isAntiAlias = true,
     );
   }
@@ -200,5 +222,7 @@ class AppLogoPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(AppLogoPainter oldDelegate) =>
-      oldDelegate.background != background;
+      oldDelegate.background != background ||
+      oldDelegate.ball != ball ||
+      oldDelegate.bolt != bolt;
 }

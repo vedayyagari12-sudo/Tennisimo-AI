@@ -1,84 +1,39 @@
-/// The app's dark design system, in two build-time flavors.
+/// The app's design system: two brightnesses x two build-time brand flavors.
 ///
-/// Both flavors share one dark neutral base: this is a video / sports app, the
-/// widgets in `widgets/` were contrast-tested against a dark surface, and a
-/// light base would have to be re-verified everywhere. Only the base's *hue*
-/// and the accent roles move between flavors.
+/// The colour tokens themselves live in `app_palette.dart`, which also explains
+/// why they are a [ThemeExtension] rather than `const` globals. This file turns
+/// one [AppPalette] into a [ThemeData], and nothing here holds a colour of its
+/// own.
 ///
-/// * Default ([BrandFlavor.tennisimo]) — the brand green (`#2E7D32`, the old
-///   `colorSchemeSeed`) brightened to `#3ECF67` so it carries enough luminance
-///   to read as an accent on a near-black surface, with the chartreuse
-///   [AppColors.secondary] reserved for ball speed alone.
+/// * Default ([BrandFlavor.tennisimo]) — navy dark, warm-tan light, the brand
+///   green as the accent with chartreuse reserved for ball speed.
 /// * Alternate ([BrandFlavor.school]) — powder blue primary, yellow secondary,
-///   white text, over a base retuned from a green to a blue undertone so the
-///   neutrals sit under the new accents instead of fighting them.
+///   white text, on a blue-undertoned dark base and a near-white light one.
 ///
-/// The score ramp is deliberately NOT part of either palette. See [scoreColor].
+/// The score ramp is deliberately not part of either flavor's identity. See
+/// [AppPalette.scoreColor].
 library;
 
 import 'package:flutter/material.dart';
 
+import 'app_palette.dart';
 import 'brand.dart';
 
-/// Raw design tokens. Widgets should prefer `Theme.of(context).colorScheme`;
-/// these exist for the few places that need a token the scheme has no slot for.
+/// Re-exported so a widget needs one import for the whole design system.
+export 'app_palette.dart';
+
+/// Reads the palette for the brightness currently in force.
 ///
-/// Every token is a compile-time conditional on [kUseAlternatePalette], so the
-/// whole palette stays `const` and an unrecognised `BRAND` value simply never
-/// selects the alternate branch.
-abstract final class AppColors {
-  /// Scaffold background: near-black with a faint accent undertone.
-  static const Color surface =
-      kUseAlternatePalette ? Color(0xFF0E1318) : Color(0xFF0E1512);
-
-  /// The standard card fill.
-  static const Color surfaceContainer =
-      kUseAlternatePalette ? Color(0xFF161D24) : Color(0xFF161F1B);
-
-  /// A nested / elevated block inside a card.
-  static const Color surfaceContainerHigh =
-      kUseAlternatePalette ? Color(0xFF1E2833) : Color(0xFF1E2A25);
-
-  /// Hairline borders and dividers.
-  static const Color outline =
-      kUseAlternatePalette ? Color(0xFF2A3746) : Color(0xFF2A3A33);
-
-  /// The single vivid accent: green by default, powder blue in the alternate.
-  static const Color primary =
-      kUseAlternatePalette ? Color(0xFFA8D8F0) : Color(0xFF3ECF67);
-  static const Color onPrimary =
-      kUseAlternatePalette ? Color(0xFF04161F) : Color(0xFF05140A);
-
-  /// Ball speed ONLY — never a second general-purpose accent. Tennis
-  /// chartreuse by default, yellow in the alternate.
-  static const Color secondary =
-      kUseAlternatePalette ? Color(0xFFFFEB3B) : Color(0xFFCCFF4D);
-  static const Color onSecondary =
-      kUseAlternatePalette ? Color(0xFF211B00) : Color(0xFF142000);
-
-  /// The ball in the brand mark. Same hue as [secondary]; named separately
-  /// because the brand mark is not "ball speed" and must not be re-pointed if
-  /// the speed accent ever moves.
-  static const Color ballAccent =
-      kUseAlternatePalette ? Color(0xFFFFEB3B) : Color(0xFFCCFF4D);
-
-  static const Color onSurface =
-      kUseAlternatePalette ? Color(0xFFF2F7FB) : Color(0xFFE8F0EB);
-
-  /// Secondary text, captions, and every "not measured" string.
-  static const Color onSurfaceVariant =
-      kUseAlternatePalette ? Color(0xFFA2B4C6) : Color(0xFF9BAEA4);
-
-  static const Color error = Color(0xFFFF6B6B);
-
-  /// Top band of the score ramp. Identical in both flavors — see [scoreColor].
-  static const Color scoreHigh = Color(0xFF3ECF67);
-
-  /// The middle band of the score ramp.
-  static const Color scoreMid = Color(0xFFF5C451);
-
-  /// The bottom band of the score ramp.
-  static const Color scoreLow = Color(0xFFFF6B6B);
+/// This goes through `Theme.of`, so the caller takes an [InheritedWidget]
+/// dependency and is rebuilt automatically when the theme changes. The
+/// fallback keeps a widget mounted on a bare [MaterialApp] (as some tests do)
+/// on the right canvas instead of throwing.
+extension AppPaletteAccess on BuildContext {
+  AppPalette get palette {
+    final ThemeData theme = Theme.of(this);
+    return theme.extension<AppPalette>() ??
+        paletteFor(kBrandFlavor, theme.brightness);
+  }
 }
 
 /// Spacing scale. Small enough to keep in your head, large enough to be useful.
@@ -104,85 +59,63 @@ abstract final class AppSpacing {
       EdgeInsets.symmetric(horizontal: lg, vertical: lg);
 }
 
-/// The one score -> colour ramp, used by every ring, bar and chip.
-///
-/// This ramp is SEMANTIC, not decorative: green / amber / red is the whole
-/// signal that tells a player good / marginal / poor at a glance. It therefore
-/// does not follow the brand flavor — recolouring it into a two-accent palette
-/// would collapse the three bands towards one hue and destroy that signal. The
-/// bands are the same bytes in both flavors, and each was checked for contrast
-/// against both bases.
-///
-/// A null score is NOT zero and never gets a "bad" colour: it means the swing
-/// could not be measured, which is a neutral fact, so it renders in the muted
-/// [AppColors.onSurfaceVariant] used for all not-measured copy.
-Color scoreColor(double? score) {
-  if (score == null) return AppColors.onSurfaceVariant;
-  if (score >= 80) return AppColors.scoreHigh;
-  if (score >= 60) return AppColors.scoreMid;
-  return AppColors.scoreLow;
-}
-
 /// Digits that do not jitter as a value animates or changes between sessions.
 const List<FontFeature> kTabularFigures = <FontFeature>[
   FontFeature.tabularFigures(),
 ];
 
-// Scheme-only tokens: roles no widget reaches for by name.
-const Color _primaryContainer =
-    kUseAlternatePalette ? Color(0xFF12354A) : Color(0xFF123D22);
-const Color _onPrimaryContainer =
-    kUseAlternatePalette ? Color(0xFFC6E8FA) : Color(0xFF9FE9B5);
-const Color _secondaryContainer =
-    kUseAlternatePalette ? Color(0xFF3A3208) : Color(0xFF2B3A12);
-const Color _onSecondaryContainer =
-    kUseAlternatePalette ? Color(0xFFFFF3A0) : Color(0xFFE4FFA8);
-const Color _tertiary =
-    kUseAlternatePalette ? Color(0xFF7FB8D8) : Color(0xFF7FD8C0);
-const Color _onTertiary =
-    kUseAlternatePalette ? Color(0xFF04161F) : Color(0xFF032018);
-const Color _tertiaryContainer =
-    kUseAlternatePalette ? Color(0xFF26333D) : Color(0xFF17312B);
-const Color _onTertiaryContainer =
-    kUseAlternatePalette ? Color(0xFFDDE9F2) : Color(0xFFCDEDE2);
-const Color _surfaceContainerLowest =
-    kUseAlternatePalette ? Color(0xFF0A0F14) : Color(0xFF0A100D);
-const Color _surfaceContainerLow =
-    kUseAlternatePalette ? Color(0xFF111820) : Color(0xFF111A16);
-const Color _surfaceContainerHighest =
-    kUseAlternatePalette ? Color(0xFF243140) : Color(0xFF24312B);
-const Color _outlineVariant =
-    kUseAlternatePalette ? Color(0xFF22303D) : Color(0xFF223029);
+/// How strongly an accent tints its container role.
+const double _containerTint = 0.20;
 
-const ColorScheme _scheme = ColorScheme.dark(
-  brightness: Brightness.dark,
-  primary: AppColors.primary,
-  onPrimary: AppColors.onPrimary,
-  primaryContainer: _primaryContainer,
-  onPrimaryContainer: _onPrimaryContainer,
-  secondary: AppColors.secondary,
-  onSecondary: AppColors.onSecondary,
-  secondaryContainer: _secondaryContainer,
-  onSecondaryContainer: _onSecondaryContainer,
-  tertiary: _tertiary,
-  onTertiary: _onTertiary,
-  tertiaryContainer: _tertiaryContainer,
-  onTertiaryContainer: _onTertiaryContainer,
-  error: AppColors.error,
-  onError: Color(0xFF2B0A0A),
-  errorContainer: Color(0xFF3A1B1B),
-  onErrorContainer: Color(0xFFFFD7D7),
-  surface: AppColors.surface,
-  onSurface: AppColors.onSurface,
-  onSurfaceVariant: AppColors.onSurfaceVariant,
-  surfaceContainerLowest: _surfaceContainerLowest,
-  surfaceContainerLow: _surfaceContainerLow,
-  surfaceContainer: AppColors.surfaceContainer,
-  surfaceContainerHigh: AppColors.surfaceContainerHigh,
-  surfaceContainerHighest: _surfaceContainerHighest,
-  outline: AppColors.outline,
-  outlineVariant: _outlineVariant,
-);
+/// The same, for the quieter tertiary container.
+const double _tertiaryTint = 0.12;
+
+/// The M3 scheme for [palette].
+///
+/// The `*Container` roles are blended rather than hand-tuned: they are only
+/// ever backgrounds for [AppPalette.onSurface] text, so deriving them keeps
+/// four more tokens per palette out of the validator's way while still being
+/// deterministic. `test/palette_test.dart` checks the blends it produces.
+ColorScheme buildColorScheme(AppPalette palette) {
+  Color tint(Color accent, Color base, double amount) =>
+      Color.alphaBlend(accent.withValues(alpha: amount), base);
+
+  return ColorScheme(
+    brightness: palette.brightness,
+    primary: palette.primary,
+    onPrimary: palette.onPrimary,
+    primaryContainer:
+        tint(palette.primary, palette.surfaceContainerHigh, _containerTint),
+    onPrimaryContainer: palette.onSurface,
+    secondary: palette.secondary,
+    onSecondary: palette.onSecondary,
+    secondaryContainer:
+        tint(palette.secondary, palette.surfaceContainerHigh, _containerTint),
+    onSecondaryContainer: palette.onSurface,
+    // No widget reaches for tertiary by name; it exists so Material's own
+    // defaults never fall back to a colour from outside the palette.
+    tertiary: palette.primaryFill,
+    onTertiary: palette.onPrimaryFill,
+    tertiaryContainer:
+        tint(palette.primary, palette.surfaceContainer, _tertiaryTint),
+    onTertiaryContainer: palette.onSurface,
+    error: palette.error,
+    onError: palette.onError,
+    errorContainer:
+        tint(palette.error, palette.surfaceContainerHigh, _containerTint),
+    onErrorContainer: palette.onSurface,
+    surface: palette.surface,
+    onSurface: palette.onSurface,
+    onSurfaceVariant: palette.onSurfaceVariant,
+    surfaceContainerLowest: palette.surfaceContainerLowest,
+    surfaceContainerLow: palette.surfaceContainerLow,
+    surfaceContainer: palette.surfaceContainer,
+    surfaceContainerHigh: palette.surfaceContainerHigh,
+    surfaceContainerHighest: palette.surfaceContainerHighest,
+    outline: palette.outline,
+    outlineVariant: palette.outlineVariant,
+  );
+}
 
 /// Base typography, with tabular figures on every size a big numeral uses.
 TextTheme _textTheme(TextTheme base) {
@@ -204,40 +137,52 @@ TextTheme _textTheme(TextTheme base) {
   );
 }
 
-/// The app theme. Built once in `main.dart`.
-ThemeData buildAppTheme() {
-  final ThemeData base = ThemeData.dark(useMaterial3: true);
+/// The app theme for one canvas. Built twice in `main.dart`, once per
+/// brightness, and handed to [MaterialApp.theme] / [MaterialApp.darkTheme] so
+/// the framework — not a global — decides which one is in force.
+///
+/// The palette travels with the theme as a [ThemeExtension], which is what
+/// makes a runtime brightness switch rebuild every widget that read a token.
+ThemeData buildAppTheme({Brightness brightness = Brightness.dark}) {
+  final AppPalette palette = paletteFor(kBrandFlavor, brightness);
+  final ThemeData base = ThemeData(
+    useMaterial3: true,
+    brightness: brightness,
+  );
+  final ColorScheme scheme = buildColorScheme(palette);
 
   return base.copyWith(
-    colorScheme: _scheme,
-    scaffoldBackgroundColor: AppColors.surface,
-    canvasColor: AppColors.surface,
+    colorScheme: scheme,
+    extensions: <ThemeExtension<dynamic>>[palette],
+    scaffoldBackgroundColor: palette.surface,
+    canvasColor: palette.surface,
     textTheme: _textTheme(base.textTheme).apply(
-      bodyColor: AppColors.onSurface,
-      displayColor: AppColors.onSurface,
+      bodyColor: palette.onSurface,
+      displayColor: palette.onSurface,
     ),
-    appBarTheme: const AppBarTheme(
+    appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
-      foregroundColor: AppColors.onSurface,
+      foregroundColor: palette.onSurface,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
     ),
     cardTheme: CardThemeData(
-      color: AppColors.surfaceContainer,
+      color: palette.surfaceContainer,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-        side: const BorderSide(color: AppColors.outline),
+        // A card edge is a decorative rule, not a control boundary.
+        side: BorderSide(color: palette.outlineVariant),
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: AppColors.surfaceContainer,
+      backgroundColor: palette.surfaceContainer,
       surfaceTintColor: Colors.transparent,
-      indicatorColor: AppColors.primary.withValues(alpha: 0.16),
+      indicatorColor: palette.primary.withValues(alpha: 0.16),
       elevation: 0,
       height: 68,
       labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
@@ -247,28 +192,29 @@ ThemeData buildAppTheme() {
           fontWeight:
               states.contains(WidgetState.selected) ? FontWeight.w600 : null,
           color: states.contains(WidgetState.selected)
-              ? AppColors.onSurface
-              : AppColors.onSurfaceVariant,
+              ? palette.onSurface
+              : palette.onSurfaceVariant,
         ),
       ),
     ),
-    dividerTheme: const DividerThemeData(
-      color: AppColors.outline,
+    dividerTheme: DividerThemeData(
+      color: palette.outlineVariant,
       thickness: 1,
       space: 1,
     ),
     chipTheme: ChipThemeData(
-      backgroundColor: AppColors.surfaceContainerHigh,
-      side: const BorderSide(color: AppColors.outline),
-      labelStyle: const TextStyle(color: AppColors.onSurface, fontSize: 12),
+      backgroundColor: palette.surfaceContainerHigh,
+      side: BorderSide(color: palette.outline),
+      labelStyle: TextStyle(color: palette.onSurface, fontSize: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(999),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: AppColors.primary,
-        foregroundColor: AppColors.onPrimary,
+        // A button face is a large filled area: fill tier, not text tier.
+        backgroundColor: palette.primaryFill,
+        foregroundColor: palette.onPrimaryFill,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
         ),
@@ -277,8 +223,8 @@ ThemeData buildAppTheme() {
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.onSurface,
-        side: const BorderSide(color: AppColors.outline),
+        foregroundColor: palette.onSurface,
+        side: BorderSide(color: palette.outline),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
         ),
@@ -286,19 +232,19 @@ ThemeData buildAppTheme() {
       ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+      style: TextButton.styleFrom(foregroundColor: palette.primary),
     ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(
-      color: AppColors.primary,
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: palette.primary,
     ),
-    snackBarTheme: const SnackBarThemeData(
-      backgroundColor: AppColors.surfaceContainerHigh,
-      contentTextStyle: TextStyle(color: AppColors.onSurface),
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: palette.surfaceContainerHigh,
+      contentTextStyle: TextStyle(color: palette.onSurface),
       behavior: SnackBarBehavior.floating,
     ),
-    listTileTheme: const ListTileThemeData(
-      textColor: AppColors.onSurface,
-      iconColor: AppColors.onSurfaceVariant,
+    listTileTheme: ListTileThemeData(
+      textColor: palette.onSurface,
+      iconColor: palette.onSurfaceVariant,
     ),
   );
 }

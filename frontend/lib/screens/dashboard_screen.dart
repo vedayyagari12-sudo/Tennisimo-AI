@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/analysis_response.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
@@ -266,6 +267,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         speeds.isEmpty ? null : speeds.reduce((int a, int b) => a > b ? a : b);
 
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    final AppPalette palette = context.palette;
 
     final List<Widget> tiles = <Widget>[
       StatTile(label: 'Sessions', value: _items.length.toString()),
@@ -273,12 +275,12 @@ class DashboardScreenState extends State<DashboardScreen> {
         label: 'Best score',
         // Null when nothing has ever been scored — not 0.
         value: best?.round().toString(),
-        valueColor: scoreColor(best),
+        valueColor: palette.scoreColor(best),
       ),
       StatTile(
         label: 'Avg last $_averageWindow',
         value: average?.toStringAsFixed(1),
-        valueColor: scoreColor(average),
+        valueColor: palette.scoreColor(average),
       ),
       // The speed tile is omitted outright when no session ever carried a
       // speed: that means nobody calibrated, not that the ball was slow.
@@ -434,20 +436,7 @@ class _DashboardHeader extends StatelessWidget {
         ),
         const AppLogo(size: 28),
         const SizedBox(width: AppSpacing.xs),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert),
-          onSelected: (String value) {
-            if (value == 'sign_out') {
-              Supabase.instance.client.auth.signOut();
-            }
-          },
-          itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
-            PopupMenuItem<String>(
-              value: 'sign_out',
-              child: Text('Sign out'),
-            ),
-          ],
-        ),
+        const _OverflowMenu(),
       ],
     );
   }
@@ -457,6 +446,68 @@ class _DashboardHeader extends StatelessWidget {
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
+  }
+}
+
+/// The overflow menu: the light/dark choice, then sign out.
+///
+/// The theme entries only appear when a [ThemeScope] is installed above this
+/// screen, which is the real app. A widget test that mounts the dashboard on
+/// its own gets the menu it had before rather than a control wired to nothing.
+class _OverflowMenu extends StatelessWidget {
+  const _OverflowMenu();
+
+  static const Map<ThemeMode, String> _labels = <ThemeMode, String>{
+    ThemeMode.system: 'Follow system',
+    ThemeMode.light: 'Light',
+    ThemeMode.dark: 'Dark',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ThemeController? controller = ThemeScope.maybeOf(context);
+
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert),
+      onSelected: (String value) {
+        if (value == 'sign_out') {
+          Supabase.instance.client.auth.signOut();
+          return;
+        }
+        for (final ThemeMode mode in _labels.keys) {
+          if (value == 'theme_${mode.name}') controller?.setMode(mode);
+        }
+      },
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        if (controller != null) ...<PopupMenuEntry<String>>[
+          for (final ThemeMode mode in _labels.keys)
+            PopupMenuItem<String>(
+              value: 'theme_${mode.name}',
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    controller.mode == mode
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: controller.mode == mode
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Text(_labels[mode]!),
+                ],
+              ),
+            ),
+          const PopupMenuDivider(),
+        ],
+        const PopupMenuItem<String>(
+          value: 'sign_out',
+          child: Text('Sign out'),
+        ),
+      ],
+    );
   }
 }
 
@@ -585,14 +636,17 @@ class _ScoreBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final Color colour = scoreColor(score);
+    final AppPalette palette = context.palette;
+    // Text tier for the numeral, fill tier for the wash behind it.
+    final Color colour = palette.scoreColor(score);
+    final Color wash = palette.scoreFillColor(score);
 
     return Container(
       width: 44,
       height: 44,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: colour.withValues(alpha: score == null ? 0.08 : 0.16),
+        color: wash.withValues(alpha: score == null ? 0.08 : 0.16),
         borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
       ),
       child: Text(

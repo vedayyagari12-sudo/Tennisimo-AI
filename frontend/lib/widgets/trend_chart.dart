@@ -32,6 +32,7 @@ class TrendChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final AppPalette palette = context.palette;
     final List<double> points =
         scores.whereType<double>().toList(growable: false);
 
@@ -57,9 +58,12 @@ class TrendChart extends StatelessWidget {
           child: CustomPaint(
             painter: _TrendChartPainter(
               points: points,
-              lineColor: theme.colorScheme.primary,
-              baselineColor: theme.colorScheme.outline,
-              dotFill: theme.colorScheme.surface,
+              // The line and its dots are thin marks: text tier. The wash
+              // under them is a large area: fill tier.
+              lineColor: palette.primary,
+              areaColor: palette.primaryFill,
+              baselineColor: palette.outlineVariant,
+              dotFill: palette.surface,
             ),
           ),
         ),
@@ -81,13 +85,20 @@ class _TrendChartPainter extends CustomPainter {
   _TrendChartPainter({
     required this.points,
     required this.lineColor,
+    required this.areaColor,
     required this.baselineColor,
     required this.dotFill,
   });
 
   /// Always non-empty, always non-null values.
   final List<double> points;
+
+  /// The polyline and its dots. Text tier.
   final Color lineColor;
+
+  /// The gradient wash below the line. Fill tier.
+  final Color areaColor;
+
   final Color baselineColor;
   final Color dotFill;
 
@@ -152,8 +163,8 @@ class _TrendChartPainter extends CustomPainter {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: <Color>[
-              lineColor.withValues(alpha: 0.28),
-              lineColor.withValues(alpha: 0.0),
+              areaColor.withValues(alpha: 0.28),
+              areaColor.withValues(alpha: 0.0),
             ],
           ).createShader(Rect.fromLTRB(left, top, right, bottom)),
       );
@@ -196,6 +207,7 @@ class _TrendChartPainter extends CustomPainter {
   bool shouldRepaint(_TrendChartPainter old) =>
       !_sameValues(old.points, points) ||
       old.lineColor != lineColor ||
+      old.areaColor != areaColor ||
       old.baselineColor != baselineColor ||
       old.dotFill != dotFill;
 

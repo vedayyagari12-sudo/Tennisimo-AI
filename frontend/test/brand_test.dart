@@ -78,16 +78,27 @@ void main() {
     test('the compiled palette matches the compiled flavor', () {
       // Proves the define actually reaches the tokens: run the suite with
       // `--dart-define=BRAND=school` and these are the alternate hexes; run it
-      // with a bogus value and they are the default ones again.
+      // with a bogus value and they are the default ones again. Both canvases
+      // are checked, because a flavor that only themed one half would be
+      // exactly the bug this palette exists to prevent.
+      final AppPalette dark = paletteFor(kBrandFlavor, Brightness.dark);
+      final AppPalette light = paletteFor(kBrandFlavor, Brightness.light);
+
       switch (kBrandFlavor) {
         case BrandFlavor.tennisimo:
-          expect(AppColors.primary, const Color(0xFF3ECF67));
-          expect(AppColors.secondary, const Color(0xFFCCFF4D));
-          expect(AppColors.surface, const Color(0xFF0E1512));
+          expect(dark.primary, const Color(0xFF58D377));
+          expect(dark.secondary, const Color(0xFFBBE556));
+          expect(dark.surface, const Color(0xFF0F172A));
+          expect(light.primary, const Color(0xFF006A27));
+          expect(light.secondary, const Color(0xFF485F00));
+          expect(light.surface, const Color(0xFFF6F0EA));
         case BrandFlavor.school:
-          expect(AppColors.primary, const Color(0xFFA8D8F0));
-          expect(AppColors.secondary, const Color(0xFFFFEB3B));
-          expect(AppColors.surface, const Color(0xFF0E1318));
+          expect(dark.primary, const Color(0xFF92CAE6));
+          expect(dark.secondary, const Color(0xFFE7D652));
+          expect(dark.surface, const Color(0xFF0B1924));
+          expect(light.primary, const Color(0xFF006289));
+          expect(light.secondary, const Color(0xFF615500));
+          expect(light.surface, const Color(0xFFF6FAFD));
       }
     });
 
@@ -103,38 +114,51 @@ void main() {
 
   group('the score ramp survives the flavor', () {
     test('the three bands stay clearly distinguishable', () {
-      final List<Color> bands = <Color>[
-        scoreColor(90),
-        scoreColor(70),
-        scoreColor(40),
-      ];
+      for (final AppPalette palette in kAllPalettes) {
+        final List<Color> bands = <Color>[
+          palette.scoreColor(90),
+          palette.scoreColor(70),
+          palette.scoreColor(40),
+        ];
 
-      for (int i = 0; i < bands.length; i++) {
-        for (int j = i + 1; j < bands.length; j++) {
-          expect(bands[i], isNot(bands[j]));
-          expect(
-            _perceptualDistance(bands[i], bands[j]),
-            greaterThan(0.10),
-            reason: 'ramp bands $i and $j have collapsed towards one hue',
-          );
+        for (int i = 0; i < bands.length; i++) {
+          for (int j = i + 1; j < bands.length; j++) {
+            expect(bands[i], isNot(bands[j]));
+            expect(
+              _perceptualDistance(bands[i], bands[j]),
+              greaterThan(0.10),
+              reason: 'ramp bands $i and $j have collapsed towards one hue',
+            );
+          }
         }
       }
     });
 
     test('the ramp is never recoloured into the brand accents', () {
-      expect(scoreColor(90), AppColors.scoreHigh);
-      expect(scoreColor(70), AppColors.scoreMid);
-      expect(scoreColor(40), AppColors.scoreLow);
+      // The ramp follows brightness, never the flavor: the two flavors share
+      // one set of bands on each canvas.
+      for (final AppPalette palette in kAllPalettes) {
+        expect(palette.scoreColor(90), palette.scoreHigh);
+        expect(palette.scoreColor(70), palette.scoreMid);
+        expect(palette.scoreColor(40), palette.scoreLow);
+      }
+      expect(tennisimoDark.scoreHigh, schoolDark.scoreHigh);
+      expect(tennisimoLight.scoreHigh, schoolLight.scoreHigh);
     });
 
     test('a null score is the muted token in either flavor', () {
-      expect(scoreColor(null), AppColors.onSurfaceVariant);
-      for (final Color band in <Color>[
-        AppColors.scoreHigh,
-        AppColors.scoreMid,
-        AppColors.scoreLow,
-      ]) {
-        expect(scoreColor(null), isNot(band));
+      for (final AppPalette palette in kAllPalettes) {
+        expect(palette.scoreColor(null), palette.onSurfaceVariant);
+        for (final Color band in <Color>[
+          palette.scoreHigh,
+          palette.scoreMid,
+          palette.scoreLow,
+          palette.scoreHighFill,
+          palette.scoreMidFill,
+          palette.scoreLowFill,
+        ]) {
+          expect(palette.scoreColor(null), isNot(band));
+        }
       }
     });
   });
@@ -144,42 +168,55 @@ void main() {
     const double aaBody = 4.5;
 
     test('text and accents clear AA on both surfaces', () {
-      final Map<String, Color> foregrounds = <String, Color>{
-        'onSurface': AppColors.onSurface,
-        'onSurfaceVariant': AppColors.onSurfaceVariant,
-        'primary': AppColors.primary,
-        'secondary': AppColors.secondary,
-        'error': AppColors.error,
-        'scoreHigh': AppColors.scoreHigh,
-        'scoreMid': AppColors.scoreMid,
-        'scoreLow': AppColors.scoreLow,
-      };
-      final Map<String, Color> backgrounds = <String, Color>{
-        'surface': AppColors.surface,
-        'surfaceContainer': AppColors.surfaceContainer,
-        'surfaceContainerHigh': AppColors.surfaceContainerHigh,
-      };
+      for (final AppPalette palette in kAllPalettes) {
+        final Map<String, Color> foregrounds = <String, Color>{
+          'onSurface': palette.onSurface,
+          'onSurfaceVariant': palette.onSurfaceVariant,
+          'primary': palette.primary,
+          'secondary': palette.secondary,
+          'error': palette.error,
+          'scoreHigh': palette.scoreHigh,
+          'scoreMid': palette.scoreMid,
+          'scoreLow': palette.scoreLow,
+        };
+        final Map<String, Color> backgrounds = <String, Color>{
+          'surface': palette.surface,
+          'surfaceContainer': palette.surfaceContainer,
+          'surfaceContainerHigh': palette.surfaceContainerHigh,
+        };
 
-      foregrounds.forEach((String fg, Color fgColor) {
-        backgrounds.forEach((String bg, Color bgColor) {
-          expect(
-            contrastRatio(fgColor, bgColor),
-            greaterThanOrEqualTo(aaBody),
-            reason: '$fg on $bg fails AA body contrast',
-          );
+        foregrounds.forEach((String fg, Color fgColor) {
+          backgrounds.forEach((String bg, Color bgColor) {
+            expect(
+              contrastRatio(fgColor, bgColor),
+              greaterThanOrEqualTo(aaBody),
+              reason: '$fg on $bg fails AA body contrast in '
+                  '${palette.brightness.name}',
+            );
+          });
         });
-      });
+      }
     });
 
     test('label colours clear AA on the accent they sit on', () {
-      expect(
-        contrastRatio(AppColors.onPrimary, AppColors.primary),
-        greaterThanOrEqualTo(aaBody),
-      );
-      expect(
-        contrastRatio(AppColors.onSecondary, AppColors.secondary),
-        greaterThanOrEqualTo(aaBody),
-      );
+      for (final AppPalette palette in kAllPalettes) {
+        expect(
+          contrastRatio(palette.onPrimary, palette.primary),
+          greaterThanOrEqualTo(aaBody),
+        );
+        expect(
+          contrastRatio(palette.onPrimaryFill, palette.primaryFill),
+          greaterThanOrEqualTo(aaBody),
+        );
+        expect(
+          contrastRatio(palette.onSecondary, palette.secondary),
+          greaterThanOrEqualTo(aaBody),
+        );
+        expect(
+          contrastRatio(palette.onError, palette.error),
+          greaterThanOrEqualTo(aaBody),
+        );
+      }
     });
 
     test('the reference ratios are computed, not asserted', () {
@@ -191,15 +228,22 @@ void main() {
 
   group('the brand mark follows the flavor', () {
     test('the ball and the bolt are never the same colour', () {
-      expect(AppColors.ballAccent, isNot(AppColors.primary));
-      expect(
-        _perceptualDistance(AppColors.ballAccent, AppColors.primary),
-        greaterThan(0.05),
-      );
+      // The mark is painted in all four combinations, so all four are checked.
+      for (final AppPalette palette in kAllPalettes) {
+        expect(palette.ballAccent, isNot(palette.primaryFill));
+        expect(
+          _perceptualDistance(palette.ballAccent, palette.primaryFill),
+          greaterThan(0.05),
+        );
+      }
     });
 
     test('the ball tracks the ball-speed accent', () {
-      expect(AppColors.ballAccent, AppColors.secondary);
+      // Both are fill-tier tokens, so the ball follows secondaryFill — not the
+      // text step, which would have no edge on a light canvas.
+      for (final AppPalette palette in kAllPalettes) {
+        expect(palette.ballAccent, palette.secondaryFill);
+      }
     });
   });
 }
