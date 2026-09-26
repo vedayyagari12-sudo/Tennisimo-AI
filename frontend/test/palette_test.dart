@@ -526,6 +526,70 @@ void main() {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // The dashboard's sparklines.
+  //
+  // The dashboard adds NO new categorical series colours: it is built from
+  // small multiples, one titled panel per series, so identity is carried by
+  // words and every mark on the screen is the same accent. That is a design
+  // decision with teeth, and it is the reason there is no new series palette
+  // to gate here — a second hue would have to clear `kMinCvdSeparation`, and
+  // in the default flavor `primary` and `secondary` collapse to 0.026 under
+  // deuteranopia, so it could not.
+  //
+  // What the sparkline DID newly make load-bearing is its own chrome: a
+  // recessive baseline, and a tap marker drawn as a surface-filled ring inside
+  // the line colour. Those pairings are gated below.
+  // -------------------------------------------------------------------------
+  group('the sparkline mark and its chrome', () {
+    for (final BrandFlavorCase c in _cases) {
+      test('${c.label} — the dashboard uses exactly one chart-mark colour',
+          () {
+        // MiniTrend takes no colour parameter; this asserts the token it is
+        // hard-wired to is a real text-tier accent, so the invariant cannot be
+        // broken by re-pointing the widget at an ungated token.
+        expect(chromaticTextTier(c.palette).values, contains(c.palette.primary));
+      });
+
+      test('${c.label} — the tap marker reads as a ring, under CVD too', () {
+        // The marker is a `surfaceContainerLowest` disc with a 2px `primary`
+        // ring. If those two ever converge the selected point becomes a blob
+        // and the user cannot see which point they interrogated.
+        final AppPalette p = c.palette;
+        expect(
+          contrast(p.surfaceContainerLowest, p.primary),
+          greaterThanOrEqualTo(kAaLarge),
+          reason: '${c.label}: marker fill on the line colour is '
+              '${contrast(p.surfaceContainerLowest, p.primary).toStringAsFixed(2)}:1',
+        );
+        for (final Cvd deficiency in Cvd.values) {
+          final double d = deltaEOk(
+            simulate(p.surfaceContainerLowest, deficiency),
+            simulate(p.primary, deficiency),
+          );
+          expect(
+            d,
+            greaterThanOrEqualTo(kMinCvdSeparation),
+            reason: '${c.label}: the marker ring vanishes under '
+                '${deficiency.name} at ${d.toStringAsFixed(3)}',
+          );
+        }
+      });
+
+      test('${c.label} — the sparkline baseline is visible but recessive', () {
+        // Drawn on a card, not on the scaffold, so it is gated against the
+        // card colour rather than the surface.
+        final AppPalette p = c.palette;
+        expect(contrast(p.outlineVariant, p.surfaceContainer), greaterThan(1.1));
+        expect(
+          contrast(p.outlineVariant, p.surfaceContainer),
+          lessThan(contrast(p.primary, p.surfaceContainer)),
+          reason: '${c.label}: the baseline competes with the data line',
+        );
+      });
+    }
+  });
+
   group('the brand mark reads on the canvas', () {
     for (final BrandFlavorCase c in _cases) {
       test('${c.label} — the ball has an edge and the bolt reads on it', () {

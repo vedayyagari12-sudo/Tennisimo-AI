@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/analysis_response.dart';
+import '../models/dashboard_insights.dart';
+import '../models/enums.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
@@ -9,20 +11,35 @@ import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
 import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/focus_card.dart';
+import '../widgets/inline_stats.dart';
 import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
+import '../widgets/shot_type_section.dart';
 import '../widgets/skeleton_block.dart';
-import '../widgets/stat_tile.dart';
-import '../widgets/trend_chart.dart';
 import 'home_shell.dart';
 import 'record_screen.dart';
 import 'results_screen.dart';
 
-/// The landing tab: latest session, headline stats, score trend, the newest
-/// analysis's category breakdown, and the most recent sessions.
+/// The landing tab.
 ///
-/// Every number here comes from the server. Anything the server left null is
-/// rendered as "not measured" — never as a zero.
+/// The screen is organised around ONE decision: a player wants to know what to
+/// practise. So it opens with the latest session, then the weakest category of
+/// that shot and whether it is moving, then a block per shot type with that
+/// shot's own trend, breakdown, speed and records.
+///
+/// Nothing is averaged across shot types — see `dashboard_insights.dart`. Every
+/// number comes from the server; anything the server left null is rendered as
+/// an em dash or the words "not measured", never as a zero.
+///
+/// ## What a dashboard load costs
+///
+/// The history endpoint returns only `{id, created_at, shot_type,
+/// overall_score, ball_speed_mph}`. Categories and metric coverage exist only
+/// on the per-analysis detail, so every per-category number here costs a
+/// request. The budget is fixed by [detailIdsToFetch] and enforced here:
+/// **1 history request + at most [_detailBudget] detail requests**, issued
+/// [_detailConcurrency] at a time. It never scales with history length.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, this.onSeeAllHistory});
 
@@ -35,19 +52,20 @@ class DashboardScreen extends StatefulWidget {
 
 /// Public so the shell can call [refresh] after a recording.
 class DashboardScreenState extends State<DashboardScreen> {
-  /// How many sessions the trend chart plots.
-  static const int _trendWindow = 10;
+  /// The hard ceiling on detail requests per load.
+  static const int _detailBudget = 12;
 
-  /// How many sessions the rolling average covers.
-  static const int _averageWindow = 5;
+  /// How many of those are in flight at once. Small enough not to fan out a
+  /// cold Cloud Run instance, large enough that the screen fills promptly.
+  static const int _detailConcurrency = 4;
 
   bool _loading = true;
   ApiFailure? _failure;
   List<AnalysisSummary> _items = const <AnalysisSummary>[];
 
-  /// The newest analysis's category breakdown, from a second request.
+  /// The full analyses fetched for the head of [_items], newest first.
   bool _detailLoading = false;
-  List<CategoryScore> _categories = const <CategoryScore>[];
+  List<AnalysisResponse> _details = const <AnalysisResponse>[];
 
   String? _openingId;
 
@@ -74,7 +92,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         _loading = false;
         _failure = result.failure;
         _items = const <AnalysisSummary>[];
-        _categories = const <CategoryScore>[];
+        _details = const <AnalysisResponse>[];
       });
       return;
     }
@@ -82,28 +100,42 @@ class DashboardScreenState extends State<DashboardScreen> {
     setState(() {
       _loading = false;
       _items = result.data!;
-      _categories = const <CategoryScore>[];
+      _details = const <AnalysisResponse>[];
     });
-    await _loadLatestBreakdown();
+    await _loadDetails();
   }
 
-  /// Fetches the newest analysis in full, purely for its category breakdown.
+  /// Fetches the budgeted set of full analyses.
   ///
-  /// The history endpoint carries no per-category data, and fetching a detail
-  /// per session to build a category time series would be N requests for a
-  /// chart — so this shows the LATEST analysis only. A failure here hides the
-  /// section; it never fails the whole screen.
-  Future<void> _loadLatestBreakdown() async {
-    if (_items.isEmpty) return;
-    final String id = _items.first.analysisId;
+  /// Individual failures are dropped rather than failing the screen: a missing
+  /// detail makes a trend sparser, and the section captions say how many clips
+  /// they are built from, so a partial fetch understates rather than lies.
+  Future<void> _loadDetails() async {
+    final List<String> ids = detailIdsToFetch(_items, budget: _detailBudget);
+    if (ids.isEmpty) return;
 
     setState(() => _detailLoading = true);
-    final ApiResult<AnalysisResponse> result = await fetchAnalysisDetail(id);
+
+    final Map<String, AnalysisResponse> fetched = <String, AnalysisResponse>{};
+    for (int i = 0; i < ids.length; i += _detailConcurrency) {
+      final List<String> chunk = ids.skip(i).take(_detailConcurrency).toList();
+      final List<ApiResult<AnalysisResponse>> results =
+          await Future.wait(chunk.map(fetchAnalysisDetail));
+      if (!mounted) return;
+      for (int j = 0; j < chunk.length; j++) {
+        if (results[j].isOk) fetched[chunk[j]] = results[j].data!;
+      }
+    }
     if (!mounted) return;
+
+    // Re-ordered into history order — newest first — so every series below
+    // reads chronologically however the requests happened to land.
     setState(() {
       _detailLoading = false;
-      _categories =
-          result.isOk ? result.data!.categories : const <CategoryScore>[];
+      _details = <AnalysisResponse>[
+        for (final AnalysisSummary item in _items)
+          if (fetched.containsKey(item.analysisId)) fetched[item.analysisId]!,
+      ];
     });
   }
 
@@ -207,6 +239,11 @@ class DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
+    final DashboardInsights insights = buildDashboardInsights(
+      history: _items,
+      details: _details,
+    );
+
     return ListView(
       padding: kTabContentPadding,
       children: <Widget>[
@@ -214,15 +251,16 @@ class DashboardScreenState extends State<DashboardScreen> {
         const SizedBox(height: AppSpacing.lg),
         _HeroCard(
           latest: _items.first,
-          delta: _latestDelta(),
+          // Latest against the previous clip OF THE SAME SHOT, which is the
+          // only comparison that means anything.
+          delta: insights.latestShotType?.latestDelta,
         ),
         const SizedBox(height: AppSpacing.lg),
-        ..._buildStatRows(),
+        ..._buildFocus(insights),
+        AppCard(child: InlineStats(stats: _overallStats(insights))),
         const SizedBox(height: AppSpacing.lg),
-        const SectionHeader(title: 'Progress'),
-        AppCard(child: _buildTrend()),
-        const SizedBox(height: AppSpacing.lg),
-        ..._buildBreakdown(),
+        ..._buildLatestBreakdown(),
+        ..._buildShotTypes(insights),
         SectionHeader(
           title: 'Recent sessions',
           actionLabel: widget.onSeeAllHistory == null ? null : 'See all',
@@ -233,120 +271,50 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// Latest minus previous, only when BOTH sessions were actually scored.
-  double? _latestDelta() {
-    if (_items.length < 2) return null;
-    final double? latest = _items[0].overallScore;
-    final double? previous = _items[1].overallScore;
-    if (latest == null || previous == null) return null;
-    return latest - previous;
-  }
-
-  List<Widget> _buildStatRows() {
-    final List<double> scored = _items
-        .map((AnalysisSummary e) => e.overallScore)
-        .whereType<double>()
-        .toList();
-    final List<double> recentScored = _items
-        .take(_averageWindow)
-        .map((AnalysisSummary e) => e.overallScore)
-        .whereType<double>()
-        .toList();
-    final List<int> speeds = _items
-        .map((AnalysisSummary e) => e.ballSpeedMph)
-        .whereType<int>()
-        .toList();
-
-    final double? best =
-        scored.isEmpty ? null : scored.reduce((double a, double b) => a > b ? a : b);
-    final double? average = recentScored.isEmpty
-        ? null
-        : recentScored.reduce((double a, double b) => a + b) /
-            recentScored.length;
-    final int? topSpeed =
-        speeds.isEmpty ? null : speeds.reduce((int a, int b) => a > b ? a : b);
-
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    final AppPalette palette = context.palette;
-
-    final List<Widget> tiles = <Widget>[
-      StatTile(label: 'Sessions', value: _items.length.toString()),
-      StatTile(
-        label: 'Best score',
-        // Null when nothing has ever been scored — not 0.
-        value: best?.round().toString(),
-        valueColor: palette.scoreColor(best),
-      ),
-      StatTile(
-        label: 'Avg last $_averageWindow',
-        value: average?.toStringAsFixed(1),
-        valueColor: palette.scoreColor(average),
-      ),
-      // The speed tile is omitted outright when no session ever carried a
-      // speed: that means nobody calibrated, not that the ball was slow.
-      if (topSpeed != null)
-        StatTile(
-          label: 'Top speed',
-          value: topSpeed.toString(),
-          unit: 'mph',
-          valueColor: scheme.secondary,
-          accent: scheme.secondary,
-        ),
-    ];
-
-    return _inRowsOfTwo(tiles);
-  }
-
-  /// Lays tiles out two per row, so a missing speed tile leaves no hole.
-  List<Widget> _inRowsOfTwo(List<Widget> tiles) {
-    final List<Widget> rows = <Widget>[];
-    for (int i = 0; i < tiles.length; i += 2) {
-      final bool hasSecond = i + 1 < tiles.length;
-      if (i > 0) rows.add(const SizedBox(height: AppSpacing.md));
-      rows.add(Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Expanded(child: tiles[i]),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: hasSecond ? tiles[i + 1] : const SizedBox.shrink(),
-          ),
-        ],
-      ));
+  List<Widget> _buildFocus(DashboardInsights insights) {
+    if (_detailLoading && _details.isEmpty) {
+      return const <Widget>[
+        SkeletonBlock(height: 150),
+        SizedBox(height: AppSpacing.lg),
+      ];
     }
-    return rows;
+    return <Widget>[
+      FocusCard(insight: insights.latestShotType),
+      const SizedBox(height: AppSpacing.lg),
+    ];
   }
 
-  Widget _buildTrend() {
-    // History is newest first; the chart reads oldest -> newest.
-    final List<AnalysisSummary> window =
-        _items.take(_trendWindow).toList().reversed.toList();
-    final List<double?> scores =
-        window.map((AnalysisSummary e) => e.overallScore).toList();
-    final int plotted = scores.whereType<double>().length;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        TrendChart(scores: scores),
-        const SizedBox(height: AppSpacing.sm),
-        Text(
-          plotted == 0
-              ? 'Overall score · no scored sessions in the last '
-                  '${window.length}'
-              : 'Overall score · last $plotted scored '
-                  '${plotted == 1 ? 'session' : 'sessions'}',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-        ),
-      ],
-    );
+  /// The only cross-shot-type numbers allowed: counts and one record.
+  ///
+  /// There is deliberately no "average score" here. A mean over forehands,
+  /// serves and volleys is arithmetic over three different measurements and
+  /// would move when the player simply changed which shot they filmed.
+  List<InlineStat> _overallStats(DashboardInsights insights) {
+    final CoverageSummary? coverage = insights.latestCoverage;
+    return <InlineStat>[
+      InlineStat(label: 'Clips', value: insights.totalSessions.toString()),
+      InlineStat(
+        label: 'Shot types',
+        value: insights.shotTypesRecorded.toString(),
+      ),
+      InlineStat(
+        label: 'Top speed',
+        value: insights.topSpeedMph?.toString(),
+        unit: 'mph',
+      ),
+      InlineStat(
+        label: 'Latest coverage',
+        value: coverage == null || coverage.total <= 0
+            ? null
+            : '${coverage.available}/${coverage.total}',
+      ),
+    ];
   }
 
-  /// The latest analysis's categories, or nothing at all.
-  List<Widget> _buildBreakdown() {
-    if (_detailLoading) {
+  /// The newest analysis's own scorecard: score AND per-category coverage in
+  /// one place, which no sparkline shows.
+  List<Widget> _buildLatestBreakdown() {
+    if (_detailLoading && _details.isEmpty) {
       return const <Widget>[
         SectionHeader(title: 'Latest breakdown'),
         AppCard(
@@ -364,19 +332,36 @@ class DashboardScreenState extends State<DashboardScreen> {
         SizedBox(height: AppSpacing.lg),
       ];
     }
-    // Detail request failed, or the analysis carried no categories: the
-    // section disappears rather than showing an error on a working screen.
-    if (_categories.isEmpty) return const <Widget>[];
-
+    if (_details.isEmpty || _details.first.categories.isEmpty) {
+      return const <Widget>[];
+    }
     return <Widget>[
       const SectionHeader(title: 'Latest breakdown'),
-      AppCard(child: CategoryBars(categories: _categories)),
+      AppCard(child: CategoryBars(categories: _details.first.categories)),
       const SizedBox(height: AppSpacing.lg),
     ];
   }
 
+  List<Widget> _buildShotTypes(DashboardInsights insights) {
+    return <Widget>[
+      const SectionHeader(title: 'By shot type'),
+      for (final ShotTypeInsight insight in insights.shotTypes) ...<Widget>[
+        ShotTypeSection(insight: insight),
+        const SizedBox(height: AppSpacing.md),
+      ],
+      // Never-recorded shots are listed rather than hidden, so the player can
+      // see what the app would analyse if they filmed it — and they carry no
+      // chart and no number at all.
+      for (final ShotType shotType in insights.notRecorded) ...<Widget>[
+        ShotTypeBlankCard(shotType: shotType),
+        const SizedBox(height: AppSpacing.sm),
+      ],
+      const SizedBox(height: AppSpacing.md),
+    ];
+  }
+
   Widget _buildRecent() {
-    final List<AnalysisSummary> recent = _items.take(3).toList();
+    final List<AnalysisSummary> recent = _items.take(5).toList();
     return AppCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -477,7 +462,8 @@ class _HeroCard extends StatelessWidget {
 
   final AnalysisSummary latest;
 
-  /// Only non-null when this session and the one before it were both scored.
+  /// Only non-null when this session and the previous one of the SAME shot
+  /// type were both scored.
   final double? delta;
 
   @override
@@ -537,7 +523,12 @@ class _ShotChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: theme.colorScheme.outline),
       ),
-      child: Text(shotType, style: theme.textTheme.labelMedium),
+      child: Text(
+        shotType,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.labelMedium,
+      ),
     );
   }
 }
@@ -566,13 +557,20 @@ class _RecentRow extends StatelessWidget {
         vertical: AppSpacing.xs,
       ),
       leading: _ScoreBadge(score: score),
-      title: Text(summary.shotType.label, style: theme.textTheme.bodyLarge),
+      title: Text(
+        summary.shotType.label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.bodyLarge,
+      ),
       subtitle: Text(
         <String>[
           _relativeTime(summary.createdAt),
           // No speed at all when the clip was not calibrated.
           if (mph != null) '$mph mph',
         ].join(' · '),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: theme.textTheme.bodySmall
             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
       ),
