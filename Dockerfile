@@ -1,12 +1,43 @@
 FROM python:3.13-slim
 
-# mediapipe.tasks.python.vision -> sounddevice -> libportaudio2.
-# Linux wheels do not bundle PortAudio (Windows/macOS wheels do). Host-OS fact,
-# not a platform fact: required on any Linux runtime, Cloud Run included.
-# --no-install-recommends because libportaudio2's recommends pull ALSA tooling
-# we never call; the apt lists are dead weight in the final layer.
+# System shared libraries the Linux wheels expect to find already on the host.
+# Derived, not guessed: every .so in every wheel this image installs was read
+# for its ELF DT_NEEDED entries, and the three below are the only SONAMEs left
+# unsatisfied by python:3.13-slim (libc/libm/libdl/libpthread/librt/libmvec/
+# ld-linux come from glibc; libstdc++.so.6 and libgcc_s.so.1 come in with apt
+# itself, which is C++; libz.so.1 comes in with CPython's zlib module).
+# --no-install-recommends throughout, and the apt lists are dead weight in the
+# final layer.
+#
+#   libportaudio2  mediapipe.tasks.python.vision -> sounddevice -> PortAudio.
+#                  The sounddevice wheel is pure Python and dlopen()s
+#                  "portaudio" AT IMPORT TIME; Linux wheels bundle no copy
+#                  (Windows/macOS ones do), so without this the very first
+#                  `import mediapipe...` dies on
+#                  OSError: PortAudio library not found. Host-OS fact, not a
+#                  platform fact: required on any Linux runtime, Cloud Run
+#                  included. Its recommends pull ALSA tooling we never call.
+#   libgles2       Provides libGLESv2.so.2. mediapipe 0.10.35 ships exactly one
+#                  native object, mediapipe/tasks/c/libmediapipe.so, and that
+#                  object hard-links against OpenGL ES -- MediaPipe's GPU
+#                  calculator layer is compiled in whether or not we ask for a
+#                  GPU delegate. It is ctypes-loaded lazily, which is why the
+#                  failure surfaced at PoseLandmarker.create_from_options()
+#                  rather than at import. Debian slim ships no GL stack at all.
+#   libegl1        Provides libEGL.so.1, the second DT_NEEDED of that same
+#                  libmediapipe.so. libgles2 does NOT depend on it (both come
+#                  from libglvnd and are siblings), so it must be named here or
+#                  it simply becomes the next missing .so after libgles2 lands.
+#
+# Deliberately NOT here: libGL.so.1 / GTK / X11 / Qt. opencv-python-headless is
+# the pinned cv2 (see backend/requirements.txt) and its bundled objects need
+# nothing beyond glibc and libz -- the GUI wheels are what would have dragged a
+# desktop stack into a server image.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libportaudio2 \
+ && apt-get install -y --no-install-recommends \
+      libportaudio2 \
+      libgles2 \
+      libegl1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
