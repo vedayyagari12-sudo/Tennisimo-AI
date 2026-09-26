@@ -85,6 +85,12 @@ enum ApiFailureKind {
 
   /// Polling hit the [kPollTimeout] cap without the job finishing.
   timeout,
+
+  /// The caller stopped polling — the screen that wanted the answer is gone.
+  ///
+  /// NOT a server outcome and never a user-visible error: the job itself is
+  /// untouched and keeps running. See [PollCancellation].
+  cancelled,
 }
 
 /// A typed failure. [errorCode] is the server `ErrorCode` string when present.
@@ -528,20 +534,85 @@ ApiFailure? terminalPollFailure(PollUpdate update) {
   }
 }
 
-/// Polls every 2 s until the analysis is done, failed, or [kPollTimeout] is hit.
+/// How often the gap between polls looks up to see whether it was cancelled.
+///
+/// Small enough that backing out feels instant, large enough that the wait is
+/// still a handful of timer ticks rather than a busy loop.
+const Duration _cancelCheckInterval = Duration(milliseconds: 200);
+
+/// [kPollInterval], but abandoned early once [cancellation] fires.
+Future<void> _waitBetweenPolls(PollCancellation? cancellation) async {
+  if (cancellation == null) {
+    await Future<void>.delayed(kPollInterval);
+    return;
+  }
+  final DateTime until = DateTime.now().add(kPollInterval);
+  while (DateTime.now().isBefore(until)) {
+    if (cancellation.isCancelled) return;
+    await Future<void>.delayed(_cancelCheckInterval);
+  }
+}
+
+/// A one-way "stop polling" switch a caller owns and flips.
+///
+/// CLIENT-SIDE ONLY, and deliberately so: cancelling this stops the requests
+/// this app makes, and does nothing whatsoever to the job on the server. There
+/// is no cancel endpoint, the analysis finishes either way, and the result is
+/// retrievable from history afterwards. Anything that flips this therefore owes
+/// the user copy saying the analysis continues — see `AnalyzingScreen`.
+class PollCancellation {
+  bool _cancelled = false;
+
+  /// True once [cancel] has been called. Never goes back to false: a cancelled
+  /// token is spent, so a stale closure cannot resurrect a dead loop.
+  bool get isCancelled => _cancelled;
+
+  void cancel() => _cancelled = true;
+}
+
+/// The result [pollUntilComplete] returns when its [PollCancellation] fired.
+///
+/// Its own kind rather than a borrowed one, so nothing downstream can mistake
+/// "we stopped asking" for "the server failed" and put an error in front of a
+/// user who simply pressed back.
+const ApiFailure kPollCancelledFailure = ApiFailure(
+  kind: ApiFailureKind.cancelled,
+  message: 'Stopped checking on this analysis. It is still running on the '
+      'server and will appear in your history when it finishes.',
+);
+
+/// Polls every 2 s until the analysis is done, failed, cancelled, or
+/// [kPollTimeout] is hit.
 ///
 /// [onUpdate] fires on each successful non-final poll so the screen can show
 /// queue position. Transient network blips do not abort the loop; they are
 /// retried until the cap.
+///
+/// [cancellation], when given, is checked before every request AND during the
+/// wait between them, so a cancelled loop stops within [_cancelCheckInterval]
+/// rather than after up to another full [kPollInterval] and one more billed
+/// request.
 Future<ApiResult<AnalysisResponse>> pollUntilComplete(
   String analysisId, {
   void Function(PollUpdate update)? onUpdate,
+  PollCancellation? cancellation,
 }) async {
   final DateTime deadline = DateTime.now().add(kPollTimeout);
   ApiFailure? lastTransient;
 
   while (DateTime.now().isBefore(deadline)) {
+    // Checked HERE, before the request goes out, so a token cancelled during
+    // the previous wait costs zero further requests.
+    if (cancellation?.isCancelled ?? false) {
+      return const ApiResult<AnalysisResponse>.err(kPollCancelledFailure);
+    }
     final ApiResult<PollUpdate> result = await fetchAnalysis(analysisId);
+
+    // And again on the way back: the answer to a request that was in flight
+    // when the screen went away is of no interest to anyone.
+    if (cancellation?.isCancelled ?? false) {
+      return const ApiResult<AnalysisResponse>.err(kPollCancelledFailure);
+    }
 
     if (!result.isOk) {
       final ApiFailure failure = result.failure!;
@@ -561,7 +632,11 @@ Future<ApiResult<AnalysisResponse>> pollUntilComplete(
       onUpdate?.call(update);
     }
 
-    await Future<void>.delayed(kPollInterval);
+    await _waitBetweenPolls(cancellation);
+  }
+
+  if (cancellation?.isCancelled ?? false) {
+    return const ApiResult<AnalysisResponse>.err(kPollCancelledFailure);
   }
 
   return ApiResult<AnalysisResponse>.err(ApiFailure(

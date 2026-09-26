@@ -15,6 +15,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_palette.dart';
 import 'brand.dart';
@@ -117,6 +118,44 @@ ColorScheme buildColorScheme(AppPalette palette) {
   );
 }
 
+/// The status-bar style for a canvas of the given [brightness].
+///
+/// This must be set explicitly. The app bar is deliberately transparent, and
+/// when an [AppBar] has no `systemOverlayStyle` Flutter guesses one with
+/// `ThemeData.estimateBrightnessForColor(effectiveBackgroundColor)`. That runs
+/// `Color.computeLuminance()`, which IGNORES alpha: `Colors.transparent` is
+/// `0x00000000`, so its luminance is 0, so every screen was classified as a
+/// dark canvas and got white status-bar icons — unreadable on both light
+/// canvases.
+///
+/// The two icon fields are inverted with respect to each other, which is worth
+/// stating rather than remembering. Per the framework's own doc comments in
+/// `services/system_chrome.dart`:
+///
+/// * `statusBarIconBrightness` — "the brightness of the top status bar icons",
+///   Android only. Light canvas wants DARK icons.
+/// * `statusBarBrightness` — "the brightness of top status bar", iOS only. It
+///   describes the BACKGROUND, from which iOS derives its own icon colour.
+///   Light canvas is LIGHT.
+///
+/// The framework's own [SystemUiOverlayStyle.dark] constant — documented as
+/// "intended for applications with a light background" — pairs exactly that
+/// way (`statusBarIconBrightness: dark`, `statusBarBrightness: light`), which
+/// is the cross-check for the polarity above.
+SystemUiOverlayStyle systemOverlayStyleFor(Brightness brightness) {
+  final bool lightCanvas = brightness == Brightness.light;
+  return SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    // Android.
+    statusBarIconBrightness: lightCanvas ? Brightness.dark : Brightness.light,
+    // iOS: the canvas behind the icons, not the icons.
+    statusBarBrightness: lightCanvas ? Brightness.light : Brightness.dark,
+    systemNavigationBarColor: paletteFor(kBrandFlavor, brightness).surface,
+    systemNavigationBarIconBrightness:
+        lightCanvas ? Brightness.dark : Brightness.light,
+  );
+}
+
 /// Base typography, with tabular figures on every size a big numeral uses.
 TextTheme _textTheme(TextTheme base) {
   TextStyle? tabular(TextStyle? style, {FontWeight? weight}) =>
@@ -167,6 +206,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.dark}) {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
+      // Never left to Flutter's guess: see [systemOverlayStyleFor].
+      systemOverlayStyle: systemOverlayStyleFor(brightness),
     ),
     cardTheme: CardThemeData(
       color: palette.surfaceContainer,

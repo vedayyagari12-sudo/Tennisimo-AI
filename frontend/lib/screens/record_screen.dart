@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
 import '../models/video_clip.dart';
+import '../services/haptics.dart';
 import '../services/video_file_picker.dart';
 import '../services/video_intake.dart';
 import '../widgets/content_width.dart';
@@ -133,6 +134,23 @@ String recordingFailureMessage(Object error) {
   return 'Recording could not start. ($error)';
 }
 
+/// Shown when a clip is ready to analyse but no racket hand is chosen.
+///
+/// Says what to do, because there is exactly one thing to do. The clip itself
+/// is not lost by the refusal: nothing has been uploaded, and choosing a hand
+/// and pressing again re-runs the same intake.
+const String kHandednessMissingMessage =
+    'Choose your racket hand — right or left — before analysing this swing.';
+
+/// PURE. Why an analysis cannot start yet, or null when it can.
+///
+/// Exists as a function rather than an inline `!` because it is the guard that
+/// used to be `_handedness!`: a null-assertion inside a route builder, reachable
+/// from two real timing windows. Pure, so the refusal is unit-testable without
+/// a camera. See [kHandednessMissingMessage].
+String? analysisBlockedReason(Handedness? handedness) =>
+    handedness == null ? kHandednessMissingMessage : null;
+
 /// Camera capture screen: shot-type and handedness hints, framing guidance,
 /// optional court calibration, and a capped recording.
 ///
@@ -163,6 +181,23 @@ class _RecordScreenState extends State<RecordScreen> {
   /// measured. Drives a real spinner over a real wait — there is no percentage,
   /// because nothing here reports one.
   bool _picking = false;
+
+  /// True from the first press of Record or "Choose a video file" until that
+  /// intake has been handed to the analysis screen or has given up.
+  ///
+  /// Wider than [_isRecording] on purpose, because [_isRecording] leaves two
+  /// windows where the capture controls are live but a clip is already on its
+  /// way to [_startAnalysis]:
+  ///
+  ///  * the file chooser is open — the OS sheet covers this screen, but the
+  ///    handedness control underneath it was still enabled;
+  ///  * the moment after `stopVideoRecording`, where `_isRecording` is already
+  ///    false while the bytes are still being read and sniffed.
+  ///
+  /// Deselecting handedness in either window used to reach `_handedness!` with
+  /// a null and throw inside a route builder. It also closes the double-tap
+  /// window on the record button — see [_startRecording].
+  bool _intakeInFlight = false;
 
   /// Why the last chosen file was refused, shown inline next to the button that
   /// produced it. Null when there is nothing to say.
@@ -244,7 +279,15 @@ class _RecordScreenState extends State<RecordScreen> {
   Future<void> _startRecording() async {
     final CameraController? controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
-    if (_isRecording) return;
+    if (_isRecording || _intakeInFlight) return;
+
+    // Set BEFORE the await, which is the whole point. `CameraController`
+    // does guard re-entry — but with `if (value.isRecordingVideo)`, and it
+    // only sets `isRecordingVideo` AFTER `startVideoCapturing` returns
+    // (camera 0.11.4, lib/src/camera_controller.dart:576 and :598). Two taps
+    // inside that await therefore both pass the plugin's guard and both start
+    // a capture. This flag is what actually closes that window.
+    setState(() => _intakeInFlight = true);
 
     try {
       await controller.startVideoRecording();
@@ -255,14 +298,21 @@ class _RecordScreenState extends State<RecordScreen> {
       if (!mounted) return;
       final bool unsupported = isRecordingUnsupportedError(e);
       setState(() {
+        _intakeInFlight = false;
         _recordingUnsupported = unsupported;
         if (unsupported) _pickError = null;
       });
-      if (!unsupported) _showSnack(recordingFailureMessage(e));
+      if (!unsupported) {
+        // A deliberate press produced nothing: worth one soft bump.
+        unawaited(haptics.actionFailed());
+        _showSnack(recordingFailureMessage(e));
+      }
       return;
     }
 
     if (!mounted) return;
+    // The most physical moment in the app: the camera is now rolling.
+    unawaited(haptics.recordingStarted());
     setState(() {
       _isRecording = true;
       _elapsed = Duration.zero;
@@ -279,7 +329,22 @@ class _RecordScreenState extends State<RecordScreen> {
     });
   }
 
+  /// Ends the capture and, if the clip is usable, hands it straight on.
+  ///
+  /// The intake is only "over" when this whole method is — including the byte
+  /// read, the container sniff and the analysis screen. [_intakeInFlight] is
+  /// cleared in the `finally` rather than next to `_isRecording = false`,
+  /// because between those two points the user could previously clear their
+  /// handedness while a clip was already on its way to [_startAnalysis].
   Future<void> _stopRecording() async {
+    try {
+      await _finishRecording();
+    } finally {
+      if (mounted) setState(() => _intakeInFlight = false);
+    }
+  }
+
+  Future<void> _finishRecording() async {
     final CameraController? controller = _controller;
     if (controller == null || !_isRecording) return;
 
@@ -298,6 +363,8 @@ class _RecordScreenState extends State<RecordScreen> {
     }
 
     if (!mounted) return;
+    // Stopped, and the clip is in hand.
+    unawaited(haptics.recordingStopped());
     setState(() {
       _isRecording = false;
       _elapsed = Duration.zero;
@@ -337,34 +404,60 @@ class _RecordScreenState extends State<RecordScreen> {
   /// Opens the platform file chooser, then hands the result to the same
   /// downstream flow a recording uses.
   Future<void> _pickVideo() async {
-    if (_handedness == null || _picking || _isRecording) return;
+    if (_handedness == null || _picking || _isRecording || _intakeInFlight) {
+      return;
+    }
     setState(() {
       _picking = true;
+      // Held for longer than `_picking`: the chooser is a full-screen OS sheet,
+      // and the handedness control sitting live underneath it was one of the
+      // two ways to reach `_startAnalysis` with no racket hand chosen.
+      _intakeInFlight = true;
       _pickError = null;
     });
 
-    final VideoPickOutcome outcome = await pickVideoClip();
-    if (!mounted) return;
-    setState(() => _picking = false);
+    try {
+      final VideoPickOutcome outcome = await pickVideoClip();
+      if (!mounted) return;
+      setState(() => _picking = false);
 
-    switch (outcome) {
-      case VideoPickCancelled():
-        return;
-      case VideoPickRejected(message: final String message):
-        setState(() => _pickError = message);
-      case VideoPickSucceeded(clip: final VideoClip clip):
-        await _startAnalysis(clip);
+      switch (outcome) {
+        case VideoPickCancelled():
+          return;
+        case VideoPickRejected(message: final String message):
+          setState(() => _pickError = message);
+        case VideoPickSucceeded(clip: final VideoClip clip):
+          await _startAnalysis(clip);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _picking = false;
+          _intakeInFlight = false;
+        });
+      }
     }
   }
 
   /// THE single downstream entry point. Both intake paths end here, so
   /// calibration, hints and analysis behave identically whichever was used.
   Future<void> _startAnalysis(VideoClip clip) async {
+    // The guard at the point of use. The controls are also held disabled for
+    // the whole of an intake (see [_intakeInFlight]), but a belt-and-braces
+    // check here is what turns any remaining route into a sentence the user
+    // can act on instead of a null-assertion crash.
+    final Handedness? handedness = _handedness;
+    final String? blocked = analysisBlockedReason(handedness);
+    if (blocked != null) {
+      _showSnack(blocked);
+      return;
+    }
+
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (BuildContext context) => AnalyzingScreen(
           clip: clip,
-          handednessHint: _handedness!,
+          handednessHint: handedness!,
           labelHint: _shotType,
           calibration: _calibration,
         ),
@@ -425,7 +518,7 @@ class _RecordScreenState extends State<RecordScreen> {
                 return ChoiceChip(
                   label: Text(type.label),
                   selected: _shotType == type,
-                  onSelected: _isRecording
+                  onSelected: _intakeInFlight
                       ? null
                       : (bool _) => setState(() => _shotType = type),
                 );
@@ -449,7 +542,10 @@ class _RecordScreenState extends State<RecordScreen> {
               selected: _handedness == null
                   ? const <Handedness>{}
                   : <Handedness>{_handedness!},
-              onSelectionChanged: _isRecording
+              // Disabled for the WHOLE intake, not just while the camera is
+              // rolling: the hint travels with the clip, so changing it after
+              // the clip exists is either meaningless or a crash.
+              onSelectionChanged: _intakeInFlight
                   ? null
                   : (Set<Handedness> selection) => setState(
                       () => _handedness =
@@ -543,7 +639,9 @@ class _RecordScreenState extends State<RecordScreen> {
     final bool ready = _controller != null &&
         _controller!.value.isInitialized &&
         _handedness != null &&
-        !_picking;
+        // Live while recording (that is the Stop button), dead at every other
+        // point of an intake.
+        (_isRecording || !_intakeInFlight);
     final Duration remaining = kMaxRecordingDuration - _elapsed;
 
     return Column(
@@ -590,7 +688,8 @@ class _RecordScreenState extends State<RecordScreen> {
   /// — it is the primary way in and is drawn as one, because presenting a
   /// disabled record button as the main action would be lying about what works.
   Widget _buildFileIntake(ThemeData theme) {
-    final bool canPick = _handedness != null && !_picking && !_isRecording;
+    final bool canPick =
+        _handedness != null && !_picking && !_isRecording && !_intakeInFlight;
     final bool promote = kIsWeb || _recordingUnsupported;
     final String? error = _pickError;
 

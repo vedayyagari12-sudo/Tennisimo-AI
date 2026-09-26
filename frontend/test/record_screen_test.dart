@@ -1,7 +1,47 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tennisimo_ai/models/enums.dart';
 import 'package:tennisimo_ai/screens/record_screen.dart';
+import 'package:tennisimo_ai/theme/app_theme.dart';
+
+/// A file chooser the test drives by hand.
+///
+/// Subclassing [FilePickerPlatform] is enough to install it: its constructor
+/// passes the interface's own private token, which is what the `instance`
+/// setter verifies.
+class _PendingPicker extends FilePickerPlatform {
+  final Completer<PlatformFile?> completer = Completer<PlatformFile?>();
+
+  @override
+  Future<PlatformFile?> pickFile({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    AndroidOptions androidOptions = const AndroidOptions(),
+    DarwinOptions darwinOptions = const DarwinOptions(),
+    WindowsOptions windowsOptions = const WindowsOptions(),
+    LinuxOptions linuxOptions = const LinuxOptions(),
+    WebOptions webOptions = const WebOptions(),
+  }) =>
+      completer.future;
+}
+
+/// The real chooser, put back after each test that swaps it out.
+final FilePickerPlatform originalPicker = FilePickerPlatform.instance;
+
+/// The handedness control, whichever position it is in.
+SegmentedButton<Handedness> handednessControl(WidgetTester tester) =>
+    tester.widget<SegmentedButton<Handedness>>(
+      find.byType(SegmentedButton<Handedness>),
+    );
 
 /// Coverage for the camera-setup error wording.
 ///
@@ -184,6 +224,101 @@ void main() {
         recordingFailureMessage(StateError('boom')),
         contains('Recording could not start.'),
       );
+    });
+  });
+
+  group('the handedness gate', () {
+    // A1. `_startAnalysis` used to read `_handedness!`, reachable with null
+    // from two timing windows, and it threw inside a route builder.
+    test('no racket hand blocks the analysis with a sentence, not a crash', () {
+      final String? reason = analysisBlockedReason(null);
+      expect(reason, isNotNull);
+      expect(reason, kHandednessMissingMessage);
+      // Says what to do, and names both options.
+      expect(reason, contains('right'));
+      expect(reason, contains('left'));
+    });
+
+    test('a chosen racket hand blocks nothing', () {
+      for (final Handedness hand in Handedness.values) {
+        expect(analysisBlockedReason(hand), isNull);
+      }
+    });
+  });
+
+  group('controls while an intake is in flight', () {
+    setUp(() {
+      // No cameras: the screen renders its camera-error state and the full set
+      // of hint controls, which is all this group is about.
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/camera'),
+        (MethodCall call) async =>
+            call.method == 'availableCameras' ? <Object?>[] : null,
+      );
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/camera'),
+        null,
+      );
+      FilePickerPlatform.instance = originalPicker;
+    });
+
+    testWidgets('handedness cannot be cleared while the file chooser is open',
+        (WidgetTester tester) async {
+      // A1, the file-pick window. The chooser is a full-screen OS sheet, but
+      // the control underneath it stayed live: deselect handedness there and
+      // the resolving pick reached `_handedness!` with a null.
+      final _PendingPicker picker = _PendingPicker();
+      FilePickerPlatform.instance = picker;
+
+      // Tall enough for the whole form: the controls live in a ListView and
+      // an unbuilt off-screen row cannot be tapped.
+      tester.view.physicalSize = const Size(1000, 3000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        theme: buildAppTheme(),
+        home: const RecordScreen(),
+      ));
+      await tester.pumpAndSettle();
+
+      // Choosing a racket hand is what unlocks the file button.
+      await tester.tap(find.text('Right'));
+      await tester.pumpAndSettle();
+      expect(handednessControl(tester).onSelectionChanged, isNotNull);
+
+      await tester.tap(find.text('Choose a video file'));
+      await tester.pump();
+
+      // The chooser is open. The hint controls are now dead.
+      expect(
+        handednessControl(tester).onSelectionChanged,
+        isNull,
+        reason: 'handedness was still changeable while a pick was in flight',
+      );
+
+      // And the file button cannot be pressed a second time into the same
+      // chooser.
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Choose a video file'),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      // Let the chooser resolve as "cancelled" so nothing is left pending.
+      picker.completer.complete(null);
+      await tester.pumpAndSettle();
+
+      // Back to normal afterwards: the lock lasts the intake, not forever.
+      expect(handednessControl(tester).onSelectionChanged, isNotNull);
     });
   });
 }

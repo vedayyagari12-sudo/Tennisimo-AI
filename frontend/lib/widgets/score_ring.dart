@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../theme/motion.dart';
 
 /// A circular score gauge.
 ///
@@ -40,17 +41,38 @@ class ScoreRing extends StatelessWidget {
     // The arc is a 12px-wide ring: a large filled area, so it takes the fill
     // tier, not the text step the numeral beside it would use.
     final Color arcColor = palette.scoreFillColor(value);
-    final double target =
-        value == null ? 0.0 : (value / 100).clamp(0.0, 1.0).toDouble();
+    // The tween runs over the SCORE itself, and the arc is derived from it,
+    // so the digits and the sweep are the same number by construction.
+    final double target = value ?? 0.0;
+    // A null score animates nothing. There is no value to count towards, and
+    // sweeping an arc to zero would read as "you scored nothing" rather than
+    // "this could not be measured".
+    final Duration duration = value == null
+        ? Duration.zero
+        : motionDuration(context, kScoreRingDuration);
+
+    final Widget caption = _Caption(
+      text: _captionText(),
+      emphasised: delta != null,
+      color: delta == null
+          ? theme.colorScheme.onSurfaceVariant
+          : (delta! >= 0
+              ? theme.colorScheme.primary
+              : theme.colorScheme.error),
+    );
 
     return SizedBox(
       width: size,
       height: size,
       child: TweenAnimationBuilder<double>(
+        // Keyed on the value so a NEW score re-runs the sweep from zero
+        // instead of silently swapping the numeral.
+        key: ValueKey<double?>(value),
         tween: Tween<double>(begin: 0.0, end: target),
-        duration: const Duration(milliseconds: 600),
-        curve: Curves.easeOutCubic,
-        builder: (BuildContext context, double progress, Widget? child) {
+        duration: duration,
+        curve: kEnterCurve,
+        builder: (BuildContext context, double shown, Widget? child) {
+          final double progress = (shown / 100).clamp(0.0, 1.0).toDouble();
           return CustomPaint(
             painter: _ScoreRingPainter(
               progress: progress,
@@ -61,38 +83,34 @@ class ScoreRing extends StatelessWidget {
               // No measurable score -> no arc at all, just a dashed track.
               dashed: value == null,
             ),
-            child: child,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    // Never "0" for a null score. For a real one the numeral
+                    // counts up on the same curve the arc sweeps on, so the
+                    // digits and the arc can never disagree.
+                    value == null
+                        ? '—'
+                        : shown.round().toString(),
+                    style: theme.textTheme.displaySmall?.copyWith(
+                      fontSize: size * 0.30,
+                      height: 1.0,
+                      color: value == null
+                          ? theme.colorScheme.onSurfaceVariant
+                          : theme.colorScheme.onSurface,
+                      fontFeatures: kTabularFigures,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  child!,
+                ],
+              ),
+            ),
           );
         },
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Text(
-                // Never "0" for a null score.
-                value == null ? '—' : value.round().toString(),
-                style: theme.textTheme.displaySmall?.copyWith(
-                  fontSize: size * 0.30,
-                  height: 1.0,
-                  color: value == null
-                      ? theme.colorScheme.onSurfaceVariant
-                      : theme.colorScheme.onSurface,
-                  fontFeatures: kTabularFigures,
-                ),
-              ),
-              const SizedBox(height: 4),
-              _Caption(
-                text: _captionText(),
-                emphasised: delta != null,
-                color: delta == null
-                    ? theme.colorScheme.onSurfaceVariant
-                    : (delta! >= 0
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.error),
-              ),
-            ],
-          ),
-        ),
+        child: caption,
       ),
     );
   }

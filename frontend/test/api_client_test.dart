@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tennisimo_ai/models/analysis_response.dart';
 import 'package:tennisimo_ai/models/enums.dart';
 import 'package:tennisimo_ai/services/api_client.dart';
 
@@ -286,6 +287,73 @@ void main() {
       } else {
         expect(baseUrl, injected);
       }
+    });
+  });
+
+  group('cancelling a poll', () {
+    test('cancel is a one-way switch', () {
+      final PollCancellation cancellation = PollCancellation();
+      expect(cancellation.isCancelled, isFalse);
+      cancellation.cancel();
+      expect(cancellation.isCancelled, isTrue);
+      // Idempotent, and there is no way back: a stale closure cannot revive a
+      // loop the screen already walked away from.
+      cancellation.cancel();
+      expect(cancellation.isCancelled, isTrue);
+    });
+
+    test('an already-cancelled token stops the loop before the first request',
+        () async {
+      // The regression this pins: before cancellation existed, leaving the
+      // analysing screen left this loop hitting /v1/analyses/{id} every 2 s for
+      // up to 210 s with nobody to receive the answer.
+      //
+      // The proof that no request went out is the RESULT: a request attempted
+      // from a test with no Supabase session comes back `notSignedIn`, which is
+      // a final poll failure. Getting `cancelled` back means the loop returned
+      // at the pre-request check instead.
+      final PollCancellation cancellation = PollCancellation()..cancel();
+      final Stopwatch watch = Stopwatch()..start();
+
+      final ApiResult<AnalysisResponse> result = await pollUntilComplete(
+        'analysis-id',
+        cancellation: cancellation,
+      );
+      watch.stop();
+
+      expect(result.isOk, isFalse);
+      expect(result.failure!.kind, ApiFailureKind.cancelled);
+      expect(result.failure!.kind, isNot(ApiFailureKind.notSignedIn));
+      // And promptly: not after another kPollInterval of dead waiting.
+      expect(watch.elapsed, lessThan(kPollInterval));
+    });
+
+    test('the cancelled failure tells the truth about what happens next',
+        () async {
+      // Cancelling is CLIENT-SIDE ONLY. The copy must not imply the user
+      // stopped the analysis, because they did not.
+      final String message = kPollCancelledFailure.message;
+      expect(message, contains('still running'));
+      expect(message, contains('history'));
+      expect(message.toLowerCase(), isNot(contains('cancelled the analysis')));
+    });
+
+    test('a cancelled result is not mistaken for a server failure', () {
+      // Its own kind, so no screen can render it as an error and no retry
+      // heuristic can treat it as something that went wrong upstream.
+      expect(kPollCancelledFailure.kind, ApiFailureKind.cancelled);
+      expect(
+        kPollCancelledFailure.kind,
+        isNot(anyOf(
+          ApiFailureKind.server,
+          ApiFailureKind.timeout,
+          ApiFailureKind.network,
+          ApiFailureKind.badResponse,
+        )),
+      );
+      // Nothing came from the server, so there is nothing to report about one.
+      expect(kPollCancelledFailure.statusCode, isNull);
+      expect(kPollCancelledFailure.errorCode, isNull);
     });
   });
 }

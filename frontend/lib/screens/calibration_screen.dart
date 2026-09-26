@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
+import '../services/haptics.dart';
 import '../widgets/content_width.dart';
 
 /// Court calibration: tap the two ends of a court reference line on a frozen
@@ -50,6 +53,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       (details.localPosition.dx / size.width).clamp(0.0, 1.0),
       (details.localPosition.dy / size.height).clamp(0.0, 1.0),
     );
+    // One tick per placed endpoint: the tap landed on a frozen image with no
+    // other confirmation that it registered.
+    unawaited(haptics.calibrationPointPlaced());
     setState(() {
       _surfaceSize = size;
       if (_pointA == null) {

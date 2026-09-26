@@ -7,6 +7,8 @@ import '../widgets/app_card.dart';
 import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/section_header.dart';
+import '../widgets/skeleton_block.dart';
+import '../widgets/staggered_entrance.dart';
 import '../widgets/trend_chart.dart';
 import 'home_shell.dart';
 import 'record_screen.dart';
@@ -125,11 +127,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
         padding: kTabContentPadding,
         children: <Widget>[
           title,
-          const _SkeletonBlock(height: 190),
+          const SkeletonBlock(height: 190),
           const SizedBox(height: AppSpacing.lg),
-          const _SkeletonBlock(height: 88),
+          const SkeletonBlock(height: 88),
           const SizedBox(height: AppSpacing.lg),
-          const _SkeletonBlock(height: 220),
+          const SkeletonBlock(height: 220),
         ],
       );
     }
@@ -284,6 +286,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
 
     final List<Widget> out = <Widget>[];
+    // Runs across buckets, so the stagger reads as one list arriving rather
+    // than each group restarting from the top.
+    int position = 0;
     for (final _Bucket bucket in _Bucket.values) {
       final List<AnalysisSummary>? rows = grouped[bucket];
       if (rows == null || rows.isEmpty) continue;
@@ -294,11 +299,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
           children: <Widget>[
             for (int i = 0; i < rows.length; i++) ...<Widget>[
               if (i > 0) const Divider(height: 1, indent: AppSpacing.lg),
-              _SessionRow(
-                summary: rows[i],
-                timeLabel: _timeLabel(rows[i].createdAt, bucket),
-                busy: _openingId == rows[i].analysisId,
-                onTap: _openingId == null ? () => _open(rows[i]) : null,
+              StaggeredEntrance(
+                index: position++,
+                child: _SessionRow(
+                  summary: rows[i],
+                  timeLabel: _timeLabel(rows[i].createdAt, bucket),
+                  busy: _openingId == rows[i].analysisId,
+                  onTap: _openingId == null ? () => _open(rows[i]) : null,
+                ),
               ),
             ],
           ],
@@ -419,26 +427,6 @@ class _ScoreChip extends StatelessWidget {
           color: colour,
           fontFeatures: kTabularFigures,
         ),
-      ),
-    );
-  }
-}
-
-/// Quiet loading placeholder, matching the dashboard's.
-class _SkeletonBlock extends StatelessWidget {
-  const _SkeletonBlock({required this.height});
-
-  final double height;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-        border: Border.all(color: scheme.outline),
       ),
     );
   }

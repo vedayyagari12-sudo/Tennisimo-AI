@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'screens/home_shell.dart';
@@ -52,6 +53,15 @@ class TennisimoApp extends StatelessWidget {
             theme: buildAppTheme(brightness: Brightness.light),
             darkTheme: buildAppTheme(brightness: Brightness.dark),
             themeMode: themeController.mode,
+            // Four of this app's screens have no AppBar, so the app bar's own
+            // systemOverlayStyle never reaches them. This region is the floor
+            // under all of them: whichever canvas the framework picked, the
+            // status bar matches it. See [systemOverlayStyleFor].
+            builder: (BuildContext context, Widget? child) =>
+                AnnotatedRegion<SystemUiOverlayStyle>(
+              value: systemOverlayStyleFor(Theme.of(context).brightness),
+              child: child ?? const SizedBox.shrink(),
+            ),
             home: const AuthGate(),
           );
         },

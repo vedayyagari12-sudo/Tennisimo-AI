@@ -12,6 +12,7 @@ import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
+import '../widgets/skeleton_block.dart';
 import '../widgets/stat_tile.dart';
 import '../widgets/trend_chart.dart';
 import 'home_shell.dart';
@@ -161,11 +162,11 @@ class DashboardScreenState extends State<DashboardScreen> {
         children: const <Widget>[
           _DashboardHeader(),
           SizedBox(height: AppSpacing.lg),
-          _SkeletonBlock(height: 180),
+          SkeletonBlock(height: 180),
           SizedBox(height: AppSpacing.lg),
-          _SkeletonBlock(height: 92),
+          SkeletonBlock(height: 92),
           SizedBox(height: AppSpacing.lg),
-          _SkeletonBlock(height: 190),
+          SkeletonBlock(height: 190),
         ],
       );
     }
@@ -353,11 +354,11 @@ class DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              _SkeletonBlock(height: 14),
+              SkeletonBlock(height: 14),
               SizedBox(height: AppSpacing.md),
-              _SkeletonBlock(height: 14),
+              SkeletonBlock(height: 14),
               SizedBox(height: AppSpacing.md),
-              _SkeletonBlock(height: 14),
+              SkeletonBlock(height: 14),
             ],
           ),
         ),
@@ -655,25 +656,6 @@ class _ScoreBadge extends StatelessWidget {
           color: colour,
           fontFeatures: kTabularFigures,
         ),
-      ),
-    );
-  }
-}
-
-/// A shimmer-free loading block. Quieter than a spinner on a dark surface.
-class _SkeletonBlock extends StatelessWidget {
-  const _SkeletonBlock({required this.height});
-
-  final double height;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-        border: Border.all(color: Theme.of(context).colorScheme.outline),
       ),
     );
   }

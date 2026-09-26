@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../services/haptics.dart';
 import '../theme/app_theme.dart';
 import 'dashboard_screen.dart';
 import 'history_screen.dart';
@@ -32,9 +35,14 @@ class _HomeShellState extends State<HomeShell> {
 
   Future<void> _onDestinationSelected(int index) async {
     if (index != _recordTab) {
+      if (index != _selected) unawaited(haptics.tabSelected());
       setState(() => _selected = index);
       return;
     }
+
+    // Opening the camera is the app's primary action, so it gets the same
+    // tick as a tab change rather than passing silently.
+    unawaited(haptics.tabSelected());
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -6,6 +8,7 @@ import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
 import '../models/video_clip.dart';
 import '../services/api_client.dart';
+import '../services/haptics.dart';
 import '../services/supabase_storage.dart';
 import '../services/video_intake.dart';
 import '../widgets/content_width.dart';
@@ -13,6 +16,23 @@ import 'results_screen.dart';
 
 /// Which half of the job broke, so the retry copy can say something true.
 enum _Stage { uploading, analysing }
+
+/// PURE. What leaving this screen actually costs, told straight.
+///
+/// The two halves are genuinely different and must not be papered over with
+/// one vague sentence:
+///
+///  * Before the upload finishes there is no job yet, so leaving really does
+///    throw the swing away.
+///  * After it, the server runs the analysis to completion whatever this app
+///    does. Leaving stops the polling and nothing else, and the result shows up
+///    in history — so implying the user cancelled the analysis would be false.
+String leaveAnalysisMessage({required bool uploaded}) => uploaded
+    ? 'Your clip has already uploaded, so the analysis keeps running on the '
+        'server. Leaving only stops this screen waiting for it — the result '
+        'will be in your history when it finishes.'
+    : 'Your clip is still uploading. Leaving now stops it, and nothing will '
+        'be analysed.';
 
 /// Uploads the clip, queues the analysis, then polls to completion.
 ///
@@ -45,10 +65,26 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
   _Stage? _failedStage;
   bool _running = false;
 
+  /// The live poll loop's stop switch, held so [dispose] can flip it.
+  ///
+  /// Without this, backing out of this screen left `pollUntilComplete` hitting
+  /// the API every 2 s for up to 210 s with nothing on screen to receive the
+  /// answer — and starting over gave you a second loop alongside the first.
+  /// `mounted` guards only stopped the `setState`s, never the requests.
+  PollCancellation? _poll;
+
   @override
   void initState() {
     super.initState();
     _run();
+  }
+
+  @override
+  void dispose() {
+    // Tied to the screen's lifecycle, so EVERY way out — back button, pop,
+    // replacement by the results screen — stops the requests.
+    _poll?.cancel();
+    super.dispose();
   }
 
   Future<void> _run() async {
@@ -125,8 +161,11 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
     }
 
     _setStatus('Analysing your swing…');
+    final PollCancellation cancellation = PollCancellation();
+    _poll = cancellation;
     final ApiResult<AnalysisResponse> analysis = await pollUntilComplete(
       created.data!.analysisId,
+      cancellation: cancellation,
       onUpdate: (PollUpdate update) {
         if (!mounted) return;
         final int? queue = update.queuePosition;
@@ -137,6 +176,10 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
         );
       },
     );
+    // A cancelled poll is not a failure and gets no error screen: the user
+    // left on purpose, was told the analysis continues, and this state object
+    // is already on its way out.
+    if (analysis.failure?.kind == ApiFailureKind.cancelled) return;
     if (!mounted) return;
     if (!analysis.isOk) {
       _fail(_Stage.analysing, analysis.failure!);
@@ -144,6 +187,9 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
     }
 
     setState(() => _running = false);
+    // The payoff arrived. The user has been waiting, very possibly with the
+    // phone face-down in a bag, so this one is worth feeling.
+    unawaited(haptics.analysisComplete());
     await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (BuildContext context) =>
@@ -166,16 +212,60 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
     });
   }
 
+  /// Asks before abandoning a job that is already in flight.
+  ///
+  /// The decision this dialog encodes: leaving stops the POLLING, not the
+  /// analysis. There is no cancel endpoint, the server finishes the job either
+  /// way, and the result lands in history — so pretending the user cancelled
+  /// something would be a lie, and silently dropping it without saying so would
+  /// be a quieter one. The copy therefore states what actually happens.
+  Future<bool> _confirmLeave() async {
+    final bool? leave = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Leave this analysis?'),
+        content: Text(
+          leaveAnalysisMessage(uploaded: _stage != _Stage.uploading),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep waiting'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    return leave ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final ApiFailure? failure = _failure;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Analysing')),
-      body: ContentWidth(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: failure == null ? _buildProgress() : _buildError(failure),
+    return PopScope<void>(
+      // Only while work is genuinely in flight. A finished or failed screen
+      // pops on the first press, as it always did.
+      canPop: !_running,
+      onPopInvokedWithResult: (bool didPop, void result) async {
+        if (didPop) return;
+        // Resolved before the dialog's await, so no BuildContext crosses it.
+        final NavigatorState navigator = Navigator.of(context);
+        if (!await _confirmLeave()) return;
+        if (!mounted) return;
+        // `dispose` cancels the poll; this is just the pop itself.
+        navigator.pop();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Analysing')),
+        body: ContentWidth(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: failure == null ? _buildProgress() : _buildError(failure),
+            ),
           ),
         ),
       ),
