@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'theme/app_theme.dart';
-import 'theme/theme_controller.dart';
 
 /// REPLACE ME: the Supabase project URL, e.g. `https://your-ref.supabase.co`
 const String supabaseUrl = 'https://qrjpheqayeudazcrqxpl.supabase.co';
@@ -20,52 +19,39 @@ Future<void> main() async {
     url: supabaseUrl,
     publishableKey: supabasePublishableKey,
   );
-  // The remembered light/dark choice, read before the first frame so the app
-  // does not flash the wrong canvas on launch. A failure to read degrades to
-  // ThemeMode.system rather than blocking startup.
-  final ThemeController themeController = ThemeController();
-  await themeController.load();
-
-  runApp(TennisimoApp(themeController: themeController));
+  runApp(const TennisimoApp());
 }
 
 class TennisimoApp extends StatelessWidget {
-  const TennisimoApp({super.key, required this.themeController});
+  const TennisimoApp({super.key, this.home});
 
-  /// Owns the light/dark choice. Handed in rather than constructed here so a
-  /// test can drive a theme switch directly.
-  final ThemeController themeController;
+  /// The first screen. Only ever passed by a test that needs to inspect this
+  /// widget's [MaterialApp] without a live Supabase session; production leaves
+  /// it null and gets the [AuthGate].
+  @visibleForTesting
+  final Widget? home;
 
   @override
   Widget build(BuildContext context) {
-    // ThemeScope sits ABOVE MaterialApp so the overflow menu can reach the
-    // controller, and ListenableBuilder sits above MaterialApp too so a mode
-    // change rebuilds MaterialApp itself. That is what propagates the new
-    // ThemeData — and with it the AppPalette extension — to every widget in
-    // the tree, instead of leaving already-built widgets on the old colours.
-    return ThemeScope(
-      controller: themeController,
-      child: ListenableBuilder(
-        listenable: themeController,
-        builder: (BuildContext context, Widget? child) {
-          return MaterialApp(
-            title: 'Tennisimo AI',
-            theme: buildAppTheme(brightness: Brightness.light),
-            darkTheme: buildAppTheme(brightness: Brightness.dark),
-            themeMode: themeController.mode,
-            // Four of this app's screens have no AppBar, so the app bar's own
-            // systemOverlayStyle never reaches them. This region is the floor
-            // under all of them: whichever canvas the framework picked, the
-            // status bar matches it. See [systemOverlayStyleFor].
-            builder: (BuildContext context, Widget? child) =>
-                AnnotatedRegion<SystemUiOverlayStyle>(
-              value: systemOverlayStyleFor(Theme.of(context).brightness),
-              child: child ?? const SizedBox.shrink(),
-            ),
-            home: const AuthGate(),
-          );
-        },
+    // Light only. One theme is supplied and no darkTheme, so a device in dark
+    // mode cannot put this app on a dark canvas: with darkTheme null,
+    // MaterialApp falls back to `theme` whatever the platform brightness is,
+    // and themeMode states the intent rather than leaving it to that fallback.
+    return MaterialApp(
+      title: 'Tennisimo AI',
+      theme: buildAppTheme(),
+      themeMode: ThemeMode.light,
+      // Four of this app's screens have no AppBar, so the app bar's own
+      // systemOverlayStyle never reaches them. This region is the floor under
+      // all of them. It is NOT keyed to Theme.of(context).brightness: the
+      // canvas never varies, and a brightness that never varies is exactly
+      // where the white-icons-on-white bug hid. See [lightCanvasOverlayStyle].
+      builder: (BuildContext context, Widget? child) =>
+          AnnotatedRegion<SystemUiOverlayStyle>(
+        value: lightCanvasOverlayStyle(),
+        child: child ?? const SizedBox.shrink(),
       ),
+      home: home ?? const AuthGate(),
     );
   }
 }

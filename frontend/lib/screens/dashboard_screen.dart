@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/analysis_response.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
-import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
@@ -450,60 +449,20 @@ class _DashboardHeader extends StatelessWidget {
   }
 }
 
-/// The overflow menu: the light/dark choice, then sign out.
-///
-/// The theme entries only appear when a [ThemeScope] is installed above this
-/// screen, which is the real app. A widget test that mounts the dashboard on
-/// its own gets the menu it had before rather than a control wired to nothing.
+/// The overflow menu: sign out. The app is light-only, so there is no theme
+/// choice to offer here.
 class _OverflowMenu extends StatelessWidget {
   const _OverflowMenu();
 
-  static const Map<ThemeMode, String> _labels = <ThemeMode, String>{
-    ThemeMode.system: 'Follow system',
-    ThemeMode.light: 'Light',
-    ThemeMode.dark: 'Dark',
-  };
-
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ThemeController? controller = ThemeScope.maybeOf(context);
-
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert),
       onSelected: (String value) {
-        if (value == 'sign_out') {
-          Supabase.instance.client.auth.signOut();
-          return;
-        }
-        for (final ThemeMode mode in _labels.keys) {
-          if (value == 'theme_${mode.name}') controller?.setMode(mode);
-        }
+        if (value == 'sign_out') Supabase.instance.client.auth.signOut();
       },
-      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-        if (controller != null) ...<PopupMenuEntry<String>>[
-          for (final ThemeMode mode in _labels.keys)
-            PopupMenuItem<String>(
-              value: 'theme_${mode.name}',
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    controller.mode == mode
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    size: 18,
-                    color: controller.mode == mode
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: AppSpacing.md),
-                  Text(_labels[mode]!),
-                ],
-              ),
-            ),
-          const PopupMenuDivider(),
-        ],
-        const PopupMenuItem<String>(
+      itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(
           value: 'sign_out',
           child: Text('Sign out'),
         ),

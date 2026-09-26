@@ -8,11 +8,10 @@
 /// the palette has to have. A token can move freely inside its band; it cannot
 /// leave the band without failing here.
 ///
-/// Every check runs over all four combinations: 2 brand flavors x 2
-/// brightnesses. That is the point. The lesson this palette was built from is
-/// that an accent picked against a light canvas and never re-stepped for the
-/// dark one it actually ships on will glare, and nobody notices until it is in
-/// front of a user.
+/// Every check runs over both brand flavors. The app is light-only, so there
+/// is one canvas per flavor and every gate below applies to it: a flavor that
+/// was only half-validated is exactly the failure this suite exists to
+/// prevent.
 library;
 
 import 'dart:math' as math;
@@ -171,19 +170,14 @@ const double kAaLarge = 3.0;
 /// values happen to clear.
 const double kMinCvdSeparation = 0.070;
 
-/// The perceptual-lightness window a *chromatic text* accent must sit in.
-({double min, double max}) textBand(Brightness brightness) =>
-    brightness == Brightness.dark
-        ? (min: 0.62, max: 0.92)
-        : (min: 0.24, max: 0.52);
+/// The perceptual-lightness window a *chromatic text* accent must sit in on
+/// this app's light canvas.
+const ({double min, double max}) kTextBand = (min: 0.24, max: 0.52);
 
-/// The window a *large fill* must sit in. Narrower and lower than the text
-/// band on dark — this is the anti-glare band, the whole reason the two tiers
-/// exist. On light it is the anti-mud band: the same discipline upside down.
-({double min, double max}) fillBand(Brightness brightness) =>
-    brightness == Brightness.dark
-        ? (min: 0.55, max: 0.78)
-        : (min: 0.32, max: 0.60);
+/// The window a *large fill* must sit in. This is the anti-mud band, the whole
+/// reason the two tiers exist: a large area painted with a text-calibrated
+/// accent on a near-white canvas reads as a smear.
+const ({double min, double max}) kFillBand = (min: 0.32, max: 0.60);
 
 /// Text, icon and small-mark tokens: gated on WCAG body contrast.
 Map<String, Color> textTier(AppPalette p) => <String, Color>{
@@ -240,11 +234,7 @@ Map<String, Color> controlBackgrounds(AppPalette p) => <String, Color>{
       'surfaceContainerHigh': p.surfaceContainerHigh,
     };
 
-String _name(AppPalette p) {
-  final String brightness = p.brightness.name;
-  if (p == tennisimoDark || p == tennisimoLight) return 'tennisimo/$brightness';
-  return 'alternate/$brightness';
-}
+String _name(AppPalette p) => p == tennisimoLight ? 'tennisimo' : 'alternate';
 
 void main() {
   group('the maths itself', () {
@@ -293,60 +283,26 @@ void main() {
     });
   });
 
-  group('all four combinations exist and are distinct', () {
-    test('there are exactly four, one per flavor per canvas', () {
-      expect(kAllPalettes, hasLength(4));
-      expect(kAllPalettes.toSet(), hasLength(4));
+  group('both flavors exist and are distinct', () {
+    test('there is exactly one palette per flavor', () {
+      expect(kAllPalettes, hasLength(2));
+      expect(kAllPalettes.toSet(), hasLength(2));
       for (final BrandFlavorCase c in _cases) {
         expect(kAllPalettes, contains(c.palette));
       }
     });
 
-    test('each palette knows which canvas it was stepped for', () {
+    test('every palette is a light canvas, and says so', () {
+      // The app is light-only. A palette whose surface is not light, or which
+      // claims a brightness it was not stepped for, would put the whole
+      // lightness-band discipline below on the wrong side of the canvas.
       for (final AppPalette p in kAllPalettes) {
-        final double lightness = perceptualLightness(p.surface);
-        if (p.brightness == Brightness.dark) {
-          expect(lightness, lessThan(0.4), reason: '${_name(p)} surface');
-        } else {
-          expect(lightness, greaterThan(0.85), reason: '${_name(p)} surface');
-        }
-      }
-    });
-
-    test('no accent is reused across the two canvases', () {
-      // This is the whole lesson. One constant on both canvases is the bug.
-      for (final (AppPalette dark, AppPalette light) in <(
-        AppPalette,
-        AppPalette
-      )>[
-        (tennisimoDark, tennisimoLight),
-        (schoolDark, schoolLight),
-      ]) {
-        final Map<String, Color> a = <String, Color>{
-          ...chromaticTextTier(dark),
-          ...fillTier(dark),
-          ...surfaces(dark),
-          'outline': dark.outline,
-          'outlineVariant': dark.outlineVariant,
-          'onSurface': dark.onSurface,
-          'onSurfaceVariant': dark.onSurfaceVariant,
-        };
-        final Map<String, Color> b = <String, Color>{
-          ...chromaticTextTier(light),
-          ...fillTier(light),
-          ...surfaces(light),
-          'outline': light.outline,
-          'outlineVariant': light.outlineVariant,
-          'onSurface': light.onSurface,
-          'onSurfaceVariant': light.onSurfaceVariant,
-        };
-        for (final String token in a.keys) {
-          expect(
-            a[token],
-            isNot(b[token]),
-            reason: '$token was not re-stepped for the other canvas',
-          );
-        }
+        expect(p.brightness, Brightness.light, reason: _name(p));
+        expect(
+          perceptualLightness(p.surface),
+          greaterThan(0.85),
+          reason: '${_name(p)} surface',
+        );
       }
     });
   });
@@ -386,7 +342,7 @@ void main() {
 
       test('${c.label} — chromatic accents sit in the text lightness band',
           () {
-        final ({double min, double max}) band = textBand(c.palette.brightness);
+        const ({double min, double max}) band = kTextBand;
         chromaticTextTier(c.palette).forEach((String token, Color colour) {
           final double l = perceptualLightness(colour);
           expect(l, inInclusiveRange(band.min, band.max),
@@ -397,7 +353,7 @@ void main() {
     }
   });
 
-  group('tier 2: large fills clear 3:1 and stay inside the anti-glare band',
+  group('tier 2: large fills clear 3:1 and stay inside the anti-mud band',
       () {
     for (final BrandFlavorCase c in _cases) {
       test('${c.label} — every fill token on every surface', () {
@@ -414,7 +370,7 @@ void main() {
       });
 
       test('${c.label} — every fill token sits in the fill lightness band', () {
-        final ({double min, double max}) band = fillBand(c.palette.brightness);
+        const ({double min, double max}) band = kFillBand;
         fillTier(c.palette).forEach((String token, Color colour) {
           final double l = perceptualLightness(colour);
           expect(l, inInclusiveRange(band.min, band.max),
@@ -570,7 +526,7 @@ void main() {
     }
   });
 
-  group('the brand mark reads on every canvas', () {
+  group('the brand mark reads on the canvas', () {
     for (final BrandFlavorCase c in _cases) {
       test('${c.label} — the ball has an edge and the bolt reads on it', () {
         final AppPalette p = c.palette;
@@ -628,7 +584,7 @@ void main() {
   });
 }
 
-/// One (flavor, brightness) combination, with a label for failure messages.
+/// One brand flavor's palette, with a label for failure messages.
 ///
 /// The alternate flavor is never named after anything: it is "alternate".
 class BrandFlavorCase {
@@ -639,8 +595,6 @@ class BrandFlavorCase {
 }
 
 const List<BrandFlavorCase> _cases = <BrandFlavorCase>[
-  BrandFlavorCase('default/dark', tennisimoDark),
-  BrandFlavorCase('default/light', tennisimoLight),
-  BrandFlavorCase('alternate/dark', schoolDark),
-  BrandFlavorCase('alternate/light', schoolLight),
+  BrandFlavorCase('default', tennisimoLight),
+  BrandFlavorCase('alternate', schoolLight),
 ];

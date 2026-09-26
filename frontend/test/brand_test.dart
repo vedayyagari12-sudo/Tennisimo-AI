@@ -78,24 +78,15 @@ void main() {
     test('the compiled palette matches the compiled flavor', () {
       // Proves the define actually reaches the tokens: run the suite with
       // `--dart-define=BRAND=school` and these are the alternate hexes; run it
-      // with a bogus value and they are the default ones again. Both canvases
-      // are checked, because a flavor that only themed one half would be
-      // exactly the bug this palette exists to prevent.
-      final AppPalette dark = paletteFor(kBrandFlavor, Brightness.dark);
-      final AppPalette light = paletteFor(kBrandFlavor, Brightness.light);
+      // with a bogus value and they are the default ones again.
+      final AppPalette light = paletteFor(kBrandFlavor);
 
       switch (kBrandFlavor) {
         case BrandFlavor.tennisimo:
-          expect(dark.primary, const Color(0xFF58D377));
-          expect(dark.secondary, const Color(0xFFBBE556));
-          expect(dark.surface, const Color(0xFF0F172A));
           expect(light.primary, const Color(0xFF006A27));
           expect(light.secondary, const Color(0xFF485F00));
           expect(light.surface, const Color(0xFFF6F0EA));
         case BrandFlavor.school:
-          expect(dark.primary, const Color(0xFF92CAE6));
-          expect(dark.secondary, const Color(0xFFE7D652));
-          expect(dark.surface, const Color(0xFF0B1924));
           expect(light.primary, const Color(0xFF006289));
           expect(light.secondary, const Color(0xFF615500));
           expect(light.surface, const Color(0xFFF6FAFD));
@@ -135,14 +126,12 @@ void main() {
     });
 
     test('the ramp is never recoloured into the brand accents', () {
-      // The ramp follows brightness, never the flavor: the two flavors share
-      // one set of bands on each canvas.
+      // The ramp is never the flavor's: both flavors share one set of bands.
       for (final AppPalette palette in kAllPalettes) {
         expect(palette.scoreColor(90), palette.scoreHigh);
         expect(palette.scoreColor(70), palette.scoreMid);
         expect(palette.scoreColor(40), palette.scoreLow);
       }
-      expect(tennisimoDark.scoreHigh, schoolDark.scoreHigh);
       expect(tennisimoLight.scoreHigh, schoolLight.scoreHigh);
     });
 

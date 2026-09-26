@@ -1,30 +1,26 @@
-/// The colour tokens, one immutable set per (brand flavor x brightness).
+/// The colour tokens, one immutable set per brand flavor.
+///
+/// ## One canvas
+///
+/// This app is light-only. There is no dark set here to be selected, so there
+/// is no second canvas for a token to be mis-stepped against, and no runtime
+/// brightness for anything to go stale over.
 ///
 /// ## Why this is a [ThemeExtension] and not a set of `const` globals
 ///
-/// Brightness is a *runtime* value: the user can flip light/dark while the app
-/// is running, and "follow the system" can flip underneath us at sunset. A
-/// `const` token cannot depend on a runtime value, so the old
-/// `static const Color surface = ...` shape could only ever describe one
-/// canvas.
+/// Handing the tokens to the framework makes a token read
+/// `Theme.of(context)`, which registers an [InheritedWidget] dependency. The
+/// alternative — a mutable global with getters reading it — compiles, but it
+/// makes every colour read invisible to Flutter's dependency tracking: a
+/// widget that painted before a theme change keeps its old colour until
+/// something else happens to rebuild it. That is the stale-colour class of
+/// bug, and it is unfixable in general because there is no subscription to
+/// miss.
 ///
-/// The alternative — a mutable global that a controller repoints, with getters
-/// reading it — compiles, but it makes every colour read invisible to Flutter's
-/// dependency tracking: a widget that painted before the switch keeps its old
-/// colour until something else happens to rebuild it. That is the stale-colour
-/// class of bug, and it is unfixable in general because there is no
-/// subscription to miss.
-///
-/// Handing the tokens to the framework as a [ThemeExtension] makes the read
-/// `Theme.of(context)`, which registers an [InheritedWidget] dependency. When
-/// `MaterialApp.themeMode` changes, every widget that read a token is rebuilt,
-/// by construction. No controller, no global, no staleness.
-///
-/// The cost is real and is paid openly: a token read is no longer a
-/// compile-time constant, so call sites that used to be `const` — a
+/// The cost is paid openly: a token read is not a compile-time constant, so
+/// call sites that would like to be `const` — a
 /// `const AppLogoPainter(background: AppColors.surface)` in a test, say — are
-/// not any more. Brightness is a runtime value; something had to give, and
-/// this is the thing that gave.
+/// not.
 ///
 /// ## The two token tiers
 ///
@@ -38,9 +34,8 @@
 ///   [errorFill], [scoreHighFill], [scoreMidFill], [scoreLowFill]) is for the
 ///   score ring, the trend area, the category bars and the brand mark's ball.
 ///   It is gated on WCAG 3:1 *and* on a perceptual-lightness band (OKLab L
-///   0.55-0.78 on dark, 0.32-0.60 on light), because a large area painted with
-///   a text-calibrated accent glares on a dark canvas and muddies on a light
-///   one.
+///   0.32-0.60), because a large area painted with a text-calibrated accent
+///   muddies on a light canvas.
 ///
 /// Every number in this file was solved for, not eyeballed; `test/
 /// palette_test.dart` re-derives the OKLab, WCAG and Machado 2009 CVD maths
@@ -85,7 +80,8 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.scoreLowFill,
   });
 
-  /// The canvas this set was stepped against. Never inferred from a colour.
+  /// The canvas this set was stepped against. Never inferred from a colour,
+  /// and always [Brightness.light]: this app has one canvas.
   final Brightness brightness;
 
   /// Scaffold background.
@@ -161,8 +157,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
   /// SEMANTIC, not decorative: green / amber / red is the whole signal that
   /// tells a player good / marginal / poor at a glance, so it does not follow
   /// the brand flavor — recolouring it into a two-accent palette would
-  /// collapse the three bands towards one hue. It DOES follow brightness,
-  /// because a ramp stepped against near-black glares on a tan canvas.
+  /// collapse the three bands towards one hue.
   ///
   /// A null score is NOT zero and never gets a "bad" colour: it means the
   /// swing could not be measured, which is a neutral fact, so it renders in
@@ -247,8 +242,10 @@ class AppPalette extends ThemeExtension<AppPalette> {
     );
   }
 
-  /// Interpolates every token, so a theme switch cross-fades instead of
-  /// snapping. [brightness] is discrete and flips at the halfway point.
+  /// Interpolates every token. Nothing in this app swaps one palette for
+  /// another, but [ThemeExtension] requires it and Material animates theme
+  /// changes generically. [brightness] is discrete and flips at the halfway
+  /// point.
   @override
   AppPalette lerp(ThemeExtension<AppPalette>? other, double t) {
     if (other is! AppPalette) return this;
@@ -289,24 +286,16 @@ class AppPalette extends ThemeExtension<AppPalette> {
 }
 
 // ---------------------------------------------------------------------------
-// The score ramp: keyed on brightness, NOT on flavor.
+// The score ramp: shared by both flavors, NOT part of either one's identity.
 //
 // The bands are the same bytes in both flavors on purpose (see
-// AppPalette.scoreColor), but they are re-stepped per canvas: the dark ramp
-// sits at OKLab L 0.86 / 0.80 / 0.71 and the light one at 0.47 / 0.38 / 0.29,
-// because three colours that read as good / marginal / poor on navy are three
-// glares on tan. Each ramp was solved to maximise the minimum OKLab separation
-// under all three Machado 2009 CVD simulations, which is why the amber band is
-// a deep gold rather than a bright yellow — red-green deficiency leaves
-// lightness as the only channel that still separates green from amber.
+// AppPalette.scoreColor). They sit at OKLab L 0.47 / 0.38 / 0.29, stepped for
+// the light canvas this app ships. The ramp was solved to maximise the minimum
+// OKLab separation under all three Machado 2009 CVD simulations, which is why
+// the amber band is a deep gold rather than a bright yellow — red-green
+// deficiency leaves lightness as the only channel that still separates green
+// from amber.
 // ---------------------------------------------------------------------------
-
-const Color _scoreHighDark = Color(0xFF7CEB9E);
-const Color _scoreMidDark = Color(0xFFEEB23D);
-const Color _scoreLowDark = Color(0xFFF6706A);
-const Color _scoreHighFillDark = Color(0xFF50C277);
-const Color _scoreMidFillDark = Color(0xFFD38E11);
-const Color _scoreLowFillDark = Color(0xFFD04F4B);
 
 const Color _scoreHighLight = Color(0xFF006E27);
 const Color _scoreMidLight = Color(0xFF5D3900);
@@ -315,42 +304,9 @@ const Color _scoreHighFillLight = Color(0xFF128D42);
 const Color _scoreMidFillLight = Color(0xFF824C00);
 const Color _scoreLowFillLight = Color(0xFF7A0000);
 
-/// Default flavor, dark: the 2026 sports-app navy, `#0F172A`-`#1E293B`, with
-/// the brand green re-stepped for it and chartreuse kept for ball speed.
-const AppPalette tennisimoDark = AppPalette(
-  brightness: Brightness.dark,
-  surface: Color(0xFF0F172A),
-  surfaceContainerLowest: Color(0xFF070D1F),
-  surfaceContainerLow: Color(0xFF151E31),
-  surfaceContainer: Color(0xFF182235),
-  surfaceContainerHigh: Color(0xFF1E293B),
-  surfaceContainerHighest: Color(0xFF253143),
-  onSurface: Color(0xFFE6EEF4),
-  onSurfaceVariant: Color(0xFFA5B2C3),
-  outline: Color(0xFF6C7A8E),
-  outlineVariant: Color(0xFF2C3748),
-  primary: Color(0xFF58D377),
-  onPrimary: Color(0xFF021706),
-  primaryFill: Color(0xFF35AA56),
-  onPrimaryFill: Color(0xFF001304),
-  secondary: Color(0xFFBBE556),
-  onSecondary: Color(0xFF111A00),
-  secondaryFill: Color(0xFF92B824),
-  ballAccent: Color(0xFF92B824),
-  error: Color(0xFFF6706A),
-  onError: Color(0xFF220807),
-  errorFill: Color(0xFFD04F4B),
-  scoreHigh: _scoreHighDark,
-  scoreMid: _scoreMidDark,
-  scoreLow: _scoreLowDark,
-  scoreHighFill: _scoreHighFillDark,
-  scoreMidFill: _scoreMidFillDark,
-  scoreLowFill: _scoreLowFillDark,
-);
-
-/// Default flavor, light: warm tan, `#F6F0EA`-`#E8E0D5`, not corporate white.
-/// The green and the chartreuse are the same hues as the dark set, stepped
-/// down into the band a light canvas can carry.
+/// Default flavor: warm tan, `#F6F0EA`-`#E8E0D5`, not corporate white, with
+/// the brand green as the accent and chartreuse kept for ball speed — both
+/// stepped into the band a light canvas can carry.
 const AppPalette tennisimoLight = AppPalette(
   brightness: Brightness.light,
   surface: Color(0xFFF6F0EA),
@@ -382,42 +338,9 @@ const AppPalette tennisimoLight = AppPalette(
   scoreLowFill: _scoreLowFillLight,
 );
 
-/// Alternate flavor, dark: powder blue primary, yellow secondary, white text,
-/// over a base with a blue rather than a green undertone.
-const AppPalette schoolDark = AppPalette(
-  brightness: Brightness.dark,
-  surface: Color(0xFF0B1924),
-  surfaceContainerLowest: Color(0xFF040F19),
-  surfaceContainerLow: Color(0xFF111F2B),
-  surfaceContainer: Color(0xFF132430),
-  surfaceContainerHigh: Color(0xFF182B38),
-  surfaceContainerHighest: Color(0xFF1F3340),
-  onSurface: Color(0xFFF0F5F9),
-  onSurfaceVariant: Color(0xFFA6B6C3),
-  outline: Color(0xFF657C8D),
-  outlineVariant: Color(0xFF263947),
-  primary: Color(0xFF92CAE6),
-  onPrimary: Color(0xFF00131E),
-  primaryFill: Color(0xFF4EA4CA),
-  onPrimaryFill: Color(0xFF00111C),
-  secondary: Color(0xFFE7D652),
-  onSecondary: Color(0xFF1A1500),
-  secondaryFill: Color(0xFFBBAA10),
-  ballAccent: Color(0xFFBBAA10),
-  error: Color(0xFFF6706A),
-  onError: Color(0xFF220807),
-  errorFill: Color(0xFFD04F4B),
-  scoreHigh: _scoreHighDark,
-  scoreMid: _scoreMidDark,
-  scoreLow: _scoreLowDark,
-  scoreHighFill: _scoreHighFillDark,
-  scoreMidFill: _scoreMidFillDark,
-  scoreLowFill: _scoreLowFillDark,
-);
-
-/// Alternate flavor, light: the white half of the powder-blue / yellow /
-/// white scheme. A theme switch must not produce a broken half, so this set is
-/// stepped and gated exactly as thoroughly as the dark one.
+/// Alternate flavor: the powder-blue / yellow / white scheme, on a near-white
+/// base with a blue undertone. Stepped and gated exactly as thoroughly as the
+/// default flavor.
 const AppPalette schoolLight = AppPalette(
   brightness: Brightness.light,
   surface: Color(0xFFF6FAFD),
@@ -449,21 +372,19 @@ const AppPalette schoolLight = AppPalette(
   scoreLowFill: _scoreLowFillLight,
 );
 
-/// The token set for a flavor on a canvas. Exhaustive over both enums, so
-/// there is no "half-themed" combination to fall into.
-AppPalette paletteFor(BrandFlavor flavor, Brightness brightness) {
+/// The token set for a flavor. Exhaustive over [BrandFlavor], so there is no
+/// "half-themed" flavor to fall into.
+AppPalette paletteFor(BrandFlavor flavor) {
   switch (flavor) {
     case BrandFlavor.tennisimo:
-      return brightness == Brightness.dark ? tennisimoDark : tennisimoLight;
+      return tennisimoLight;
     case BrandFlavor.school:
-      return brightness == Brightness.dark ? schoolDark : schoolLight;
+      return schoolLight;
   }
 }
 
-/// Every palette this binary can show, for tests that must cover all four.
+/// Every palette this binary can show, for tests that must cover both flavors.
 const List<AppPalette> kAllPalettes = <AppPalette>[
-  tennisimoDark,
   tennisimoLight,
-  schoolDark,
   schoolLight,
 ];

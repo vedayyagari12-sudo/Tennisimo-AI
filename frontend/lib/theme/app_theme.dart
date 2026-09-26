@@ -1,14 +1,16 @@
-/// The app's design system: two brightnesses x two build-time brand flavors.
+/// The app's design system: one light canvas x two build-time brand flavors.
 ///
 /// The colour tokens themselves live in `app_palette.dart`, which also explains
 /// why they are a [ThemeExtension] rather than `const` globals. This file turns
 /// one [AppPalette] into a [ThemeData], and nothing here holds a colour of its
 /// own.
 ///
-/// * Default ([BrandFlavor.tennisimo]) — navy dark, warm-tan light, the brand
-///   green as the accent with chartreuse reserved for ball speed.
+/// * Default ([BrandFlavor.tennisimo]) — warm tan, the brand green as the
+///   accent with chartreuse reserved for ball speed.
 /// * Alternate ([BrandFlavor.school]) — powder blue primary, yellow secondary,
-///   white text, on a blue-undertoned dark base and a near-white light one.
+///   on a near-white, blue-undertoned base.
+///
+/// The app is light-only: there is no dark [ThemeData] to build.
 ///
 /// The score ramp is deliberately not part of either flavor's identity. See
 /// [AppPalette.scoreColor].
@@ -23,17 +25,16 @@ import 'brand.dart';
 /// Re-exported so a widget needs one import for the whole design system.
 export 'app_palette.dart';
 
-/// Reads the palette for the brightness currently in force.
+/// Reads the palette carried by the theme in force.
 ///
 /// This goes through `Theme.of`, so the caller takes an [InheritedWidget]
 /// dependency and is rebuilt automatically when the theme changes. The
 /// fallback keeps a widget mounted on a bare [MaterialApp] (as some tests do)
-/// on the right canvas instead of throwing.
+/// on the compiled flavor's palette instead of throwing.
 extension AppPaletteAccess on BuildContext {
   AppPalette get palette {
     final ThemeData theme = Theme.of(this);
-    return theme.extension<AppPalette>() ??
-        paletteFor(kBrandFlavor, theme.brightness);
+    return theme.extension<AppPalette>() ?? paletteFor(kBrandFlavor);
   }
 }
 
@@ -118,15 +119,17 @@ ColorScheme buildColorScheme(AppPalette palette) {
   );
 }
 
-/// The status-bar style for a canvas of the given [brightness].
+/// The status-bar style for this app's one light canvas.
 ///
-/// This must be set explicitly. The app bar is deliberately transparent, and
-/// when an [AppBar] has no `systemOverlayStyle` Flutter guesses one with
+/// This must be stated explicitly, and it must NOT be keyed to a brightness
+/// the framework works out for itself. The app bar is deliberately
+/// transparent, and when an [AppBar] has no `systemOverlayStyle` Flutter
+/// guesses one with
 /// `ThemeData.estimateBrightnessForColor(effectiveBackgroundColor)`. That runs
 /// `Color.computeLuminance()`, which IGNORES alpha: `Colors.transparent` is
 /// `0x00000000`, so its luminance is 0, so every screen was classified as a
-/// dark canvas and got white status-bar icons — unreadable on both light
-/// canvases.
+/// dark canvas and got white status-bar icons — unreadable on a near-white
+/// canvas. Hard-coding the light-canvas answer here is what keeps that fixed.
 ///
 /// The two icon fields are inverted with respect to each other, which is worth
 /// stating rather than remembering. Per the framework's own doc comments in
@@ -142,17 +145,15 @@ ColorScheme buildColorScheme(AppPalette palette) {
 /// "intended for applications with a light background" — pairs exactly that
 /// way (`statusBarIconBrightness: dark`, `statusBarBrightness: light`), which
 /// is the cross-check for the polarity above.
-SystemUiOverlayStyle systemOverlayStyleFor(Brightness brightness) {
-  final bool lightCanvas = brightness == Brightness.light;
+SystemUiOverlayStyle lightCanvasOverlayStyle() {
   return SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     // Android.
-    statusBarIconBrightness: lightCanvas ? Brightness.dark : Brightness.light,
+    statusBarIconBrightness: Brightness.dark,
     // iOS: the canvas behind the icons, not the icons.
-    statusBarBrightness: lightCanvas ? Brightness.light : Brightness.dark,
-    systemNavigationBarColor: paletteFor(kBrandFlavor, brightness).surface,
-    systemNavigationBarIconBrightness:
-        lightCanvas ? Brightness.dark : Brightness.light,
+    statusBarBrightness: Brightness.light,
+    systemNavigationBarColor: paletteFor(kBrandFlavor).surface,
+    systemNavigationBarIconBrightness: Brightness.dark,
   );
 }
 
@@ -176,17 +177,17 @@ TextTheme _textTheme(TextTheme base) {
   );
 }
 
-/// The app theme for one canvas. Built twice in `main.dart`, once per
-/// brightness, and handed to [MaterialApp.theme] / [MaterialApp.darkTheme] so
-/// the framework — not a global — decides which one is in force.
+/// The app theme. There is exactly one, and it is light: `main.dart` hands it
+/// to [MaterialApp.theme] and supplies no [MaterialApp.darkTheme], so a dark
+/// canvas is not something the framework can choose.
 ///
 /// The palette travels with the theme as a [ThemeExtension], which is what
-/// makes a runtime brightness switch rebuild every widget that read a token.
-ThemeData buildAppTheme({Brightness brightness = Brightness.dark}) {
-  final AppPalette palette = paletteFor(kBrandFlavor, brightness);
+/// makes every widget that read a token pick up a theme change.
+ThemeData buildAppTheme() {
+  final AppPalette palette = paletteFor(kBrandFlavor);
   final ThemeData base = ThemeData(
     useMaterial3: true,
-    brightness: brightness,
+    brightness: Brightness.light,
   );
   final ColorScheme scheme = buildColorScheme(palette);
 
@@ -206,8 +207,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.dark}) {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
-      // Never left to Flutter's guess: see [systemOverlayStyleFor].
-      systemOverlayStyle: systemOverlayStyleFor(brightness),
+      // Never left to Flutter's guess: see [lightCanvasOverlayStyle].
+      systemOverlayStyle: lightCanvasOverlayStyle(),
     ),
     cardTheme: CardThemeData(
       color: palette.surfaceContainer,

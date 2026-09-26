@@ -69,10 +69,7 @@ void main() {
       await tester.pumpWidget(_host(const SizedBox.shrink()));
 
       final BuildContext context = tester.element(find.byType(SizedBox).first);
-      expect(
-        context.palette,
-        same(paletteFor(kBrandFlavor, Brightness.dark)),
-      );
+      expect(context.palette, same(paletteFor(kBrandFlavor)));
     });
   });
 

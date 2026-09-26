@@ -6,10 +6,10 @@ import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/widgets/app_logo.dart';
 
-/// `_host` builds the dark theme, so the mark is painted from the dark set.
-/// These tokens are no longer `const` — brightness is a runtime value, so the
-/// palette cannot be — which is why the `const` came off the call sites below.
-final AppPalette _palette = paletteFor(kBrandFlavor, Brightness.dark);
+/// The compiled flavor's palette — the one and only canvas. These tokens are
+/// not `const` (the palette is reached through a function), which is why the
+/// `const` is off the call sites below.
+final AppPalette _palette = paletteFor(kBrandFlavor);
 
 /// The mark has to be the *same drawing* as the launcher icon, so the geometry
 /// is asserted numerically rather than eyeballed: ball radius 0.400 of the
@@ -109,11 +109,14 @@ void main() {
       final AppLogoPainter b = painter(_palette);
       final AppLogoPainter c =
           painter(_palette, background: _palette.surfaceContainer);
-      // A brightness flip changes the ball and the bolt, not the background
-      // alone: if shouldRepaint only watched the background, the mark would
-      // keep the other canvas's ball on screen.
+      // Ball and bolt changing while the background stays put: if
+      // shouldRepaint only watched the background, the mark would keep the old
+      // ball on screen.
       final AppLogoPainter d = painter(
-        paletteFor(kBrandFlavor, Brightness.light),
+        _palette.copyWith(
+          ballAccent: _palette.secondary,
+          primaryFill: _palette.primary,
+        ),
         background: _palette.surface,
       );
 
