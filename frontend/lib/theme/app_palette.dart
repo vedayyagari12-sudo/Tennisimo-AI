@@ -36,6 +36,13 @@
 ///   It is gated on WCAG 3:1 *and* on a perceptual-lightness band (OKLab L
 ///   0.32-0.60), because a large area painted with a text-calibrated accent
 ///   muddies on a light canvas.
+/// * A **light fill** is the one exception, and only [secondaryFill],
+///   [ballAccent], [actionFill] and [navIndicator] may take it: a bright,
+///   saturated fill (the alternate flavor's gold) that carries DARK ink and is
+///   never itself text. It cannot clear 3:1 against a light canvas — no bright
+///   yellow can — so it is gated instead on its ink clearing 4.5:1 on it and
+///   on standing clearly apart from every surface in OKLab, under normal
+///   vision and all three dichromacies.
 ///
 /// Every number in this file was solved for, not eyeballed; `test/
 /// palette_test.dart` re-derives the OKLab, WCAG and Machado 2009 CVD maths
@@ -69,6 +76,9 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.onSecondary,
     required this.secondaryFill,
     required this.ballAccent,
+    required this.actionFill,
+    required this.onActionFill,
+    required this.navIndicator,
     required this.error,
     required this.onError,
     required this.errorFill,
@@ -131,6 +141,21 @@ class AppPalette extends ThemeExtension<AppPalette> {
   /// large fill — but named separately because the brand mark is not "ball
   /// speed" and must not move if the speed accent ever does.
   final Color ballAccent;
+
+  /// The face of the primary call to action — every [FilledButton].
+  ///
+  /// Separate from [primaryFill] because the brand mark's bolt is
+  /// [primaryFill], and the alternate flavor wants a gold button beside a
+  /// blue bolt. In the default flavor it is the same step as [primaryFill].
+  final Color actionFill;
+
+  /// The label on [actionFill]. Gated at WCAG 4.5:1 on it.
+  final Color onActionFill;
+
+  /// The selected-destination pill in the navigation bar. In the default
+  /// flavor it is [primary] at 16% opacity; in the alternate it is solid gold
+  /// under the navy icon.
+  final Color navIndicator;
 
   final Color error;
   final Color onError;
@@ -222,6 +247,9 @@ class AppPalette extends ThemeExtension<AppPalette> {
     Color? onSecondary,
     Color? secondaryFill,
     Color? ballAccent,
+    Color? actionFill,
+    Color? onActionFill,
+    Color? navIndicator,
     Color? error,
     Color? onError,
     Color? errorFill,
@@ -256,6 +284,9 @@ class AppPalette extends ThemeExtension<AppPalette> {
       onSecondary: onSecondary ?? this.onSecondary,
       secondaryFill: secondaryFill ?? this.secondaryFill,
       ballAccent: ballAccent ?? this.ballAccent,
+      actionFill: actionFill ?? this.actionFill,
+      onActionFill: onActionFill ?? this.onActionFill,
+      navIndicator: navIndicator ?? this.navIndicator,
       error: error ?? this.error,
       onError: onError ?? this.onError,
       errorFill: errorFill ?? this.errorFill,
@@ -300,6 +331,9 @@ class AppPalette extends ThemeExtension<AppPalette> {
       onSecondary: c(onSecondary, other.onSecondary),
       secondaryFill: c(secondaryFill, other.secondaryFill),
       ballAccent: c(ballAccent, other.ballAccent),
+      actionFill: c(actionFill, other.actionFill),
+      onActionFill: c(onActionFill, other.onActionFill),
+      navIndicator: c(navIndicator, other.navIndicator),
       error: c(error, other.error),
       onError: c(onError, other.onError),
       errorFill: c(errorFill, other.errorFill),
@@ -362,6 +396,17 @@ const AppPalette tennisimoLight = AppPalette(
   onSecondary: Color(0xFFFFFFFF),
   secondaryFill: Color(0xFF688609),
   ballAccent: Color(0xFF688609),
+  // The button face and nav pill this flavor has always had: primaryFill /
+  // onPrimaryFill, and primary (#006A27) at 16% — spelled out channel by
+  // channel so it is the exact value `withValues(alpha: 0.16)` produces.
+  actionFill: Color(0xFF008236),
+  onActionFill: Color(0xFFFFFFFF),
+  navIndicator: Color.from(
+    alpha: 0.16,
+    red: 0x00 / 255,
+    green: 0x6A / 255,
+    blue: 0x27 / 255,
+  ),
   error: Color(0xFF9C1A20),
   onError: Color(0xFFFFFFFF),
   errorFill: Color(0xFFBC2C30),
@@ -382,29 +427,50 @@ const AppPalette tennisimoLight = AppPalette(
   chartOther: Color(0xFF7B7261),
 );
 
-/// Alternate flavor: the powder-blue / yellow / white scheme, on a near-white
-/// base with a blue undertone. Stepped and gated exactly as thoroughly as the
-/// default flavor.
+/// Alternate flavor: powder blue, athletic gold and white.
+///
+/// The one idea that makes the three colours accessible together: gold is
+/// only ever a FILL, never text on a light background. A real athletic gold
+/// is far too light to be read as text (1.6:1 on white), and every attempt to
+/// darken it into a text colour lands on olive, which is the drift this set
+/// replaced. So:
+///
+/// * **Gold** (`#FFC72C`) fills the button face, the selected nav pill, the
+///   logo ball and the ball-speed fill, always with navy ink on top (10:1).
+///   A deeper old gold (`#B28C09`) is the one gold that has to stand on white
+///   by itself — the comparison series in the charts — and clears 3:1 there.
+/// * **Powder blue** is the canvas (`#D6E8F5`), so the page reads blue at a
+///   glance, with white cards (`#FFFFFF`) standing on it. The inversion —
+///   blue page, white cards, rather than white page, blue cards — is what lets
+///   the charts, which are always drawn on a card, carry a gold that still
+///   reads as gold: on a blue card it would have to be darkened to mustard.
+/// * **Deep navy** is the ink: text, icons, chart lines and [primary].
+///
+/// Stepped and gated exactly as thoroughly as the default flavor.
 const AppPalette schoolLight = AppPalette(
   brightness: Brightness.light,
-  surface: Color(0xFFF6FAFD),
+  surface: Color(0xFFD6E8F5),
   surfaceContainerLowest: Color(0xFFFFFFFF),
-  surfaceContainerLow: Color(0xFFEDF4F9),
-  surfaceContainer: Color(0xFFE6EFF6),
-  surfaceContainerHigh: Color(0xFFDFEAF2),
-  surfaceContainerHighest: Color(0xFFD7E3ED),
-  onSurface: Color(0xFF0E1C28),
-  onSurfaceVariant: Color(0xFF4C5D6C),
-  outline: Color(0xFF64798A),
-  outlineVariant: Color(0xFFC0CED9),
-  primary: Color(0xFF006289),
+  surfaceContainerLow: Color(0xFFEEF5FB),
+  surfaceContainer: Color(0xFFFFFFFF),
+  surfaceContainerHigh: Color(0xFFE4EFF8),
+  surfaceContainerHighest: Color(0xFFD2E4F2),
+  onSurface: Color(0xFF0B1F3A),
+  onSurfaceVariant: Color(0xFF465467),
+  outline: Color(0xFF5A6F87),
+  outlineVariant: Color(0xFFA9C1D6),
+  primary: Color(0xFF1A3F74),
   onPrimary: Color(0xFFFFFFFF),
-  primaryFill: Color(0xFF0078A3),
+  primaryFill: Color(0xFF2563C0),
   onPrimaryFill: Color(0xFFFFFFFF),
-  secondary: Color(0xFF615500),
+  // Ball-speed text is a blue, not a gold: gold is never text on light.
+  secondary: Color(0xFF1F5596),
   onSecondary: Color(0xFFFFFFFF),
-  secondaryFill: Color(0xFF877900),
-  ballAccent: Color(0xFF877900),
+  secondaryFill: Color(0xFFFFC72C),
+  ballAccent: Color(0xFFFFC72C),
+  actionFill: Color(0xFFFFC72C),
+  onActionFill: Color(0xFF0B1F3A),
+  navIndicator: Color(0xFFFFC72C),
   error: Color(0xFF9C1A20),
   onError: Color(0xFFFFFFFF),
   errorFill: Color(0xFFBC2C30),
@@ -414,15 +480,20 @@ const AppPalette schoolLight = AppPalette(
   scoreHighFill: _scoreHighFillLight,
   scoreMidFill: _scoreMidFillLight,
   scoreLowFill: _scoreLowFillLight,
-  // Royal blue, burnt orange, plum, lavender: the same alternation, stepped
-  // for the blue-white canvas.
+  // Royal blue, old gold, cyan, indigo. Slot 0 ("this swing") against slot 1
+  // (what it is compared with) is blue against gold: the blue-yellow axis is
+  // the one protanopes and deuteranopes keep, so the pair that matters most
+  // survives the commonest colour-vision deficiencies. Cyan and indigo stay in
+  // the blue family and are separated from their neighbours by lightness.
   chartSeries: <Color>[
-    Color(0xFF154FAC),
-    Color(0xFFCC5E35),
-    Color(0xFF823073),
-    Color(0xFFA063CA),
+    Color(0xFF2370DB),
+    Color(0xFFB28C09),
+    Color(0xFF289EB6),
+    Color(0xFF4B4687),
   ],
-  chartOther: Color(0xFF64798A),
+  // A WARM grey on purpose: a cool slate collapses into the royal-blue slot
+  // it borders under tritanopia.
+  chartOther: Color(0xFF766E67),
 );
 
 /// The token set for a flavor. Exhaustive over [BrandFlavor], so there is no

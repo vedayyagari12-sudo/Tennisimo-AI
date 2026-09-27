@@ -7,8 +7,9 @@
 ///
 /// * Default ([BrandFlavor.tennisimo]) — warm tan, the brand green as the
 ///   accent with chartreuse reserved for ball speed.
-/// * Alternate ([BrandFlavor.school]) — powder blue primary, yellow secondary,
-///   on a near-white, blue-undertoned base.
+/// * Alternate ([BrandFlavor.school]) — a powder-blue canvas with white
+///   cards, deep navy ink, and gold as a fill only (buttons, the nav pill, the
+///   logo ball), always under navy ink.
 ///
 /// The app is light-only: there is no dark [ThemeData] to build.
 ///
@@ -224,7 +225,7 @@ ThemeData buildAppTheme() {
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: palette.surfaceContainer,
       surfaceTintColor: Colors.transparent,
-      indicatorColor: palette.primary.withValues(alpha: 0.16),
+      indicatorColor: palette.navIndicator,
       elevation: 0,
       height: 68,
       labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
@@ -255,8 +256,8 @@ ThemeData buildAppTheme() {
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         // A button face is a large filled area: fill tier, not text tier.
-        backgroundColor: palette.primaryFill,
-        foregroundColor: palette.onPrimaryFill,
+        backgroundColor: palette.actionFill,
+        foregroundColor: palette.onActionFill,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(999),
         ),

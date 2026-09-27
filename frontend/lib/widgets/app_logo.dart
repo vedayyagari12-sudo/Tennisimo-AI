@@ -17,13 +17,13 @@ import '../theme/app_theme.dart';
 /// The two fills follow the build-time brand flavor: the ball takes
 /// [AppPalette.ballAccent] and the bolt [AppPalette.primaryFill], so the
 /// default build draws a chartreuse ball with a green bolt and the alternate
-/// palette draws a yellow ball with a powder-blue bolt. The ball keeps the
+/// palette draws a gold ball with a blue bolt. The ball keeps the
 /// warm, ball-coloured token in both because a tennis ball that is not
 /// ball-coloured stops reading as a ball; the bolt is the accent that moves.
 ///
-/// Both are fill-tier tokens and both are re-stepped per brightness: the dark
-/// set's chartreuse ball would have almost no edge against the light set's tan
-/// canvas, so the light set uses a deeper step of the same hue.
+/// Both are fill-tier tokens. The alternate flavor's gold ball is a light fill
+/// (see [AppPalette]): it stands apart from the canvas by hue rather than by
+/// luminance contrast.
 ///
 /// The seams and the bolt's separation edge are painted in [background], which
 /// defaults to the theme surface — pass the card colour when the mark sits on

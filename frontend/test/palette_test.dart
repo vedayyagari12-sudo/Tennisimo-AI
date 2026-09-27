@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
+import 'package:tennisimo_ai/theme/brand.dart';
 
 // ---------------------------------------------------------------------------
 // sRGB <-> linear
@@ -209,11 +210,53 @@ Map<String, Color> fillTier(AppPalette p) => <String, Color>{
       'primaryFill': p.primaryFill,
       'secondaryFill': p.secondaryFill,
       'ballAccent': p.ballAccent,
+      'actionFill': p.actionFill,
       'errorFill': p.errorFill,
       'scoreHighFill': p.scoreHighFill,
       'scoreMidFill': p.scoreMidFill,
       'scoreLowFill': p.scoreLowFill,
     };
+
+/// The OKLab lightness at and above which a fill is a LIGHT fill: a bright,
+/// saturated face that carries dark ink, rather than a mid-dark one that
+/// carries white. Between [kFillBand]'s top (0.60) and this is the dead zone
+/// in which a fill clears neither white ink nor 3:1 against the canvas, and
+/// no fill may sit there.
+const double kLightFillMinL = 0.78;
+
+/// The only tokens that may be a light fill. Everything else in [fillTier] —
+/// the score ramp, the error fill, the bolt — carries meaning through its edge
+/// against the canvas, so it must stay a dark fill and clear 3:1.
+const Set<String> kLightFillCapable = <String>{
+  'secondaryFill',
+  'ballAccent',
+  'actionFill',
+  'navIndicator',
+};
+
+/// The light fills [p] actually uses: capable tokens that are opaque and at or
+/// above [kLightFillMinL]. (The default flavor's nav pill is a translucent
+/// accent wash, not a fill, and is gated separately.)
+Map<String, Color> lightFills(AppPalette p) => <String, Color>{
+      for (final MapEntry<String, Color> e in <String, Color>{
+        ...fillTier(p),
+        'navIndicator': p.navIndicator,
+      }.entries)
+        if (kLightFillCapable.contains(e.key) &&
+            e.value.a == 1.0 &&
+            perceptualLightness(e.value) >= kLightFillMinL)
+          e.key: e.value,
+    };
+
+/// [fillTier] minus the light fills: every one of these is gated as a dark
+/// fill, on 3:1 and on [kFillBand].
+Map<String, Color> darkFills(AppPalette p) {
+  final Map<String, Color> light = lightFills(p);
+  return <String, Color>{
+    for (final MapEntry<String, Color> e in fillTier(p).entries)
+      if (!light.containsKey(e.key)) e.key: e.value,
+  };
+}
 
 /// Every surface a token may be painted on.
 Map<String, Color> surfaces(AppPalette p) => <String, Color>{
@@ -223,6 +266,17 @@ Map<String, Color> surfaces(AppPalette p) => <String, Color>{
       'surfaceContainer': p.surfaceContainer,
       'surfaceContainerHigh': p.surfaceContainerHigh,
       'surfaceContainerHighest': p.surfaceContainerHighest,
+    };
+
+/// The surfaces a CHART is drawn on: the card every chart lives in (`AppCard`
+/// and the themed [Card] are both `surfaceContainer`) and the tooltip / tap
+/// marker fill. The categorical marks are gated against these rather than
+/// against every surface, for the same reason [controlBackgrounds] exists: no
+/// chart is drawn straight onto the canvas. A test below pins the card colour
+/// to `surfaceContainer` so this cannot silently go stale.
+Map<String, Color> chartSurfaces(AppPalette p) => <String, Color>{
+      'surfaceContainer': p.surfaceContainer,
+      'surfaceContainerLowest': p.surfaceContainerLowest,
     };
 
 /// The backgrounds a *control* actually sits on. [AppPalette.outline] is gated
@@ -356,8 +410,8 @@ void main() {
   group('tier 2: large fills clear 3:1 and stay inside the anti-mud band',
       () {
     for (final BrandFlavorCase c in _cases) {
-      test('${c.label} — every fill token on every surface', () {
-        fillTier(c.palette).forEach((String fg, Color fgColor) {
+      test('${c.label} — every dark fill on every surface', () {
+        darkFills(c.palette).forEach((String fg, Color fgColor) {
           surfaces(c.palette).forEach((String bg, Color bgColor) {
             expect(
               contrast(fgColor, bgColor),
@@ -369,13 +423,59 @@ void main() {
         });
       });
 
-      test('${c.label} — every fill token sits in the fill lightness band', () {
+      test('${c.label} — every dark fill sits in the fill lightness band', () {
         const ({double min, double max}) band = kFillBand;
-        fillTier(c.palette).forEach((String token, Color colour) {
+        darkFills(c.palette).forEach((String token, Color colour) {
           final double l = perceptualLightness(colour);
           expect(l, inInclusiveRange(band.min, band.max),
               reason: '${c.label}: $token is at OKLab L '
                   '${l.toStringAsFixed(3)} — a fill calibrated like text');
+        });
+      });
+
+      test('${c.label} — every light fill carries dark ink and stands apart',
+          () {
+        final AppPalette p = c.palette;
+        lightFills(p).forEach((String token, Color fill) {
+          // A light fill is a colour, not a pale grey.
+          expect(_chroma(fill), greaterThanOrEqualTo(0.10),
+              reason: '${c.label}: $token chroma '
+                  '${_chroma(fill).toStringAsFixed(3)} reads as grey');
+          // Its ink clears body-text AA on it.
+          expect(contrast(p.onSurface, fill), greaterThanOrEqualTo(kAaBody),
+              reason: '${c.label}: onSurface on $token is '
+                  '${contrast(p.onSurface, fill).toStringAsFixed(2)}:1');
+          // It cannot clear 3:1 against a light canvas, so it must stand
+          // apart from every surface by hue and lightness together: several
+          // JNDs under normal vision, and still apart under each dichromacy.
+          surfaces(p).forEach((String bg, Color bgColor) {
+            expect(deltaEOk(fill, bgColor), greaterThanOrEqualTo(0.15),
+                reason: '${c.label}: $token is '
+                    '${deltaEOk(fill, bgColor).toStringAsFixed(3)} from $bg');
+            for (final Cvd d in Cvd.values) {
+              final double seen =
+                  deltaEOk(simulate(fill, d), simulate(bgColor, d));
+              expect(seen, greaterThanOrEqualTo(kMinCvdSeparation),
+                  reason: '${c.label}: $token collapses into $bg under '
+                      '${d.name} at ${seen.toStringAsFixed(3)}');
+            }
+          });
+        });
+      });
+
+      test('${c.label} — no fill sits in the dead zone between the tiers', () {
+        // Guards the split itself: a fill is either dark (gated above) or a
+        // capable token in the light band, never somewhere in between.
+        final Map<String, Color> light = lightFills(c.palette);
+        fillTier(c.palette).forEach((String token, Color colour) {
+          final double l = perceptualLightness(colour);
+          if (light.containsKey(token)) {
+            expect(l, greaterThanOrEqualTo(kLightFillMinL));
+          } else {
+            expect(l, lessThanOrEqualTo(kFillBand.max),
+                reason: '${c.label}: $token is at OKLab L '
+                    '${l.toStringAsFixed(3)}');
+          }
         });
       });
 
@@ -653,9 +753,9 @@ void main() {
         }
       });
 
-      test('${c.label} — every mark clears 3:1 on every surface', () {
+      test('${c.label} — every mark clears 3:1 on every chart surface', () {
         for (int i = 0; i < slots.length; i++) {
-          surfaces(p).forEach((String bg, Color bgColor) {
+          chartSurfaces(p).forEach((String bg, Color bgColor) {
             expect(contrast(slots[i], bgColor), greaterThanOrEqualTo(kAaLarge),
                 reason: '${c.label}: ${name(i)} on $bg is '
                     '${contrast(slots[i], bgColor).toStringAsFixed(2)}:1');
@@ -726,16 +826,36 @@ void main() {
         final AppPalette p = c.palette;
         // AppLogo paints the ball straight onto whatever it is given, which is
         // the surface by default and the card colour when it sits on a card.
+        //
+        // A dark ball needs 3:1. A light (gold) ball cannot have it against a
+        // light canvas, so its edge is the light-fill separation instead:
+        // several JNDs in OKLab, and apart under every dichromacy.
+        final bool lightBall = lightFills(p).containsKey('ballAccent');
         for (final Color background in <Color>[
           p.surface,
           p.surfaceContainer,
           p.surfaceContainerHigh,
         ]) {
-          expect(
-            contrast(p.ballAccent, background),
-            greaterThanOrEqualTo(kAaLarge),
-            reason: '${c.label}: the ball has no edge against $background',
-          );
+          if (lightBall) {
+            expect(deltaEOk(p.ballAccent, background),
+                greaterThanOrEqualTo(0.15),
+                reason: '${c.label}: the ball has no edge against '
+                    '$background');
+            for (final Cvd d in Cvd.values) {
+              expect(
+                deltaEOk(simulate(p.ballAccent, d), simulate(background, d)),
+                greaterThanOrEqualTo(kMinCvdSeparation),
+                reason: '${c.label}: the ball has no edge against '
+                    '$background under ${d.name}',
+              );
+            }
+          } else {
+            expect(
+              contrast(p.ballAccent, background),
+              greaterThanOrEqualTo(kAaLarge),
+              reason: '${c.label}: the ball has no edge against $background',
+            );
+          }
         }
         // Ball and bolt are separated by a background-coloured cut, so they
         // only have to be tellable apart, not contrast-rated against each
@@ -744,6 +864,54 @@ void main() {
             reason: '${c.label}: the bolt disappears into the ball');
       });
     }
+  });
+
+  group('the button face and the nav pill', () {
+    test('the default flavor keeps exactly the colours it had', () {
+      // These roles were split out of primaryFill / primary so the alternate
+      // flavor can have a gold button beside a blue bolt. The default must
+      // not move: same button face, same label, same 16% pill.
+      expect(tennisimoLight.actionFill, tennisimoLight.primaryFill);
+      expect(tennisimoLight.onActionFill, tennisimoLight.onPrimaryFill);
+      expect(tennisimoLight.navIndicator,
+          tennisimoLight.primary.withValues(alpha: 0.16));
+    });
+
+    for (final BrandFlavorCase c in _cases) {
+      test('${c.label} — the button label clears AA on the button face', () {
+        expect(contrast(c.palette.onActionFill, c.palette.actionFill),
+            greaterThanOrEqualTo(kAaBody));
+      });
+
+      test('${c.label} — the selected nav label and icon read on the pill', () {
+        // The pill is drawn on the nav bar (surfaceContainer); a translucent
+        // pill is judged as it is actually seen, composited over it.
+        final AppPalette p = c.palette;
+        final Color seen =
+            Color.alphaBlend(p.navIndicator, p.surfaceContainer);
+        expect(contrast(p.onSurface, seen), greaterThanOrEqualTo(kAaBody));
+      });
+    }
+
+    test('the theme wires both roles, and draws cards in the chart surface',
+        () {
+      final ThemeData theme = buildAppTheme();
+      final AppPalette p = paletteFor(kBrandFlavor);
+      expect(
+        theme.filledButtonTheme.style!.backgroundColor!
+            .resolve(<WidgetState>{}),
+        p.actionFill,
+      );
+      expect(
+        theme.filledButtonTheme.style!.foregroundColor!
+            .resolve(<WidgetState>{}),
+        p.onActionFill,
+      );
+      expect(theme.navigationBarTheme.indicatorColor, p.navIndicator);
+      // chartSurfaces() assumes charts sit on surfaceContainer cards.
+      expect(theme.cardTheme.color, p.surfaceContainer);
+      expect(theme.colorScheme.surfaceContainer, p.surfaceContainer);
+    });
   });
 
   group('the derived M3 container roles are readable', () {

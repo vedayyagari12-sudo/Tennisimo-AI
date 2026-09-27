@@ -87,9 +87,9 @@ void main() {
           expect(light.secondary, const Color(0xFF485F00));
           expect(light.surface, const Color(0xFFF6F0EA));
         case BrandFlavor.school:
-          expect(light.primary, const Color(0xFF006289));
-          expect(light.secondary, const Color(0xFF615500));
-          expect(light.surface, const Color(0xFFF6FAFD));
+          expect(light.primary, const Color(0xFF1A3F74));
+          expect(light.secondary, const Color(0xFF1F5596));
+          expect(light.surface, const Color(0xFFD6E8F5));
       }
     });
 
