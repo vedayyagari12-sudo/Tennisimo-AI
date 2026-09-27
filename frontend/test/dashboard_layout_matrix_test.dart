@@ -109,6 +109,23 @@ ShotTypeInsight _densest() => ShotTypeInsight(
       ],
     );
 
+/// [_densest] with its history split by a pipeline-version change that leaves
+/// one comparable clip.
+ShotTypeInsight _acrossVersions() {
+  final ShotTypeInsight d = _densest();
+  return ShotTypeInsight(
+    shotType: d.shotType,
+    scorePoints: d.scorePoints,
+    speedPoints: d.speedPoints,
+    categoryTrends: d.categoryTrends,
+    detailsInspected: d.detailsInspected,
+    latestCoverage: d.latestCoverage,
+    sessionDates: d.sessionDates,
+    newestDetailLoaded: false,
+    versions: const <String?>['v2', 'v2', 'v2', 'v3'],
+  );
+}
+
 List<CategoryScore> _categories() => <CategoryScore>[
       const CategoryScore(
         category: 'preparation',
@@ -151,8 +168,25 @@ void main() {
   }
 
   forEveryViewport(
-    'the densest shot-type section',
+    'the densest shot-type section, collapsed',
     () => ShotTypeSection(insight: _densest()),
+  );
+
+  forEveryViewport(
+    'the densest shot-type section, expanded',
+    () => ShotTypeSection(insight: _densest(), initiallyExpanded: true),
+  );
+
+  // A scoring change inside the history: the marker label in the plot, and
+  // the header's "not enough history" chip.
+  forEveryViewport(
+    'a shot-type section spanning a scoring change, collapsed',
+    () => ShotTypeSection(insight: _acrossVersions()),
+  );
+
+  forEveryViewport(
+    'a shot-type section spanning a scoring change, expanded',
+    () => ShotTypeSection(insight: _acrossVersions(), initiallyExpanded: true),
   );
 
   forEveryViewport(
@@ -314,6 +348,24 @@ void main() {
       child: ScoreLineChart(
         title: 'Overall score',
         points: const <double?>[61, null, 88, 100, 74],
+        dates: <DateTime?>[
+          DateTime(2026, 8, 30),
+          DateTime(2026, 9, 3),
+          DateTime(2026, 9, 12),
+          DateTime(2026, 9, 20),
+          DateTime(2026, 9, 27),
+        ],
+      ),
+    ),
+  );
+
+  forEveryViewport(
+    'the score line chart with a "Scoring updated" break',
+    () => AppCard(
+      child: ScoreLineChart(
+        title: 'Overall score',
+        points: const <double?>[61, 70, 88, 100, 74],
+        breaksBefore: const <int>[3],
         dates: <DateTime?>[
           DateTime(2026, 8, 30),
           DateTime(2026, 9, 3),

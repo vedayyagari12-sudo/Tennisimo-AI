@@ -20,12 +20,17 @@ import '../theme/motion.dart';
 ///   score and date, or says it was not scored.
 /// * With one scored clip there is no line: the value, and that a trend
 ///   needs two.
+/// * At a pipeline-version change ([breaksBefore]) the line BREAKS and a
+///   dashed marker labelled [versionMarkerLabel] stands between the two
+///   clips. Every point stays visible and tappable; no stroke joins scores
+///   that were measured differently.
 class ScoreLineChart extends StatefulWidget {
   const ScoreLineChart({
     super.key,
     required this.title,
     required this.points,
     this.dates = const <DateTime?>[],
+    this.breaksBefore = const <int>[],
     this.height = 132,
   });
 
@@ -37,11 +42,16 @@ class ScoreLineChart extends StatefulWidget {
   /// Aligned with [points], or empty when unknown.
   final List<DateTime?> dates;
 
+  /// Indices where the pipeline version changes: `i` breaks the line between
+  /// clip `i - 1` and clip `i`. See `version_segments.dart`.
+  final List<int> breaksBefore;
+
   /// Height of the plot, excluding the date row under it.
   final double height;
 
   static const String singlePointMessage = '1 scored clip, need 2 for a trend';
   static const String emptyMessage = 'No scored clips yet';
+  static const String versionMarkerLabel = 'Scoring updated';
 
   @override
   State<ScoreLineChart> createState() => _ScoreLineChartState();
@@ -153,6 +163,7 @@ class _ScoreLineChartState extends State<ScoreLineChart> {
               final ScoreLineGeometry geo = ScoreLineGeometry(
                 size: Size(constraints.maxWidth, widget.height),
                 values: widget.points,
+                breaksBefore: widget.breaksBefore,
                 tickStyle: tickStyle,
                 scaler: scaler,
               );
@@ -225,6 +236,7 @@ class ScoreLineGeometry {
   ScoreLineGeometry({
     required this.size,
     required this.values,
+    this.breaksBefore = const <int>[],
     required TextStyle tickStyle,
     required TextScaler scaler,
   }) : axis = scoreAxis(values.whereType<double>().toList()),
@@ -232,6 +244,9 @@ class ScoreLineGeometry {
 
   final Size size;
   final List<double?> values;
+
+  /// Version boundaries: `i` means between clip `i - 1` and clip `i`.
+  final List<int> breaksBefore;
   final ({double min, double max, double step}) axis;
   final double gutter;
 
@@ -280,12 +295,26 @@ class ScoreLineGeometry {
     return (t * (values.length - 1)).round();
   }
 
+  /// The x of the marker for a version boundary before clip [i]: midway
+  /// between the two clips it separates.
+  double markerX(int i) => (xFor(i - 1) + xFor(i)) / 2;
+
+  /// The boundaries that fall inside this series.
+  Iterable<int> get markers =>
+      breaksBefore.where((int i) => i > 0 && i < values.length);
+
   /// The line's pieces: runs of consecutive scored clips. An unscored clip
-  /// ends one run and the next scored clip starts another.
+  /// ends one run and the next scored clip starts another; so does a
+  /// version boundary, so no stroke joins two differently measured scores.
   List<List<int>> runs() {
+    final Set<int> breaks = breaksBefore.toSet();
     final List<List<int>> out = <List<int>>[];
     List<int> run = <int>[];
     for (int i = 0; i < values.length; i++) {
+      if (breaks.contains(i) && run.isNotEmpty) {
+        out.add(run);
+        run = <int>[];
+      }
       if (values[i] == null) {
         if (run.isNotEmpty) out.add(run);
         run = <int>[];
@@ -358,6 +387,11 @@ class ScoreLinePainter extends CustomPainter {
       tick.paint(canvas, Offset(g.left - 6 - tick.width, y - tick.height / 2));
     }
 
+    // Version boundaries: a dashed hairline, recessive like the grid.
+    for (final int b in g.markers) {
+      _dashedVertical(canvas, g.markerX(b), 0, g.bottom);
+    }
+
     // The entry sweep reveals the line left to right.
     canvas.save();
     canvas.clipRect(
@@ -408,6 +442,7 @@ class ScoreLinePainter extends CustomPainter {
 
     // The one direct label: the newest score, unless a tooltip is up.
     final int? sel = selected;
+    Rect? newestLabel;
     if (sel == null || sel != last) {
       final Offset p = g.pointAt(last)!;
       final TextPainter label = _text(
@@ -421,11 +456,61 @@ class ScoreLinePainter extends CustomPainter {
       );
       final double y = math.max(0, p.dy - 8 - label.height);
       label.paint(canvas, Offset(x, y));
+      newestLabel = Offset(x, y) & label.size;
+    }
+
+    for (final int b in g.markers) {
+      _markerLabel(canvas, size, g.markerX(b), avoid: newestLabel);
     }
 
     if (sel != null && sel >= 0 && sel < g.values.length) {
       _tooltip(canvas, size, sel);
     }
+  }
+
+  void _dashedVertical(Canvas canvas, double x, double top, double bottom) {
+    final Paint paint = Paint()
+      ..color = crosshairColor
+      ..strokeWidth = 1;
+    const double dash = 3;
+    const double gap = 3;
+    for (double y = top; y < bottom; y += dash + gap) {
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x, math.min(y + dash, bottom)),
+        paint,
+      );
+    }
+  }
+
+  /// "Scoring updated", in the top band beside its marker: to the right when
+  /// it fits, else to the left, and on whichever side does not cover the
+  /// newest score's label.
+  void _markerLabel(Canvas canvas, Size size, double x, {Rect? avoid}) {
+    final TextPainter label = _text(
+      ScoreLineChart.versionMarkerLabel,
+      color: inkMuted,
+    );
+    final Offset right = Offset(x + 4, 0);
+    final Offset left = Offset(x - 4 - label.width, 0);
+    bool fits(Offset o) =>
+        o.dx >= geometry.left && o.dx + label.width <= size.width;
+    bool clear(Offset o) => avoid == null || !(o & label.size).overlaps(avoid);
+    final List<Offset> order = <Offset>[right, left];
+    Offset chosen = fits(right) ? right : left;
+    for (final Offset o in order) {
+      if (fits(o) && clear(o)) {
+        chosen = o;
+        break;
+      }
+    }
+    label.paint(
+      canvas,
+      Offset(
+        chosen.dx.clamp(0.0, math.max(0.0, size.width - label.width)),
+        chosen.dy,
+      ),
+    );
   }
 
   int _lastScored() {

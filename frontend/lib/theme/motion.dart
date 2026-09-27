@@ -19,6 +19,9 @@ const Duration kEntranceDuration = Duration(milliseconds: 260);
 /// The delay added per list position when staggering an entrance.
 const Duration kEntranceStagger = Duration(milliseconds: 45);
 
+/// A disclosure opening or closing: a collapsible dashboard section.
+const Duration kExpandDuration = Duration(milliseconds: 250);
+
 /// The app's standard easing for something arriving.
 const Curve kEnterCurve = Curves.easeOutCubic;
 

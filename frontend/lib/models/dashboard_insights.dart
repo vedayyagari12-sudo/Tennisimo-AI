@@ -20,12 +20,18 @@
 /// played. So the only aggregates in this file that cross shot types are
 /// COUNTS and RECORDS — how many sessions, the fastest ball — never a mean and
 /// never a spread.
+///
+/// **Nothing is compared across pipeline versions either.** Within a shot
+/// type, every delta, direction, best, average, spread and category series
+/// uses only the clips whose `pipeline_version` matches the newest clip's;
+/// see `version_segments.dart`.
 library;
 
 import 'dart:math' as math;
 
 import 'analysis_response.dart';
 import 'enums.dart';
+import 'version_segments.dart';
 
 /// Which way a series has moved across the window being looked at.
 enum TrendDirection {
@@ -183,9 +189,15 @@ class ShotTypeInsight {
     required this.latestCoverage,
     this.sessionDates = const <DateTime?>[],
     this.newestDetailLoaded = false,
+    this.versions = const <String?>[],
   });
 
   final ShotType shotType;
+
+  /// Each session's `pipeline_version` from the history list, OLDEST FIRST,
+  /// aligned with [scorePoints]. Empty (or all null) means one unknown
+  /// version: no boundary and nothing set aside.
+  final List<String?> versions;
 
   /// When each session of this type was recorded, OLDEST FIRST, aligned with
   /// [scorePoints]. May be empty (or hold nulls) when dates are unknown; a
@@ -204,10 +216,12 @@ class ShotTypeInsight {
   /// Ball speed in mph per session of this type, OLDEST FIRST, nulls kept.
   final List<double?> speedPoints;
 
-  /// One series per category the fetched analyses of this type carried.
+  /// One series per category the fetched analyses of this type carried —
+  /// only those on the newest session's pipeline version.
   final List<CategoryTrend> categoryTrends;
 
-  /// How many full analyses of this shot type the trends were built from.
+  /// How many full analyses of this shot type the trends were built from:
+  /// fetched AND on the newest session's pipeline version.
   final int detailsInspected;
 
   /// Metric coverage of the newest fetched analysis of this type.
@@ -216,7 +230,22 @@ class ShotTypeInsight {
   /// Every session of this shot type, scored or not.
   int get sessions => scorePoints.length;
 
+  /// Every measured overall score of this type, whatever its version.
   List<double> get scores => scorePoints.whereType<double>().toList();
+
+  /// Where the score line breaks for a pipeline-version change: index `i`
+  /// means between session `i - 1` and session `i`. Empty when every session
+  /// shares one version.
+  List<int> get versionBoundaries =>
+      versionBoundariesOf(versions, scorePoints.length);
+
+  /// True when this shot type's history spans more than one version.
+  bool get hasVersionBoundary => versionBoundaries.isNotEmpty;
+
+  /// The measured scores on the NEWEST session's version — the only scores
+  /// a best, an average or a spread may be taken over.
+  List<double> get comparableScores =>
+      comparableOnly(scorePoints, versions).whereType<double>().toList();
 
   /// True when NO session of this type produced an overall score.
   ///
@@ -227,21 +256,32 @@ class ShotTypeInsight {
   /// showing a blank chart or a zero.
   bool get hasNoScoreAtAll => scores.isEmpty;
 
-  double? get bestScore => scores.isEmpty ? null : scores.reduce(math.max);
+  /// The best score on the newest session's version. A best from an older
+  /// version is a different measurement and would otherwise stand forever.
+  double? get bestScore {
+    final List<double> s = comparableScores;
+    return s.isEmpty ? null : s.reduce(math.max);
+  }
 
-  /// The mean WITHIN this shot type only.
-  double? get averageScore => scores.isEmpty
-      ? null
-      : scores.reduce((double a, double b) => a + b) / scores.length;
+  /// The mean WITHIN this shot type and the newest session's version only.
+  double? get averageScore {
+    final List<double> s = comparableScores;
+    return s.isEmpty
+        ? null
+        : s.reduce((double a, double b) => a + b) / s.length;
+  }
 
-  ConsistencySummary get consistency => ConsistencySummary(scores: scores);
+  ConsistencySummary get consistency =>
+      ConsistencySummary(scores: comparableScores);
 
   /// Latest minus the one before it, for this shot type. Null unless both were
-  /// scored.
+  /// scored AND both came from the same pipeline version.
   double? get latestDelta {
-    if (scorePoints.length < 2) return null;
+    final int n = scorePoints.length;
+    if (n < 2) return null;
+    if (versionAt(versions, n - 1) != versionAt(versions, n - 2)) return null;
     final double? latest = scorePoints.last;
-    final double? previous = scorePoints[scorePoints.length - 2];
+    final double? previous = scorePoints[n - 2];
     if (latest == null || previous == null) return null;
     return latest - previous;
   }
@@ -334,6 +374,14 @@ DashboardInsights buildDashboardInsights({
         .add(detail);
   }
 
+  // The LIST item is the one source of a clip's version. A detail carries its
+  // own `pipelineVersion` too, but on an old backend the list has none, and
+  // reading the detail's would draw a boundary the list cannot see.
+  final Map<String, String?> versionById = <String, String?>{
+    for (final AnalysisSummary item in history)
+      item.analysisId: item.pipelineVersion,
+  };
+
   final List<ShotTypeInsight> insights = <ShotTypeInsight>[
     for (final MapEntry<ShotType, List<AnalysisSummary>> entry
         in byType.entries)
@@ -342,6 +390,7 @@ DashboardInsights buildDashboardInsights({
         newestFirst: entry.value,
         detailsNewestFirst:
             detailsByType[entry.key] ?? const <AnalysisResponse>[],
+        versionById: versionById,
       ),
   ];
 
@@ -381,8 +430,17 @@ ShotTypeInsight _insightFor(
   ShotType shotType, {
   required List<AnalysisSummary> newestFirst,
   required List<AnalysisResponse> detailsNewestFirst,
+  required Map<String, String?> versionById,
 }) {
   final List<AnalysisSummary> oldestFirst = newestFirst.reversed.toList();
+  // Category series compare clip with clip, so they take only the details on
+  // the newest session's version. A detail whose id is not on the list has no
+  // known version and counts as null.
+  final String? current = newestFirst.first.pipelineVersion;
+  final List<AnalysisResponse> comparableDetails = <AnalysisResponse>[
+    for (final AnalysisResponse d in detailsNewestFirst)
+      if (versionById[d.analysisId] == current) d,
+  ];
   return ShotTypeInsight(
     shotType: shotType,
     scorePoints:
@@ -391,8 +449,8 @@ ShotTypeInsight _insightFor(
         .map((AnalysisSummary e) => e.ballSpeedMph?.toDouble())
         .toList(),
     categoryTrends:
-        buildCategoryTrends(detailsNewestFirst.reversed.toList()),
-    detailsInspected: detailsNewestFirst.length,
+        buildCategoryTrends(comparableDetails.reversed.toList()),
+    detailsInspected: comparableDetails.length,
     latestCoverage: detailsNewestFirst.isEmpty
         ? null
         : coverageOf(detailsNewestFirst.first),
@@ -401,6 +459,8 @@ ShotTypeInsight _insightFor(
     newestDetailLoaded: detailsNewestFirst.isNotEmpty &&
         newestFirst.isNotEmpty &&
         detailsNewestFirst.first.analysisId == newestFirst.first.analysisId,
+    versions:
+        oldestFirst.map((AnalysisSummary e) => e.pipelineVersion).toList(),
   );
 }
 

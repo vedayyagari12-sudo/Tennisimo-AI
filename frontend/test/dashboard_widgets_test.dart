@@ -137,6 +137,7 @@ void main() {
       // ball-speed panel are told apart by their titles, not by a hue. If a
       // second series colour is ever added this fails.
       await tester.pumpWidget(_host(ShotTypeSection(
+        initiallyExpanded: true,
         insight: _insight(
           scores: const <double?>[60, 72],
           speeds: const <double?>[64, 70],
@@ -253,6 +254,7 @@ void main() {
     testWidgets('a shot type with no overall score says so, and shows no zero',
         (WidgetTester tester) async {
       await tester.pumpWidget(_host(ShotTypeSection(
+        initiallyExpanded: true,
         insight: _insight(
           shotType: ShotType.serve,
           scores: const <double?>[null, null],
@@ -287,12 +289,13 @@ void main() {
     testWidgets('a scored shot type shows its own records and spread',
         (WidgetTester tester) async {
       await tester.pumpWidget(_host(ShotTypeSection(
+        initiallyExpanded: true,
         insight: _insight(scores: const <double?>[60, null, 78]),
       )));
 
       expect(find.text('Forehand topspin'), findsOneWidget);
       expect(find.text('3 clips'), findsOneWidget);
-      expect(find.text('78'), findsWidgets); // best, and the trend's label
+      expect(find.text('Best 78'), findsOneWidget); // in the header
       expect(find.text('69.0'), findsOneWidget); // average WITHIN this shot
       expect(find.text('18'), findsOneWidget); // range
       expect(find.textContaining('Some variation'), findsOneWidget);
@@ -302,14 +305,16 @@ void main() {
     testWidgets('one scored clip does not claim a spread',
         (WidgetTester tester) async {
       await tester.pumpWidget(_host(ShotTypeSection(
+        initiallyExpanded: true,
         insight: _insight(scores: const <double?>[71], speeds: const <double?>[null]),
       )));
 
       // The score chart shows the value and says a trend needs two, with no
       // line; no spread is claimed, and it is not said twice.
       expect(find.text(ScoreLineChart.singlePointMessage), findsOneWidget);
-      // Once as the Best stat, once as the chart's lone value.
-      expect(find.text('71'), findsNWidgets(2));
+      // Once as the header's best, once as the chart's lone value.
+      expect(find.text('Best 71'), findsOneWidget);
+      expect(find.text('71'), findsOneWidget);
       expect(
         find.byWidgetPredicate(
           (Widget w) => w is CustomPaint && w.painter is ScoreLinePainter,
@@ -353,6 +358,7 @@ void main() {
       await pumpAt(
         tester,
         ShotTypeSection(
+          initiallyExpanded: true,
           // The longest label the enum has, every stat populated, five
           // category panels.
           insight: _insight(

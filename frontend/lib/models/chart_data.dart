@@ -283,14 +283,20 @@ double? _categoryScore(AnalysisResponse analysis, RadarAxis axis) {
 /// Strictly the immediately previous session of that type: when its detail
 /// was not fetched this returns null rather than reaching further back, so
 /// "previous swing" never quietly means "some older swing".
+///
+/// Also null when that session came from a different pipeline version (read
+/// from the history list, see `version_segments.dart`): its shape was
+/// measured differently, so overlaying it would compare across the change.
 AnalysisResponse? previousOfSameShot(
   List<AnalysisSummary> historyNewestFirst,
   List<AnalysisResponse> details,
 ) {
   if (historyNewestFirst.length < 2) return null;
-  final ShotType shot = historyNewestFirst.first.shotType;
+  final AnalysisSummary newest = historyNewestFirst.first;
+  final ShotType shot = newest.shotType;
   for (final AnalysisSummary item in historyNewestFirst.skip(1)) {
     if (item.shotType != shot) continue;
+    if (item.pipelineVersion != newest.pipelineVersion) return null;
     for (final AnalysisResponse d in details) {
       if (d.analysisId == item.analysisId) return d;
     }
@@ -311,10 +317,17 @@ class CategoryComparison {
     required this.current,
     required this.average,
     required this.averageOf,
+    this.earlier = const <double?>[],
   });
 
   final String category;
   final String displayName;
+
+  /// The earlier clips' own scores, OLDEST FIRST, nulls kept. [average] is
+  /// their mean; the individual values stay reachable through the chart's
+  /// tap readout, which is what lets one chart replace the per-category
+  /// sparklines that used to repeat these scores.
+  final List<double?> earlier;
 
   /// The newest clip's score, or null when it did not measure this category.
   final double? current;
@@ -356,6 +369,7 @@ List<CategoryComparison> buildCategoryComparison(List<CategoryTrend> trends) {
             ? null
             : earlier.reduce((double a, double b) => a + b) / earlier.length,
         averageOf: earlier.length,
+        earlier: t.points.sublist(0, t.points.length - 1),
       ),
     );
   }

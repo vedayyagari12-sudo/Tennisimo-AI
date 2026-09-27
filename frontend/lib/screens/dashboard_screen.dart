@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/analysis_response.dart';
 import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
+import '../models/enums.dart';
 import '../models/key_numbers.dart';
 import '../models/swing_advice.dart';
 import '../services/api_client.dart';
@@ -489,7 +490,15 @@ class DashboardScreenState extends State<DashboardScreen> {
     return <Widget>[
       const SectionHeader(title: 'By shot type'),
       for (final ShotTypeInsight insight in insights.shotTypes) ...<Widget>[
-        ShotTypeSection(insight: insight),
+        // Only the shot the player last hit starts open; the rest are one
+        // header row each. Keyed by shot so an open section stays open while
+        // the detail requests land and the list rebuilds.
+        ShotTypeSection(
+          key: ValueKey<ShotType>(insight.shotType),
+          insight: insight,
+          initiallyExpanded:
+              insight.shotType == insights.latestShotType?.shotType,
+        ),
         const SizedBox(height: AppSpacing.md),
       ],
       // Never-recorded shots are listed rather than hidden, so the player can

@@ -123,8 +123,16 @@ class _ComparisonBarsState extends State<ComparisonBars> {
     final String diff = d == null
         ? ''
         : ' (${d >= 0 ? '+' : '−'}${d.abs().toStringAsFixed(1)})';
-    return '${r.displayName}: $now, $avg$diff';
+    // The individual earlier scores, so the average is never the only trace
+    // of the clips it summarises.
+    final String each = r.earlier.isEmpty
+        ? ''
+        : '. Earlier clips, oldest first: ${r.earlier.map(_score).join(', ')}';
+    return '${r.displayName}: $now, $avg$diff$each';
   }
+
+  static String _score(double? v) =>
+      v == null ? ComparisonBars.notMeasured : v.round().toString();
 }
 
 class _Group extends StatelessWidget {

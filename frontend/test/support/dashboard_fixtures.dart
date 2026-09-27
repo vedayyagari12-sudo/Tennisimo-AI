@@ -408,11 +408,12 @@ AnalysisResponse fixtureAnalysis({
   required Map<String, double?> categories,
   List<MetricScore> metrics = const <MetricScore>[],
   CoachingFeedback? feedback,
+  String pipelineVersion = '1.0.0',
 }) => AnalysisResponse(
   analysisId: id,
   createdAt: createdAt,
   status: AnalysisStatus.complete,
-  pipelineVersion: '1.0.0',
+  pipelineVersion: pipelineVersion,
   shotType: shot,
   shotTypeConfidence: 0.8,
   overallScore: overall,
@@ -439,8 +440,11 @@ _Session _session({
   int? mph,
   List<MetricScore> metrics = const <MetricScore>[],
   CoachingFeedback? feedback,
+  String? version,
 }) {
   final DateTime at = DateTime.now().subtract(age);
+  // The list item carries the version exactly as the backend sends it (null
+  // for a backend that predates the key); the detail agrees with it.
   return _Session(
     AnalysisSummary(
       analysisId: id,
@@ -448,6 +452,7 @@ _Session _session({
       shotType: shot,
       overallScore: overall,
       ballSpeedMph: mph,
+      pipelineVersion: version,
     ),
     fixtureAnalysis(
       id: id,
@@ -457,6 +462,7 @@ _Session _session({
       categories: categories,
       metrics: metrics,
       feedback: feedback,
+      pipelineVersion: version ?? '1.0.0',
     ),
   );
 }
@@ -474,7 +480,11 @@ FakeDashboardDataSource _source(
 
 /// Up to eight forehands, newest first. Swing path is clearly the weak
 /// category and creeping up; everything else sits in the 60s-80s.
-List<_Session> _forehands({int count = 8, Duration olderBy = Duration.zero}) {
+List<_Session> _forehands({
+  int count = 8,
+  Duration olderBy = Duration.zero,
+  List<String?> versions = const <String?>[],
+}) {
   const List<double> overall = <double>[71, 68, 70, 66, 64, 65, 61, 58];
   const List<double> prep = <double>[76, 74, 75, 72, 70, 71, 68, 66];
   const List<double> contact = <double>[78, 77, 74, 73, 71, 70, 69, 65];
@@ -509,6 +519,7 @@ List<_Session> _forehands({int count = 8, Duration olderBy = Duration.zero}) {
         },
         metrics: i == 0 ? forehandMetrics() : const <MetricScore>[],
         feedback: i == 0 ? forehandFeedback() : null,
+        version: i < versions.length ? versions[i] : null,
       ),
   ];
 }
@@ -524,6 +535,7 @@ _Session _unbanded(
   required double? balance,
   int? mph,
   bool withMetrics = false,
+  String? version,
 }) {
   final List<double> scored = <double?>[
     prep,
@@ -547,6 +559,7 @@ _Session _unbanded(
       'balance': balance,
     },
     metrics: withMetrics ? serveMetrics() : const <MetricScore>[],
+    version: version,
   );
 }
 
@@ -558,12 +571,14 @@ _Session _backhand(
   required double path,
   required double balance,
   int? mph,
+  String? version,
 }) => _session(
   id: id,
   age: age,
   shot: ShotType.backhandTwoHanded,
   overall: overall,
   mph: mph,
+  version: version,
   categories: <String, double?>{
     'preparation': prep,
     'contact': null,
@@ -772,6 +787,82 @@ DashboardFixture wideShotMix() {
   );
 }
 
+/// A history that spans a scoring change: the backend moved from `v2` to
+/// `v3`, and the list now carries `pipeline_version` on every row.
+///
+/// * Forehand: the three newest clips are `v3`, the five before them `v2` —
+///   a boundary in the middle of the history, with enough on each side for
+///   a line.
+/// * Serve: only the newest clip is `v3`, so the boundary leaves one
+///   comparable clip and every serve comparison must fall back to "need 2".
+/// * Backhand: every clip predates the change. All `v2`, so it compares
+///   within `v2` and draws no boundary.
+DashboardFixture mixedVersions() {
+  final List<_Session> fh = _forehands(
+    versions: const <String?>['v3', 'v3', 'v3', 'v2', 'v2', 'v2', 'v2', 'v2'],
+  );
+  return DashboardFixture(
+    'mixed_versions',
+    _source(<_Session>[
+      fh[0],
+      _unbanded(
+        'sv0',
+        const Duration(hours: 6),
+        ShotType.serve,
+        prep: 70,
+        path: 64,
+        balance: 66,
+        mph: 90,
+        version: 'v3',
+      ),
+      fh[1],
+      fh[2],
+      _unbanded(
+        'sv1',
+        const Duration(days: 4),
+        ShotType.serve,
+        prep: 60,
+        path: 30,
+        balance: 62,
+        mph: 86,
+        version: 'v2',
+      ),
+      fh[3],
+      _backhand(
+        'bh0',
+        const Duration(days: 6),
+        63,
+        prep: 66,
+        path: 58,
+        balance: 71,
+        version: 'v2',
+      ),
+      _unbanded(
+        'sv2',
+        const Duration(days: 7),
+        ShotType.serve,
+        prep: 58,
+        path: 28,
+        balance: 60,
+        version: 'v2',
+      ),
+      fh[4],
+      _backhand(
+        'bh1',
+        const Duration(days: 10),
+        57,
+        prep: 60,
+        path: 50,
+        balance: 68,
+        version: 'v2',
+      ),
+      fh[5],
+      fh[6],
+      fh[7],
+    ]),
+  );
+}
+
 List<DashboardFixture> allFixtures() => <DashboardFixture>[
   newUser(),
   forehandOnly(),
@@ -779,4 +870,5 @@ List<DashboardFixture> allFixtures() => <DashboardFixture>[
   unscoredServesAndVolleys(),
   partialDetailFailure(),
   wideShotMix(),
+  mixedVersions(),
 ];

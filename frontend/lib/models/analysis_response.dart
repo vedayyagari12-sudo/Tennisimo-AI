@@ -178,6 +178,7 @@ class AnalysisSummary {
     required this.shotType,
     required this.overallScore,
     required this.ballSpeedMph,
+    this.pipelineVersion,
   });
 
   final String analysisId;
@@ -187,6 +188,15 @@ class AnalysisSummary {
 
   /// Null means: show no speed at all for this row.
   final int? ballSpeedMph;
+
+  /// The `pipeline_version` that produced this row's numbers, e.g. `v3`.
+  ///
+  /// Null when the list endpoint did not send one — backends deployed before
+  /// the key was added. Deliberately NOT defaulted the way
+  /// [AnalysisResponse.pipelineVersion] is: a made-up version here would draw
+  /// a "Scoring updated" boundary that never happened. See
+  /// `version_segments.dart` for how null is treated.
+  final String? pipelineVersion;
 
   factory AnalysisSummary.fromJson(Map<String, dynamic> json) {
     final Map<String, dynamic>? shotTypeJson = asMap(json, 'shot_type');
@@ -203,6 +213,7 @@ class AnalysisSummary {
           asDoubleOrNull(scorecard, 'overall_score'),
       ballSpeedMph: asIntOrNull(json, 'ball_speed_mph') ??
           asIntOrNull(ballSpeedJson, 'ball_speed_mph'),
+      pipelineVersion: asStringOrNull(json, 'pipeline_version'),
     );
   }
 }
