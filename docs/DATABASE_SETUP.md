@@ -1285,3 +1285,575 @@ may have decided any of these differently.
     documented as a spec constant from PIPELINE.md rather than as confirmed in
     code. Any statement that it is "confirmed in `backend/app/config.py`" is
     currently false.
+
+---
+
+## Part 7 — Live schema reconciliation (2026-09-21)
+
+**Method.** Read-only reconnaissance against the live Supabase project. No row
+was inserted, updated or deleted; no DDL was executed; no test user was created.
+Two sources were used:
+
+1. **PostgREST OpenAPI introspection** — `GET {SUPABASE_URL}/rest/v1/` with
+   `Accept: application/openapi+json`, service-role key. This yields every
+   exposed column with its type, nullability and column default.
+2. **Non-committing constraint probing.** `information_schema` and `pg_catalog`
+   are NOT reachable through PostgREST on this project (`PGRST106 — Only the
+   following schemas are exposed: public, graphql_public`), and the only RPC
+   exposed is `rls_auto_enable`, so CHECK constraint *bodies* cannot be read.
+   They were characterised by probing instead, using a technique that **cannot
+   commit**: every probe `INSERT` carries a `user_id` (and, for `analyses`, an
+   `id`) that does not exist in the referenced table. Postgres evaluates CHECK
+   constraints *before* firing FK triggers, so the request either returns
+   `23514` and names the offending CHECK, or returns `23503` on the foreign key
+   — meaning "every CHECK passed" — and the statement aborts either way. Both
+   tables were confirmed empty (0 rows in `analysis_jobs`, 0 in `analyses`), and
+   still are.
+
+**Headline result: a third instance of schema/code drift was found, and this
+one is a production-stopper.** See discrepancy **A1** below
+(`analyses_ball_speed_reason_pairing_chk`): as the code stands today, *every*
+analysis that does not produce a ball speed will fail to persist. Its fix is in
+the Python, not in SQL.
+
+### 7.1 Live schema as actually observed
+
+#### `public.analysis_jobs`
+
+| column | type | null | default | in Part 1? |
+|---|---|---|---|---|
+| `id` | uuid (PK) | NOT NULL | `gen_random_uuid()` | yes |
+| `user_id` | uuid | NOT NULL | — | yes (FK `analysis_jobs_user_id_fkey`) |
+| `storage_path` | text | NOT NULL | — | yes |
+| `status` | text | NOT NULL | `'queued'` | yes |
+| `ball_speed_requested` | boolean | NOT NULL | `false` | **NO** |
+| `estimated_seconds` | integer | NULL | — | **NO** |
+| `error_code` | text | NULL | — | yes |
+| `error_message` | text | NULL | — | yes |
+| `error_stage` | text | NULL | — | yes (added during the 2026-09-20 fix) |
+| `heartbeat_at` | timestamptz | **NOT NULL** | **`now()`** | yes, but doc says NULLABLE |
+| `started_at` | timestamptz | NULL | — | **NO** |
+| `finished_at` | timestamptz | NULL | — | **NO** |
+| `created_at` | timestamptz | NOT NULL | `now()` | yes |
+| `updated_at` | timestamptz | NOT NULL | `now()` | yes |
+
+Live CHECK constraints on `analysis_jobs`, all observed by name:
+
+- `analysis_jobs_status_chk` — accepts exactly
+  `queued, running, succeeded, failed`. Rejects `pending`, `cancelled`,
+  `done`, `QUEUED`, `''`. Semantically identical to the documented
+  `analysis_jobs_status_check`; **the documented NAME does not exist.**
+- `analysis_jobs_error_code_chk` — all **20** documented `ErrorCode` values
+  were probed individually and **all 20 are accepted**; `not_a_code`, `''`,
+  `INTERNAL_ERROR`, `timeout` are rejected. Value set matches the doc exactly.
+  **The documented NAME `analysis_jobs_error_code_check` does not exist.**
+- `analysis_jobs_error_pairing_chk` — `status='failed'` with `error_code IS
+  NULL` is rejected; `status IN ('queued','running')` with a non-null
+  `error_code` is rejected. Semantically identical to the documented
+  `analysis_jobs_failure_shape_check`; **the documented NAME does not exist.**
+- `analysis_jobs_path_prefix_chk` — **UNDOCUMENTED.** `storage_path` must begin
+  with `swing-videos/` *followed by this row's own `user_id`* followed by `/`.
+  Proven: a path built from a *different* random uuid is rejected even when the
+  row is otherwise valid, while the same path built from the row's `user_id` is
+  accepted. `swing-videos/abc/x.mp4` and a leading-space variant are rejected.
+- `analysis_jobs_path_depth_chk` — **UNDOCUMENTED.** Requires exactly three
+  non-empty `/`-separated segments (`a/b`, `a/b/c/d`, `a/b/c/`, `/a/b/c`,
+  `swing-videos//x.mp4`, `''` all rejected) **and** a total length of **512
+  characters or fewer** (512 accepted, 513 rejected). The name understates it:
+  it is a depth *and* length cap.
+- `analysis_jobs_eta_chk` — **UNDOCUMENTED.** `estimated_seconds >= 0`
+  (`-1`, `-5` rejected; `0`, `1`, `86400`, `100000000` accepted). No upper bound.
+
+No constraint was found relating `started_at`/`finished_at` to each other or to
+`status`, and none on `error_stage` (arbitrary strings including `''` and a
+500-char string are accepted), `error_message`, or `ball_speed_requested`.
+
+#### `public.analyses`
+
+| column | type | null | default | in Part 1? |
+|---|---|---|---|---|
+| `id` | uuid (PK, FK to `analysis_jobs.id`, `analyses_id_fkey`) | NOT NULL | — | yes |
+| `user_id` | uuid | NOT NULL | — | yes |
+| `storage_path` | text | NOT NULL | — | yes |
+| `status` | text | NOT NULL | — | yes (added during the 2026-09-20 fix) |
+| `shot_type` | text | NOT NULL | **`'unknown'`** | yes, but doc declares NO default |
+| `overall_score` | numeric(5,2) | NULL | — | yes |
+| `ball_speed_mph` | integer | NULL | — | yes |
+| `ball_speed_requested` | boolean | NOT NULL | `false` | **NO** |
+| `ball_speed_unavailable_reason` | text | NULL | — | **NO** |
+| `pipeline_version` | text | NOT NULL | **`'v2'`** | yes, but doc declares NO default |
+| `rubric_version` | text | NOT NULL | **`'rubric_v1'`** | yes, but doc declares NO default |
+| `payload` | jsonb | NOT NULL | — | yes |
+| `created_at` | timestamptz | NOT NULL | `now()` | yes |
+
+`numeric(5,2)` is confirmed by overflow: `999.99` and `1234.5` both return
+`22003 numeric field overflow`.
+
+Live CHECK constraints on `analyses`:
+
+- `analyses_status_check` — **the one live constraint that carries the exact
+  documented name**, because it was created from this file's DDL during the
+  2026-09-20 fix. Accepts `complete`, `partial`; rejects `failed`, `succeeded`,
+  `COMPLETE`, `''`.
+- `analyses_shot_type_chk` — all 7 documented values accepted, `smash` and `''`
+  rejected. Value set matches; **documented NAME `analyses_shot_type_check`
+  does not exist.**
+- `analyses_ball_speed_range_chk` — `15` and `160` accepted, `14`, `161`, `0`,
+  `-5`, `1000` rejected. Bounds match the doc and `responses.py`'s
+  `StrictInt ge=15 le=160` exactly; **documented NAME
+  `analyses_ball_speed_range_check` does not exist.**
+- `analyses_overall_score_chk` — **bounds do NOT match the doc.** `0` and `100`
+  accepted, `-1`/`101`/`-0.5`/`100.5`/`-0.49`/`100.49` rejected — but `-0.01`,
+  `-0.02`, `-0.03`, `100.01`, `100.02` are **accepted**, and `-0.05`/`100.05`
+  are rejected. The documented body is a strict `>= 0 AND <= 100`, which would
+  reject `-0.01`. Best-fit hypothesis for the live body is a one-decimal
+  rounding tolerance, e.g. `round(overall_score, 1) BETWEEN 0 AND 100`, but
+  **this is inferred from boundary behaviour and the actual body could not be
+  read — see the confidence flag in §7.4.**
+- `analyses_ball_speed_reason_pairing_chk` — **UNDOCUMENTED, AND THE CODE
+  VIOLATES IT.** Requires exactly one of `ball_speed_mph` /
+  `ball_speed_unavailable_reason` to be non-null. Both-null is rejected;
+  both-set is rejected. See A1.
+- `analyses_ball_speed_reason_chk` — **UNDOCUMENTED.** All **12** members of
+  `BallSpeedUnavailableReason` (`backend/app/models/enums.py:57-71`) were probed
+  individually and all 12 are accepted; `bogus_reason` and `''` are rejected.
+  The live value set is exactly the code enum.
+- `analyses_payload_object_chk` — **UNDOCUMENTED.** `payload` must be a JSON
+  *object*: `{}` and `{"a":1}` accepted; `[]`, `"str"`, `5`, `true` rejected
+  with this constraint, `null` rejected by NOT NULL.
+- `analyses_path_prefix_chk` — **UNDOCUMENTED.** Same `swing-videos/{user_id}/`
+  tie as on `analysis_jobs`. **Asymmetry worth noting:** `analyses` has NO depth
+  or length counterpart — a 4-segment path, a trailing-slash path and a
+  1024-character path are all accepted here but rejected on `analysis_jobs`.
+
+No constraint was found tying `ball_speed_requested` to `ball_speed_mph`, or
+`status='partial'` to a null `overall_score`, or bounding `created_at`.
+
+#### The incident-2 constraints are GONE
+
+`analyses_rubric_version_chk` and `analyses_pipeline_version_chk` **no longer
+exist.** `rubric_version` was probed with `rubric_v1`,
+`rubric_v0_placeholder`, `junk`, `''`; `pipeline_version` with `v1`, `v2`,
+`v3`, `v99`, `junk`, `rubric_v1`, `''`. **Every value was accepted.** The
+2026-09-20 remediation dropped them rather than widening them. No SQL is needed
+here; only the doc needs to record the outcome (see A6 discussion in §7.5).
+
+#### Indexes — NOT enumerable
+
+**Index enumeration was not achievable and is not guessed at below.** PostgREST
+exposes only `public` and `graphql_public`; `pg_indexes` / `pg_class` are not
+reachable, and no read-only view or RPC over them exists on this project. The
+four indexes in Part 1.1 (`idx_analyses_user_created_id`,
+`idx_analysis_jobs_user_created`, `idx_analysis_jobs_active`,
+`idx_analyses_user_ball_speed`), the `set_updated_at()` function and the
+`trg_analysis_jobs_updated_at` trigger are therefore **UNVERIFIED** — they may
+be present, absent or differently defined. Verifying them needs one
+`SELECT indexname, indexdef FROM pg_indexes WHERE schemaname='public';` and one
+`SELECT tgname FROM pg_trigger WHERE tgrelid='public.analysis_jobs'::regclass;`
+run by the owner in the SQL editor. Because `CREATE INDEX IF NOT EXISTS` is
+idempotent and safe on two empty tables, §7.5 simply re-runs Part 1.1 verbatim.
+
+Similarly, **`analyses_user_id_fkey` could not be confirmed.** `analyses_id_fkey`
+fires first on every probe, and with `analysis_jobs` empty there is no valid
+`id` to get past it. Confirming it requires a catalog read, not a probe.
+
+### 7.2 Discrepancies — documented but MISSING live (6)
+
+All six are **name-only**: the constraint's *behaviour* is present and correct
+in every case, under a `_chk` name instead of the documented `_check` name.
+
+| # | Documented name | Live name | Behaviour |
+|---|---|---|---|
+| N1 | `analysis_jobs_status_check` | `analysis_jobs_status_chk` | identical |
+| N2 | `analysis_jobs_error_code_check` | `analysis_jobs_error_code_chk` | identical, all 20 values |
+| N3 | `analysis_jobs_failure_shape_check` | `analysis_jobs_error_pairing_chk` | identical |
+| N4 | `analyses_shot_type_check` | `analyses_shot_type_chk` | identical, all 7 values |
+| N5 | `analyses_ball_speed_range_check` | `analyses_ball_speed_range_chk` | identical, 15..160 |
+| N6 | `analyses_overall_score_range_check` | `analyses_overall_score_chk` | **bounds differ — see M2** |
+
+**Fix direction: align the DOC, not the database** (N1–N5). Renaming five live
+constraints buys nothing — no code references a constraint name — while every
+rename is a chance to drop a constraint and forget to re-add it on a table that
+is about to receive production data. The *doc* is what future readers diff
+against, so the doc should carry the real names. N6 is different only because
+its body also differs; it is handled as M2.
+
+This naming split is itself the tell that Part 1's DDL was **never the script
+that built this database**. Only `analyses_status_check` — the one constraint
+created from this file, by hand, on 2026-09-20 — uses the documented spelling.
+Everything else came from an unrecorded script using a `_chk` house style. That
+is the root cause of all three incidents, and §7.6 records it as such.
+
+### 7.3 Discrepancies — live but UNDOCUMENTED (16)
+
+Counted as: **6 undocumented columns + 7 undocumented constraints + 3
+undocumented column defaults.**
+
+**A1 — `analyses_ball_speed_reason_pairing_chk`. SEVERITY: BREAKS PRODUCTION.**
+
+The constraint requires exactly one of `ball_speed_mph` /
+`ball_speed_unavailable_reason` to be non-null. The code cannot satisfy it when
+no speed is measured:
+
+- `AnalysisRow` (`backend/app/services/repository.py:61-75`) has **no**
+  `ball_speed_unavailable_reason` field at all.
+- `persist_success` (`repository.py:271-275`) serialises with
+  `exclude_none=True`, so a null `ball_speed_mph` is *omitted* from the
+  PostgREST body and lands as SQL NULL.
+- Stage 18 (`backend/app/services/pipeline.py:565-575`) passes
+  `ball_speed_mph=ball_speed.ball_speed_mph` and nothing else from the ball
+  speed result.
+
+So every uncalibrated clip — and every clip where detection legitimately
+returns one of the 12 `BallSpeedUnavailableReason` values — writes both columns
+NULL, gets `23514`, and `_request` turns that into `ApiError(INTERNAL_ERROR)`,
+which `pipeline.py:578-582` converts to a `JobFailure` at stage `persist`. The
+analysis is lost after the full pipeline has already run. With
+`BALL_DETECTION_ENABLED` off, or for any clip submitted without calibration,
+this is **100% of analyses**.
+
+**Fix direction: keep the constraint, fix the CODE.** This is a
+`rubric_version`-shaped case — the live schema is right and the doc is behind —
+and it is not a close call, because the constraint is a *verbatim restatement*
+of a model validator the code already enforces on the response side:
+
+> `backend/app/models/responses.py:180-182` —
+> `if (self.ball_speed_mph is None) != (self.unavailable_reason is not None):`
+> `raise ... "unavailable_reason must be non-null exactly when ball_speed_mph is null"`
+
+Dropping the DB constraint would let the storage layer hold a state the
+response model declares impossible — a stored row that cannot be rendered. The
+required change is: add `ball_speed_unavailable_reason:
+BallSpeedUnavailableReason | None = None` to `AnalysisRow`, and populate it from
+`ball_speed.unavailable_reason` at `pipeline.py:566`. **No SQL statement in
+§7.5 addresses A1 — it is a Python change and was out of scope for this
+read-only pass.** It is the highest-priority item arising from it.
+
+**A2 — `analyses.ball_speed_unavailable_reason` (text NULL) and
+`analyses_ball_speed_reason_chk`.** The column A1 needs. Its 12-value CHECK is
+exactly `BallSpeedUnavailableReason`. *Fix: document both; the live definition
+is correct.* This is one of the "two extra columns" noted in passing by the
+earlier report — it is **not** benign, it is half of A1.
+
+**A3 — `analyses.ball_speed_requested` (boolean NOT NULL DEFAULT false).**
+The other of the "two extra columns". Never written by `AnalysisRow`; the
+default saves the INSERT, so it is benign *today*. But it means every stored
+analysis records `false`, including analyses that very much did request a speed
+— a silently wrong audit field. *Fix: document it, and flag for a decision —
+either populate it in `AnalysisRow` or drop it. Do not leave a column that lies.*
+
+**A4 — `analysis_jobs.ball_speed_requested` (boolean NOT NULL DEFAULT false).**
+Same story on the job side. `routes_analyses.py:162` computes
+`ball_speed_requested=body.ball_speed_calibration is not None` — but that goes
+into the *API response* model (`requests.py:213-214`), never into `JobRow`, so
+the DB column stays `false`. *Fix: document, and flag the same
+populate-or-drop decision. This one is more clearly wanted — the worker has a
+legitimate reason to ask the row whether calibration was requested.*
+
+**A5 — `analysis_jobs.estimated_seconds` (integer NULL).**
+`routes_analyses.py:161` computes an ETA into the response model, never into
+`JobRow`, so this column is always NULL. *Fix: document; flag populate-or-drop.*
+
+**A6 — `analysis_jobs.started_at` (timestamptz NULL).** Never written by any
+code path in `repository.py`. Always NULL. *Fix: document; flag
+populate-or-drop.*
+
+**A7 — `analysis_jobs.finished_at` (timestamptz NULL).** Same. *Fix: document;
+flag populate-or-drop — this one would make the `worker_lost` post-mortem far
+easier to run and is probably worth keeping and populating.*
+
+**A8 — `analysis_jobs_eta_chk`.** `estimated_seconds >= 0`, no upper bound.
+*Fix: document; keep.*
+
+**A9 — `analysis_jobs_path_prefix_chk` and A10 — `analyses_path_prefix_chk`.**
+`storage_path` must start with `swing-videos/{this row's user_id}/`. *Fix:
+document; **keep**.* These are deliberate and valuable: they are the
+database-level restatement of the Stage 3 ownership rule this file already
+states in prose at Part 3.2 ("`storage_path` must start with
+`swing-videos/{jwt.sub}/`. Otherwise `403 storage_path_forbidden`"). Enforcing
+it in the schema means a cross-tenant path cannot be stored even if the
+application check is ever bypassed or refactored away.
+
+**⚠ One risk to flag:** the bucket segment is a hardcoded literal
+`swing-videos`, whereas the application builds the path from
+`settings.supabase_storage_bucket` (`backend/app/api/routes_uploads.py:57`, env
+var `SUPABASE_STORAGE_BUCKET`). If that environment variable is ever changed,
+**every** `INSERT` into both tables starts failing with `23514`, and the failure
+will look like an application bug. This coupling was recorded nowhere; it is
+recorded here.
+
+**A11 — `analysis_jobs_path_depth_chk`.** Exactly 3 non-empty segments, total
+length ≤ 512. *Fix: document; keep.* The name is misleading (it is also a
+length cap) but renaming it is not worth the churn — §7.5 documents rather than
+renames, and instead closes the `analyses` asymmetry.
+
+**A12 — `analyses_payload_object_chk`.** `jsonb_typeof(payload) = 'object'`.
+*Fix: document; keep.* It guarantees the poll endpoint can never read back a
+payload that is a bare array or scalar, which would break
+`get_analysis_payload`'s contract.
+
+**A13 — `analyses_ball_speed_reason_chk` value set** is counted with A2.
+
+**A14 — `analyses.shot_type DEFAULT 'unknown'`.** Undocumented default.
+*Fix direction: **DROP the default** (align live to doc).* `AnalysisRow` always
+supplies `shot_type`, so nothing depends on it; meanwhile a default of
+`'unknown'` means a future writer that forgets the column silently stores a
+classification the pipeline never made. That is precisely the fabrication the
+`error_stage` column was added to prevent (Part 1's own comment: "`stage` would
+have to be fabricated at read time, which the anti-fabrication rule forbids").
+A NOT NULL column with no default fails loudly instead.
+
+**A15 — `analyses.pipeline_version DEFAULT 'v2'`.** Undocumented default.
+*Fix direction: **DROP the default**.* Same reasoning; `pipeline.py:121` always
+supplies it, and a hardcoded `'v2'` default is a stale contract string waiting
+to mislabel a row written by v3.
+
+**A16 — `analyses.rubric_version DEFAULT 'rubric_v1'`.** Undocumented default,
+and the most pointed one. *Fix direction: **DROP the default**.* The code
+deliberately writes `rubric_v0_placeholder`
+(`backend/app/analysis/rubric.py:66`), and that file's own comment explains why
+in terms that apply verbatim to the default:
+
+> "Shipping them under `rubric_v1` would assert a validated rubric that does
+> not exist."
+
+A column default of `'rubric_v1'` is exactly that assertion, sitting in the
+schema, ready to be applied to any row whose writer omits the column. It is the
+residue of the dropped `analyses_rubric_version_chk` and should go with it.
+
+### 7.4 Discrepancies — present but MISMATCHED (2)
+
+**M1 — `analysis_jobs.heartbeat_at` is `NOT NULL DEFAULT now()` live; Part 1
+declares it nullable with no default.**
+
+*Fix direction: **align LIVE to the doc** — drop the default, drop NOT NULL.*
+The doc and the code agree against the database here. Part 1's comment says
+"NULL while queued — a queued job has no worker to beat", and the staleness rule
+is built on that fact:
+
+> `backend/app/services/orchestrator.py:135` — "`heartbeat_at IS NULL` is NOT
+> stale -- a queued job has no worker to beat."
+> `orchestrator.py:144` —
+> `if job.status is not JobStatus.RUNNING or job.heartbeat_at is None:`
+
+Live, a queued job is stamped `now()` at INSERT, so the NULL that was supposed
+to *mean* "no worker yet" never occurs, and the invariant is carried entirely by
+the `status is not RUNNING` half of that guard. Nothing breaks today, but the
+schema no longer expresses the thing the comment says it expresses, and the
+partial index `idx_analysis_jobs_active (status, heartbeat_at) WHERE status IN
+('queued','running')` was designed around the null. `JobRow.heartbeat_at` is
+typed `datetime | None` (`repository.py:55`), so relaxing live is safe for the
+read path, and `create_job` omits the field via `exclude_none=True`, so it is
+safe for the write path.
+
+**M2 — `analyses_overall_score_chk` is looser than the documented
+`analyses_overall_score_range_check`.**
+
+Doc: `overall_score >= 0 AND overall_score <= 100`. Live: accepts `-0.03` and
+`100.02`, rejects `-0.05` and `100.05`.
+
+*Fix direction: **align LIVE to the doc**, replacing the body with the exact
+documented bounds* — `scoring.py` produces a weighted mean of 0..100 band
+scores, which cannot legitimately land outside 0..100, so the tolerance protects
+nothing and only widens what can be stored. **⚠ Confidence flag: the live body
+was not read, only inferred from boundary probes.** The replacement statement in
+§7.5 is therefore written as an explicit `DROP CONSTRAINT` + `ADD CONSTRAINT`
+with the documented body, which is correct regardless of what the old body
+actually was — but **do not run it without first reading the real definition**
+(§7.5 STEP 0), in case the tolerance was deliberate for a reason not recorded
+anywhere in the repo.
+
+### 7.5 Proposed SQL — REVIEW BEFORE RUNNING, NOT APPLIED
+
+Nothing below has been executed. Run it in the Supabase SQL editor as project
+owner. Both tables are empty (verified 2026-09-21), so every statement here is
+free of backfill risk — **re-verify that before running if time has passed.**
+
+Statements are ordered: catalog reads first, then column-level changes, then
+constraints, then the idempotent index/trigger re-assert.
+
+```sql
+-- =========================================================================
+-- STEP 0 -- READ-ONLY VERIFICATION. Run this block ALONE, first, and read
+-- the output before running anything below it. It closes the three gaps
+-- this reconciliation could not close through PostgREST (Part 7.1).
+-- =========================================================================
+
+-- 0a. The real CHECK bodies. Confirms every inference in Part 7.1/7.4 and,
+--     in particular, tells you what analyses_overall_score_chk actually says
+--     before M2 replaces it.
+SELECT rel.relname AS table_name,
+       con.conname  AS constraint_name,
+       pg_get_constraintdef(con.oid) AS definition
+FROM pg_constraint con
+JOIN pg_class rel ON rel.oid = con.conrelid
+JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+WHERE ns.nspname = 'public'
+  AND rel.relname IN ('analyses', 'analysis_jobs')
+ORDER BY rel.relname, con.contype, con.conname;
+
+-- 0b. Indexes. Part 1.1 declares four; none could be verified remotely.
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND tablename IN ('analyses', 'analysis_jobs')
+ORDER BY tablename, indexname;
+
+-- 0c. The updated_at trigger (Part 1.2), also unverified.
+SELECT tgname, pg_get_triggerdef(oid)
+FROM pg_trigger
+WHERE tgrelid = 'public.analysis_jobs'::regclass
+  AND NOT tgisinternal;
+
+-- 0d. Confirms analyses_user_id_fkey exists (Part 7.1 could not).
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'public.analyses'::regclass AND contype = 'f';
+
+-- 0e. Emptiness re-check. If either count is non-zero, STOP and re-assess
+--     M1 and M2 -- both relax/tighten a live column.
+SELECT (SELECT count(*) FROM public.analysis_jobs) AS jobs,
+       (SELECT count(*) FROM public.analyses)      AS analyses;
+
+
+-- =========================================================================
+-- STEP 1 -- COLUMN-LEVEL FIXES
+-- =========================================================================
+
+-- M1: heartbeat_at must be nullable with no default, because
+-- orchestrator.py:135/144 and Part 1 both define "queued, no worker yet" as
+-- heartbeat_at IS NULL. Live's DEFAULT now() makes that state unreachable.
+ALTER TABLE public.analysis_jobs ALTER COLUMN heartbeat_at DROP DEFAULT;
+ALTER TABLE public.analysis_jobs ALTER COLUMN heartbeat_at DROP NOT NULL;
+
+-- A14: shot_type DEFAULT 'unknown' is undocumented and lets a future writer
+-- silently store a classification the pipeline never made. AnalysisRow always
+-- supplies this column, so nothing depends on the default.
+ALTER TABLE public.analyses ALTER COLUMN shot_type DROP DEFAULT;
+
+-- A15: pipeline_version DEFAULT 'v2' is undocumented and hardcodes a contract
+-- string that pipeline.py:121 already supplies on every write. Left in place,
+-- it mislabels any v3 row whose writer omits the column.
+ALTER TABLE public.analyses ALTER COLUMN pipeline_version DROP DEFAULT;
+
+-- A16: rubric_version DEFAULT 'rubric_v1' asserts a validated rubric that
+-- does not exist -- the exact claim rubric.py:66's comment refuses to make.
+-- The code writes 'rubric_v0_placeholder' on every row; this default is
+-- residue from the dropped analyses_rubric_version_chk.
+ALTER TABLE public.analyses ALTER COLUMN rubric_version DROP DEFAULT;
+
+
+-- =========================================================================
+-- STEP 2 -- CONSTRAINT FIXES
+-- =========================================================================
+
+-- M2: live analyses_overall_score_chk accepts -0.03 and 100.02 (a ~one-decimal
+-- rounding tolerance); Part 1 declares a strict 0..100. scoring.py cannot
+-- legitimately emit a value outside 0..100, so the tolerance guards nothing.
+--
+-- !! CONFIDENCE FLAG: the live body was INFERRED from boundary probes, never
+-- !! read. Run STEP 0a first. If the real definition shows a deliberate
+-- !! tolerance with a rationale, SKIP these two statements and instead update
+-- !! Part 1 of this document to declare the tolerant form.
+ALTER TABLE public.analyses DROP CONSTRAINT IF EXISTS analyses_overall_score_chk;
+ALTER TABLE public.analyses ADD CONSTRAINT analyses_overall_score_chk
+    CHECK (overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 100));
+
+-- A11 (asymmetry only): analysis_jobs enforces a 3-segment, <=512-char path
+-- via analysis_jobs_path_depth_chk, but analyses has no counterpart -- a
+-- 4-segment or 1024-char path is accepted there today. The two tables store
+-- the SAME path for the same clip, so they should agree.
+--
+-- !! OPTIONAL / LOWER CONFIDENCE: this ADDS a constraint that was never
+-- !! documented and never live on this table. It is written to match the
+-- !! PROBED behaviour of analysis_jobs_path_depth_chk, not a read definition.
+-- !! Prefer copying the real body from STEP 0a's output. Skip it entirely if
+-- !! you would rather keep the live surface unchanged.
+ALTER TABLE public.analyses ADD CONSTRAINT analyses_path_depth_chk
+    CHECK (
+        length(storage_path) <= 512
+        AND array_length(string_to_array(storage_path, '/'), 1) = 3
+        AND '' <> ALL (string_to_array(storage_path, '/'))
+    );
+
+
+-- =========================================================================
+-- STEP 3 -- IDEMPOTENT RE-ASSERT of Part 1.1 / 1.2
+-- Index and trigger presence could NOT be verified remotely (Part 7.1).
+-- These are all IF NOT EXISTS / OR REPLACE, so running them is a no-op if
+-- the objects are already correct. Compare STEP 0b's output against Part 1.1
+-- first: if an index exists with the SAME NAME but a DIFFERENT definition,
+-- IF NOT EXISTS will silently keep the wrong one -- drop it by hand.
+-- =========================================================================
+
+CREATE INDEX IF NOT EXISTS idx_analyses_user_created_id
+    ON public.analyses (user_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_jobs_user_created
+    ON public.analysis_jobs (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_jobs_active
+    ON public.analysis_jobs (status, heartbeat_at)
+    WHERE status IN ('queued', 'running');
+
+CREATE INDEX IF NOT EXISTS idx_analyses_user_ball_speed
+    ON public.analyses (user_id, ball_speed_mph DESC NULLS LAST);
+
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS trigger LANGUAGE plpgsql AS $FN$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$FN$;
+
+DROP TRIGGER IF EXISTS trg_analysis_jobs_updated_at ON public.analysis_jobs;
+CREATE TRIGGER trg_analysis_jobs_updated_at
+    BEFORE UPDATE ON public.analysis_jobs
+    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+```
+
+**Deliberately NOT in the script, and why:**
+
+- **A1 is not here.** Its fix is Python (`AnalysisRow` +
+  `pipeline.py:565-575`), not SQL. The only SQL "fix" would be dropping
+  `analyses_ball_speed_reason_pairing_chk`, which would let the DB store a row
+  the response model calls impossible. Fix the code.
+- **N1–N5 constraint renames are not here.** No code references a constraint
+  name; the doc is what needs correcting, and §7.2 corrects it.
+- **No `ADD CONSTRAINT` for `rubric_version` / `pipeline_version`.** Their
+  incident-2 CHECKs were dropped and should stay dropped: a CHECK on a version
+  string converts every future version bump into a production outage, which is
+  exactly how incident 2 happened. The version contract is enforced at
+  `rubric.py:66` and `pipeline.py:121`, where it is visible to the person
+  changing it. **Flagging this as the user's call, not a settled matter** — if
+  a CHECK is wanted, it must list `'rubric_v0_placeholder'`, not `'rubric_v1'`.
+- **No drop of the undocumented-but-correct constraints** (`path_prefix_chk`
+  ×2, `path_depth_chk`, `payload_object_chk`, `eta_chk`,
+  `ball_speed_reason_chk`, `ball_speed_reason_pairing_chk`). They are good
+  constraints that the doc failed to record; §7.1 and §7.3 record them.
+- **No populate-or-drop decision** on `ball_speed_requested` (both tables),
+  `estimated_seconds`, `started_at`, `finished_at`. Four columns that are
+  always NULL-or-`false` because no code writes them. Dropping them is
+  destructive and populating them is a code change; both need a human decision
+  that a read-only pass is not entitled to make.
+
+### 7.6 Root cause, and how to stop incident 4
+
+Three incidents, one cause: **Part 1's DDL is not the script that built this
+database, and no one has ever diffed the two.** The `_chk`/`_check` naming
+split (§7.2) is the fingerprint — every live constraint except the single one
+created by hand from this file on 2026-09-20 uses a house style this file never
+uses.
+
+Probing one INSERT at a time finds one constraint at a time, which is how
+incidents 1 and 2 each cost a production round-trip. The two mechanisms used
+here — OpenAPI introspection for columns, FK-guarded non-committing probes for
+CHECKs — find all of them in one pass, cannot write a row, and need no test
+user. **They belong in CI as a schema-drift test**, run against staging, failing
+the build when live and Part 1 disagree. That, not another round of `ALTER`
+statements, is what prevents incident 4.
+
+Until then the honest statement is: **Part 1 documents the intended schema, and
+§7.1 documents the actual one. Where they disagree, §7.1 is what your INSERT
+will hit.**
