@@ -207,6 +207,7 @@ async def list_analyses(
             # "no speed was measured"; 0 would mean "scored zero".
             overall_score=row.overall_score,
             ball_speed_mph=row.ball_speed_mph,
+            pipeline_version=row.pipeline_version,
         )
         for row in page
     ]

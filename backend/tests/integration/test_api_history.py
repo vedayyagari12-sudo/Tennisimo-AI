@@ -14,7 +14,14 @@ from tests.integration.conftest import (
 )
 
 URL = "/v1/analyses"
-ROW_KEYS = {"analysis_id", "created_at", "shot_type", "overall_score", "ball_speed_mph"}
+ROW_KEYS = {
+    "analysis_id",
+    "created_at",
+    "shot_type",
+    "overall_score",
+    "ball_speed_mph",
+    "pipeline_version",
+}
 
 
 def _seed(repo: FakeRepository, count: int, *, user_id: UUID | None = None) -> list[UUID]:
@@ -43,7 +50,7 @@ def test_empty_history_is_an_empty_page(client: TestClient) -> None:
     assert response.json() == {"items": [], "next_cursor": None}
 
 
-def test_rows_are_flat_five_keys_newest_first(
+def test_rows_are_flat_six_keys_newest_first(
     client: TestClient, fake_repository: FakeRepository
 ) -> None:
     _seed(fake_repository, 3)
@@ -69,6 +76,33 @@ def test_nulls_are_preserved_and_never_become_zero(
     item = client.get(URL, headers=auth_headers()).json()["items"][0]
     assert item["overall_score"] is None
     assert item["ball_speed_mph"] is None
+
+
+def test_every_item_carries_the_stored_pipeline_version(
+    client: TestClient, fake_repository: FakeRepository
+) -> None:
+    base = datetime(2026, 9, 20, tzinfo=UTC)
+    old_id, new_id = uuid4(), uuid4()
+    fake_repository.seed_analysis(analysis_id=old_id, created_at=base, pipeline_version="v2")
+    fake_repository.seed_analysis(
+        analysis_id=new_id, created_at=base + timedelta(minutes=1), pipeline_version="v3"
+    )
+    items = client.get(URL, headers=auth_headers()).json()["items"]
+    by_id = {item["analysis_id"]: item["pipeline_version"] for item in items}
+    assert by_id == {str(old_id): "v2", str(new_id): "v3"}
+
+
+def test_pipeline_version_survives_pagination(
+    client: TestClient, fake_repository: FakeRepository
+) -> None:
+    _seed(fake_repository, 3)
+    first = client.get(URL, params={"limit": 2}, headers=auth_headers()).json()
+    second = client.get(
+        URL, params={"limit": 2, "cursor": first["next_cursor"]}, headers=auth_headers()
+    ).json()
+    for item in first["items"] + second["items"]:
+        assert isinstance(item["pipeline_version"], str)
+        assert item["pipeline_version"] == "v3"
 
 
 def test_zero_score_is_distinguishable_from_unavailable(

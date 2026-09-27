@@ -214,6 +214,7 @@ class FakeRepository:
         shot_type: str = "forehand_topspin",
         overall_score: float | None = 74.5,
         ball_speed_mph: int | None = 68,
+        pipeline_version: str = "v3",
     ) -> AnalysisListRow:
         row = AnalysisListRow(
             id=analysis_id,
@@ -221,6 +222,7 @@ class FakeRepository:
             shot_type=shot_type,
             overall_score=overall_score,
             ball_speed_mph=ball_speed_mph,
+            pipeline_version=pipeline_version,
         )
         self.analyses.append((user_id, row))
         if payload is not None:

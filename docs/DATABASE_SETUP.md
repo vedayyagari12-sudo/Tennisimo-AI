@@ -700,7 +700,7 @@ regardless of cursor contents.
 **Predicate.** With a cursor:
 
 ```sql
-SELECT id, created_at, shot_type, overall_score, ball_speed_mph
+SELECT id, created_at, shot_type, overall_score, ball_speed_mph, pipeline_version
 FROM public.analyses
 WHERE user_id = $1
   AND (created_at, id) < ($2::timestamptz, $3::uuid)
@@ -729,21 +729,23 @@ because a new row sorts *above* the cursor and is simply not on any later page.
       "created_at": "2026-09-14T09:12:44.118Z",
       "shot_type": "forehand_topspin",
       "overall_score": 74.5,
-      "ball_speed_mph": 68
+      "ball_speed_mph": 68,
+      "pipeline_version": "v3"
     },
     {
       "analysis_id": "3c8a0f61-55d2-4b19-8f70-1ab2c3d4e5f6",
       "created_at": "2026-09-13T17:02:08.900Z",
       "shot_type": "backhand_two_handed",
       "overall_score": null,
-      "ball_speed_mph": null
+      "ball_speed_mph": null,
+      "pipeline_version": "v2"
     }
   ],
   "next_cursor": "MjAyNi0wOS0xM1QxNzowMjowOC45MDAwMDArMDA6MDB8M2M4YTBmNjEtNTVkMi00YjE5LThmNzAtMWFiMmMzZDRlNWY2"
 }
 ```
 
-**The rows are FLAT.** Five keys, all top-level, no nesting. `shot_type` is a
+**The rows are FLAT.** Six keys, all top-level, no nesting. `shot_type` is a
 bare string (the indexed column), not a `ShotTypeInference` object.
 `ball_speed_mph` is a bare integer or `null`, not a `BallSpeedResult` object.
 See Part 4.5 for why, and for the explicit prohibition on returning full
@@ -756,6 +758,16 @@ server never substitutes `0` for either.** The list row deliberately does not
 carry `unavailable_reason`: explaining *why* there is no speed is the detail
 screen's job, and a list row that says "not measurable because depth drift
 exceeded" is noise.
+
+**`pipeline_version`** is a string, always present and never `null`, read from
+the `analyses.pipeline_version` column (`text NOT NULL`, Part 1 -- so no stored
+row can lack it). It names the pipeline that produced the row's score. It exists
+for **trend comparisons across a scoring change**: when the measurement itself
+changes, `PIPELINE_VERSION` is bumped (`v2` -> `v3` fixed swing-path angle on
+leftward-travelling swings, which used to read ~155 deg instead of ~25 deg), and
+an old `v2` score and a new `v3` score are not comparable -- plotting them on one
+line would show an "improvement" that is really the fix. Clients that trend
+scores over time must compare only rows with the same `pipeline_version`.
 
 The envelope key is `items`. The client accepts `items`, `analyses`, `results`,
 or a bare list (`api_client.dart:393-400`); `items` is the one to emit, and the
@@ -896,6 +908,7 @@ class AnalysisListItem(BaseModel):
     shot_type: ShotType
     overall_score: float | None
     ball_speed_mph: Annotated[StrictInt, Field(ge=15, le=160)] | None
+    pipeline_version: str   # always present; see Part 3.4
 
 class AnalysisListResponse(BaseModel):
     items: list[AnalysisListItem]
@@ -1104,7 +1117,7 @@ The nested fallback exists so that a full `AnalysisResponse` also parses through
 `AnalysisSummary`. That is a convenience for the detail-to-list path. **It is not
 permission for the list endpoint to return full objects.**
 
-**Decision: `GET /v1/analyses` returns the flat five-key compact row specified in
+**Decision: `GET /v1/analyses` returns the flat six-key compact row specified in
 Part 3.4 and MUST NOT return full `AnalysisResponse` objects.**
 
 Reasons, in order of weight:
@@ -1122,9 +1135,10 @@ Reasons, in order of weight:
 3. **Coupling.** If the list returns `AnalysisResponse`, every change to
    `AnalysisResponse` becomes a change to the list contract.
 
-The five keys are exactly `analysis_id`, `created_at`, `shot_type`,
-`overall_score`, `ball_speed_mph`. `shot_type` is the bare string from the
-indexed column; `ball_speed_mph` is the bare integer or `null`.
+The six keys are exactly `analysis_id`, `created_at`, `shot_type`,
+`overall_score`, `ball_speed_mph`, `pipeline_version`. `shot_type` is the bare
+string from the indexed column; `ball_speed_mph` is the bare integer or `null`;
+`pipeline_version` is a non-null string (Part 3.4).
 
 ---
 

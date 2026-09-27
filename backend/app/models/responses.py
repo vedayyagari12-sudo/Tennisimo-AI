@@ -496,7 +496,7 @@ class AnalysisResponse(BaseModel):
 class AnalysisListItem(BaseModel):
     """One FLAT history row (DATABASE_SETUP.md Part 3.4 / Part 4.5).
 
-    Five top-level keys, no nesting. ``shot_type`` is the bare indexed string,
+    Six top-level keys, no nesting. ``shot_type`` is the bare indexed string,
     not a ``ShotTypeInference``; ``ball_speed_mph`` is a bare int or null, not a
     ``BallSpeedResult``. ``null`` means "not measured" and is NEVER rendered as
     ``0`` -- ``0`` is a measured value and the two must stay distinguishable.
@@ -509,6 +509,11 @@ class AnalysisListItem(BaseModel):
     shot_type: ShotType
     overall_score: float | None = None
     ball_speed_mph: Annotated[StrictInt, Field(ge=15, le=160)] | None = None
+    pipeline_version: str = Field(
+        description="The pipeline version that produced this row's score. Scores are "
+        "only comparable across rows with the same version: a version bump means the "
+        "measurement changed (DATABASE_SETUP.md Part 3.4).",
+    )
 
 
 class AnalysisListResponse(BaseModel):

@@ -91,7 +91,7 @@ class AnalysisRow(BaseModel):
 
 
 class AnalysisListRow(BaseModel):
-    """The FLAT five-value projection `GET /v1/analyses` serves (Part 3.4/4.5).
+    """The FLAT six-value projection `GET /v1/analyses` serves (Part 3.4/4.5).
 
     Read entirely from indexed columns; `payload` is never touched.
     """
@@ -103,6 +103,8 @@ class AnalysisListRow(BaseModel):
     shot_type: ShotType
     overall_score: float | None = None
     ball_speed_mph: int | None = None
+    # `analyses.pipeline_version` is `text NOT NULL` (Part 1), so every row has one.
+    pipeline_version: str
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +326,7 @@ class SupabaseRepository:
         """
         query = (
             f"/analyses?user_id=eq.{user_id}"
-            "&select=id,created_at,shot_type,overall_score,ball_speed_mph"
+            "&select=id,created_at,shot_type,overall_score,ball_speed_mph,pipeline_version"
             "&order=created_at.desc,id.desc"
             f"&limit={limit}"
         )
