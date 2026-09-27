@@ -4,6 +4,7 @@ import '../models/dashboard_insights.dart';
 import '../theme/app_theme.dart';
 import 'app_card.dart';
 import 'mini_trend.dart';
+import 'split_row.dart';
 import 'trend_direction_chip.dart';
 
 /// The single most useful thing on the dashboard: the weakest category of the
@@ -39,20 +40,17 @@ class FocusCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  'WHAT TO WORK ON',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+          SplitRow(
+            label: Text(
+              'WHAT TO WORK ON',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
               ),
-              if (shot != null)
-                Flexible(
-                  child: Text(
+            ),
+            trailing: shot == null
+                ? const SizedBox.shrink()
+                : Text(
                     shot.shotType.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -60,8 +58,6 @@ class FocusCard extends StatelessWidget {
                     style: theme.textTheme.labelSmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
-                ),
-            ],
           ),
           const SizedBox(height: AppSpacing.sm),
           if (shot == null || focus == null)

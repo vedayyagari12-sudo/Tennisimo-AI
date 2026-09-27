@@ -27,7 +27,7 @@ class InlineStat {
 
 /// A dense row of small statistics.
 ///
-/// Deliberately not `StatTile`: a card per number is the reason the old
+/// Deliberately not a card per number: that is the reason the old
 /// dashboard felt empty. These pack four to a phone width and wrap instead of
 /// overflowing, so a long label costs a line rather than a yellow-and-black
 /// stripe.

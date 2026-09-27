@@ -81,4 +81,78 @@ void main() {
     expect(find.text('Score breakdown'), findsNothing);
     expect(find.text('Metrics'), findsOneWidget);
   });
+
+  group('swing notes', () {
+    Map<String, dynamic> withMetrics(
+      List<Map<String, dynamic>> metrics, {
+      String source = 'gemini',
+    }) {
+      final Map<String, dynamic> payload = _payload();
+      (payload['scorecard'] as Map<String, dynamic>)['metrics'] = metrics;
+      payload['feedback'] = <String, dynamic>{
+        'summary': '',
+        'strengths': <String>[],
+        'improvements': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'priority': 1,
+            'title': 'Turn your hips earlier',
+            'why': '',
+            'cue': 'Point your belt buckle at the side fence.',
+            'drill': '',
+            'metric_refs': <String>['hip_rotation_deg'],
+          },
+        ],
+        'source': source,
+      };
+      return payload;
+    }
+
+    Map<String, dynamic> metric(String name, double? value, String verdict) =>
+        <String, dynamic>{
+          'name': name,
+          'value': value,
+          'unit': 'deg',
+          'verdict': verdict,
+          'ideal_min': 35.0,
+          'ideal_max': 60.0,
+        };
+
+    testWidgets('come from the rule table even when the AI fell back',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(
+          analysis: AnalysisResponse.fromJson(withMetrics(
+            <Map<String, dynamic>>[metric('hip_rotation_deg', 25, 'low')],
+            source: 'template',
+          )),
+        ),
+      ));
+
+      expect(find.text('Swing notes'), findsOneWidget);
+      expect(
+        find.text('Looks like your hips could turn a bit more — that’s where '
+            'your power comes from.'),
+        findsOneWidget,
+      );
+      expect(find.text('Hip turn 25° · ideal 35–60°'), findsOneWidget);
+      // The AI card is still there underneath, unchanged.
+      expect(find.text('Turn your hips earlier'), findsOneWidget);
+    });
+
+    testWidgets('say nothing about a metric that was not measured',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(
+          analysis: AnalysisResponse.fromJson(withMetrics(
+            <Map<String, dynamic>>[
+              metric('hip_rotation_deg', null, 'unavailable'),
+            ],
+          )),
+        ),
+      ));
+
+      expect(find.text('Swing notes'), findsNothing);
+      expect(find.textContaining('Hip turn'), findsNothing);
+    });
+  });
 }

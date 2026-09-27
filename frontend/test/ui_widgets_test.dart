@@ -5,7 +5,6 @@ import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/widgets/category_bars.dart';
 import 'package:tennisimo_ai/widgets/score_ring.dart';
-import 'package:tennisimo_ai/widgets/stat_tile.dart';
 import 'package:tennisimo_ai/widgets/trend_chart.dart';
 
 /// Every widget under test is mounted on the real app theme, because the
@@ -178,31 +177,6 @@ void main() {
 
       expect(find.byType(FractionallySizedBox), findsNothing);
       expect(find.text('Not measured'), findsNothing);
-    });
-  });
-
-  group('StatTile', () {
-    testWidgets('an absent value is an em dash and drops its unit',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(
-        _host(const StatTile(label: 'Top speed', value: null, unit: 'mph')),
-      );
-
-      expect(find.text('—'), findsOneWidget);
-      expect(find.text('0'), findsNothing);
-      // No "— mph": a missing speed is not a speed of nothing.
-      expect(find.text('mph'), findsNothing);
-    });
-
-    testWidgets('a present value keeps its unit and label',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(
-        _host(const StatTile(label: 'Top speed', value: '68', unit: 'mph')),
-      );
-
-      expect(find.text('68'), findsOneWidget);
-      expect(find.text('mph'), findsOneWidget);
-      expect(find.text('TOP SPEED'), findsOneWidget);
     });
   });
 }

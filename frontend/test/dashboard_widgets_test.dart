@@ -304,18 +304,25 @@ void main() {
         insight: _insight(scores: const <double?>[71], speeds: const <double?>[null]),
       )));
 
-      expect(find.textContaining('One scored clip'), findsOneWidget);
+      // The score panel says a trend needs two; no spread is claimed, and it
+      // is not said twice.
+      expect(find.text(MiniTrend.singlePointMessage), findsOneWidget);
+      expect(find.textContaining('between your best'), findsNothing);
       expect(find.text('0'), findsNothing);
     });
 
-    testWidgets('a never-recorded shot type is words only, no chart',
+    testWidgets('never-recorded shot types are words only, no chart',
         (WidgetTester tester) async {
       await tester.pumpWidget(
-        _host(const ShotTypeBlankCard(shotType: ShotType.backhandOneHanded)),
+        _host(const ShotTypesNotRecordedCard(shotTypes: <ShotType>[
+          ShotType.backhandOneHanded,
+          ShotType.serve,
+        ])),
       );
 
       expect(find.text('Backhand (one-handed)'), findsOneWidget);
-      expect(find.text('Not recorded yet'), findsOneWidget);
+      expect(find.text('Serve'), findsOneWidget);
+      expect(find.text('NOT RECORDED YET'), findsOneWidget);
       expect(sparkline, findsNothing);
       expect(find.text('0'), findsNothing);
       expect(find.text('—'), findsNothing);

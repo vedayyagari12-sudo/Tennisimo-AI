@@ -162,8 +162,14 @@ void main() {
   );
 
   forEveryViewport(
-    'a never-recorded shot type',
-    () => const ShotTypeBlankCard(shotType: ShotType.backhandOneHanded),
+    'the never-recorded shot types',
+    () => const ShotTypesNotRecordedCard(shotTypes: <ShotType>[
+      ShotType.forehandSlice,
+      ShotType.backhandOneHanded,
+      ShotType.backhandTwoHanded,
+      ShotType.serve,
+      ShotType.volley,
+    ]),
   );
 
   forEveryViewport(

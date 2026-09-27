@@ -6,8 +6,11 @@ import '../models/analysis_response.dart';
 import '../models/ball_speed.dart';
 import '../models/coaching_feedback.dart';
 import '../models/enums.dart';
+import '../models/key_numbers.dart';
 import '../models/metric_score.dart';
+import '../models/swing_advice.dart';
 import '../widgets/content_width.dart';
+import '../widgets/swing_advice_list.dart';
 
 /// Renders one finished analysis.
 class ResultsScreen extends StatelessWidget {
@@ -18,6 +21,13 @@ class ResultsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final CoachingFeedback? feedback = analysis.feedback;
+    // Plain one-line coaching from the fixed rule table: every off-target
+    // number, then a couple of in-range ones. Deterministic, so it is there
+    // even when the AI feedback below is missing or fell back.
+    final List<AdviceBullet> notes = buildSwingAdvice(
+      buildKeyNumbers(analysis),
+      maxPraise: kResultsPraiseBullets,
+    );
 
     // Debug-only. Nothing in this app surfaced guard diagnostics anywhere, so a
     // truncated Gemini draft looked identical to a normal template answer from
@@ -65,6 +75,13 @@ class ResultsScreen extends StatelessWidget {
                       .map((String s) => _Bullet(text: s))
                       .toList(),
                 ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (notes.isNotEmpty) ...<Widget>[
+              _SectionCard(
+                title: 'Swing notes',
+                child: SwingAdviceList(bullets: notes),
               ),
               const SizedBox(height: 16),
             ],

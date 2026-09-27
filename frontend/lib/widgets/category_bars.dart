@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/analysis_response.dart';
 import '../theme/app_theme.dart';
+import 'split_row.dart';
 
 /// The five weighted scoring categories as horizontal bars.
 ///
@@ -20,7 +21,7 @@ class CategoryBars extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         for (int i = 0; i < categories.length; i++) ...<Widget>[
-          if (i > 0) const SizedBox(height: AppSpacing.lg),
+          if (i > 0) const SizedBox(height: AppSpacing.md),
           _CategoryBar(category: categories[i]),
         ],
       ],
@@ -43,45 +44,73 @@ class _CategoryBar extends StatelessWidget {
     final Color numeralColour = palette.scoreColor(score);
     final Color barColour = palette.scoreFillColor(score);
 
+    // A category with no metric banded for this shot type is not "0 of 0
+    // measured"; it has nothing to measure against.
+    final String coverage = category.metricsTotal <= 0
+        ? 'No reference ranges for this shot'
+        : '${category.metricsAvailable} of ${category.metricsTotal} '
+            'metrics measured';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
+        // Name and coverage share a line, the numeral is pinned to the right
+        // edge: one line per category instead of two, and every numeral in
+        // the card on one vertical.
+        SplitRow(
+          gap: AppSpacing.md,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          label: Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.end,
+            children: <Widget>[
+              Text(
                 // `swing_path` -> `Swing path`, straight off the model.
                 category.displayName,
                 style: theme.textTheme.bodyMedium,
               ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            // Flexible, not a bare Text: "Not measured" is three times the
-            // width of a numeral and at a 2.0x font scale it walked straight
-            // off a 320dp row. It wraps rather than ellipsises — half of the
-            // word "measured" would read as a truncated number.
-            Flexible(
-              child: Text(
-                score == null ? 'Not measured' : score.round().toString(),
-                textAlign: TextAlign.end,
-                style: score == null
-                    ? theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
-                    : theme.textTheme.titleMedium?.copyWith(
-                        color: numeralColour,
-                        fontFeatures: kTabularFigures,
-                      ),
+              Padding(
+                // Nudges the small caption onto the name's baseline.
+                padding: const EdgeInsets.only(bottom: 1),
+                child: Text(
+                  coverage,
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
+          // "Not measured" is three times the width of a numeral; SplitRow
+          // caps it at half the row, so at a 2.0x font scale it wraps rather
+          // than walking off a 320dp card. Wraps, never ellipsises — half of
+          // the word "measured" would read as a truncated number.
+          trailing: Text(
+            score == null ? 'Not measured' : score.round().toString(),
+            textAlign: TextAlign.end,
+            style: score == null
+                ? theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
+                : theme.textTheme.titleMedium?.copyWith(
+                    color: numeralColour,
+                    fontFeatures: kTabularFigures,
+                  ),
+          ),
         ),
         if (score != null) ...<Widget>[
-          const SizedBox(height: AppSpacing.sm),
+          const SizedBox(height: AppSpacing.xs + 2),
           ClipRRect(
             borderRadius: BorderRadius.circular(999),
             child: Container(
+              // The track is what makes a bar readable as "out of 100". It
+              // never showed: inside this start-aligned Column the container
+              // shrink-wrapped to its own fill, so the track was exactly as
+              // long as the bar. A full width fixes that; the hairline token
+              // (surfaceContainerHigh sat one step off the card) keeps it
+              // visible in both flavors without competing with the fill.
+              width: double.infinity,
               height: 6,
-              color: theme.colorScheme.surfaceContainerHigh,
+              color: theme.colorScheme.outlineVariant,
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
                 widthFactor: (score / 100).clamp(0.0, 1.0),
@@ -90,13 +119,6 @@ class _CategoryBar extends StatelessWidget {
             ),
           ),
         ],
-        const SizedBox(height: AppSpacing.xs),
-        Text(
-          '${category.metricsAvailable} of ${category.metricsTotal} '
-          'metrics measured',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-        ),
       ],
     );
   }

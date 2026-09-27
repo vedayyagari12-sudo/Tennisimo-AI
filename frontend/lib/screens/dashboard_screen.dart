@@ -3,8 +3,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/analysis_response.dart';
 import '../models/dashboard_insights.dart';
-import '../models/enums.dart';
+import '../models/key_numbers.dart';
+import '../models/swing_advice.dart';
 import '../services/api_client.dart';
+import '../services/api_client.dart' as api
+    show fetchAnalysisDetail, fetchHistory;
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
@@ -17,9 +20,33 @@ import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
 import '../widgets/shot_type_section.dart';
 import '../widgets/skeleton_block.dart';
+import '../widgets/swing_advice_list.dart';
 import 'home_shell.dart';
 import 'record_screen.dart';
 import 'results_screen.dart';
+
+/// Where the dashboard gets its data: the history list, the per-analysis
+/// details, and the signed-in account.
+///
+/// The default is the real thing — the API client and the live Supabase
+/// session — and production never passes anything else. It exists as a seam
+/// only so the assembled screen can be rendered in a test with fixture data,
+/// which it otherwise cannot be: every member below reaches `Supabase.instance`.
+class DashboardDataSource {
+  const DashboardDataSource();
+
+  Future<ApiResult<List<AnalysisSummary>>> fetchHistory() =>
+      api.fetchHistory();
+
+  Future<ApiResult<AnalysisResponse>> fetchAnalysisDetail(String id) =>
+      api.fetchAnalysisDetail(id);
+
+  /// The signed-in account's email, or null.
+  String? get accountEmail =>
+      Supabase.instance.client.auth.currentUser?.email;
+
+  Future<void> signOut() => Supabase.instance.client.auth.signOut();
+}
 
 /// The landing tab.
 ///
@@ -41,10 +68,17 @@ import 'results_screen.dart';
 /// **1 history request + at most [_detailBudget] detail requests**, issued
 /// [_detailConcurrency] at a time. It never scales with history length.
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key, this.onSeeAllHistory});
+  const DashboardScreen({
+    super.key,
+    this.onSeeAllHistory,
+    this.dataSource = const DashboardDataSource(),
+  });
 
   /// Switches the shell to the History tab.
   final VoidCallback? onSeeAllHistory;
+
+  /// Always the default in the app; see [DashboardDataSource].
+  final DashboardDataSource dataSource;
 
   @override
   State<DashboardScreen> createState() => DashboardScreenState();
@@ -84,7 +118,8 @@ class DashboardScreenState extends State<DashboardScreen> {
       _failure = null;
     });
 
-    final ApiResult<List<AnalysisSummary>> result = await fetchHistory();
+    final ApiResult<List<AnalysisSummary>> result =
+        await widget.dataSource.fetchHistory();
     if (!mounted) return;
 
     if (!result.isOk) {
@@ -120,7 +155,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     for (int i = 0; i < ids.length; i += _detailConcurrency) {
       final List<String> chunk = ids.skip(i).take(_detailConcurrency).toList();
       final List<ApiResult<AnalysisResponse>> results =
-          await Future.wait(chunk.map(fetchAnalysisDetail));
+          await Future.wait(chunk.map(widget.dataSource.fetchAnalysisDetail));
       if (!mounted) return;
       for (int j = 0; j < chunk.length; j++) {
         if (results[j].isOk) fetched[chunk[j]] = results[j].data!;
@@ -139,10 +174,22 @@ class DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  /// The full analysis of the NEWEST session, or null when that one request
+  /// failed or has not landed.
+  ///
+  /// Not simply `_details.first`: when the newest detail fails, the first
+  /// detail is an OLDER clip, and showing its breakdown under the latest
+  /// session's score would pass one swing's numbers off as another's.
+  AnalysisResponse? get _latestDetail {
+    if (_details.isEmpty || _items.isEmpty) return null;
+    final AnalysisResponse first = _details.first;
+    return first.analysisId == _items.first.analysisId ? first : null;
+  }
+
   Future<void> _open(AnalysisSummary summary) async {
     setState(() => _openingId = summary.analysisId);
     final ApiResult<AnalysisResponse> result =
-        await fetchAnalysisDetail(summary.analysisId);
+        await widget.dataSource.fetchAnalysisDetail(summary.analysisId);
     if (!mounted) return;
     setState(() => _openingId = null);
 
@@ -186,18 +233,23 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Widget _header() => _DashboardHeader(
+        email: widget.dataSource.accountEmail,
+        onSignOut: widget.dataSource.signOut,
+      );
+
   Widget _buildBody() {
     if (_loading) {
       return ListView(
         padding: kTabContentPadding,
-        children: const <Widget>[
-          _DashboardHeader(),
-          SizedBox(height: AppSpacing.lg),
-          SkeletonBlock(height: 180),
-          SizedBox(height: AppSpacing.lg),
-          SkeletonBlock(height: 92),
-          SizedBox(height: AppSpacing.lg),
-          SkeletonBlock(height: 190),
+        children: <Widget>[
+          _header(),
+          const SizedBox(height: AppSpacing.lg),
+          const SkeletonBlock(height: 180),
+          const SizedBox(height: AppSpacing.lg),
+          const SkeletonBlock(height: 92),
+          const SizedBox(height: AppSpacing.lg),
+          const SkeletonBlock(height: 190),
         ],
       );
     }
@@ -207,7 +259,7 @@ class DashboardScreenState extends State<DashboardScreen> {
       return ListView(
         padding: kTabContentPadding,
         children: <Widget>[
-          const _DashboardHeader(),
+          _header(),
           const SizedBox(height: AppSpacing.xxl),
           EmptyState(
             icon: Icons.cloud_off,
@@ -224,7 +276,7 @@ class DashboardScreenState extends State<DashboardScreen> {
       return ListView(
         padding: kTabContentPadding,
         children: <Widget>[
-          const _DashboardHeader(),
+          _header(),
           const SizedBox(height: AppSpacing.xxl),
           EmptyState(
             icon: Icons.sports_tennis,
@@ -247,19 +299,21 @@ class DashboardScreenState extends State<DashboardScreen> {
     return ListView(
       padding: kTabContentPadding,
       children: <Widget>[
-        const _DashboardHeader(),
+        _header(),
         const SizedBox(height: AppSpacing.lg),
         _HeroCard(
           latest: _items.first,
           // Latest against the previous clip OF THE SAME SHOT, which is the
           // only comparison that means anything.
           delta: insights.latestShotType?.latestDelta,
+          coverage: _latestDetail == null ? null : coverageOf(_latestDetail!),
         ),
         const SizedBox(height: AppSpacing.lg),
         ..._buildFocus(insights),
         AppCard(child: InlineStats(stats: _overallStats(insights))),
         const SizedBox(height: AppSpacing.lg),
         ..._buildLatestBreakdown(),
+        ..._buildSwingNotes(),
         ..._buildShotTypes(insights),
         SectionHeader(
           title: 'Recent sessions',
@@ -289,8 +343,11 @@ class DashboardScreenState extends State<DashboardScreen> {
   /// There is deliberately no "average score" here. A mean over forehands,
   /// serves and volleys is arithmetic over three different measurements and
   /// would move when the player simply changed which shot they filmed.
+  ///
+  /// The latest clip's coverage used to sit here too; it describes one
+  /// session, so it now sits on that session's card, and this row fits on
+  /// one line at 360dp instead of wrapping one label onto a second.
   List<InlineStat> _overallStats(DashboardInsights insights) {
-    final CoverageSummary? coverage = insights.latestCoverage;
     return <InlineStat>[
       InlineStat(label: 'Clips', value: insights.totalSessions.toString()),
       InlineStat(
@@ -301,12 +358,6 @@ class DashboardScreenState extends State<DashboardScreen> {
         label: 'Top speed',
         value: insights.topSpeedMph?.toString(),
         unit: 'mph',
-      ),
-      InlineStat(
-        label: 'Latest coverage',
-        value: coverage == null || coverage.total <= 0
-            ? null
-            : '${coverage.available}/${coverage.total}',
       ),
     ];
   }
@@ -332,12 +383,50 @@ class DashboardScreenState extends State<DashboardScreen> {
         SizedBox(height: AppSpacing.lg),
       ];
     }
-    if (_details.isEmpty || _details.first.categories.isEmpty) {
-      return const <Widget>[];
+    final AnalysisResponse? latest = _latestDetail;
+    if (latest == null) {
+      if (_detailLoading) return const <Widget>[];
+      // The newest clip's own request failed. Say so, rather than showing an
+      // older clip's breakdown under this one's score.
+      final ThemeData theme = Theme.of(context);
+      return <Widget>[
+        const SectionHeader(title: 'Latest breakdown'),
+        AppCard(
+          child: Text(
+            'The breakdown for your latest clip could not be loaded. Pull '
+            'down to try again.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+      ];
     }
+    if (latest.categories.isEmpty) return const <Widget>[];
     return <Widget>[
       const SectionHeader(title: 'Latest breakdown'),
-      AppCard(child: CategoryBars(categories: _details.first.categories)),
+      AppCard(child: CategoryBars(categories: latest.categories)),
+      const SizedBox(height: AppSpacing.lg),
+    ];
+  }
+
+  /// The newest clip's top few plain coaching bullets, from the fixed rule
+  /// table in `swing_advice.dart` — not from AI text.
+  ///
+  /// Silent when the newest clip's detail is not loaded (the breakdown block
+  /// above already says so) or produced nothing to say.
+  List<Widget> _buildSwingNotes() {
+    final AnalysisResponse? latest = _latestDetail;
+    if (latest == null) return const <Widget>[];
+    final List<AdviceBullet> bullets = buildSwingAdvice(
+      buildKeyNumbers(latest),
+      maxFixes: kDashboardFixBullets,
+      maxPraise: kDashboardPraiseBullets,
+    );
+    if (bullets.isEmpty) return const <Widget>[];
+    return <Widget>[
+      const SectionHeader(title: 'Swing notes'),
+      AppCard(child: SwingAdviceList(bullets: bullets)),
       const SizedBox(height: AppSpacing.lg),
     ];
   }
@@ -352,9 +441,9 @@ class DashboardScreenState extends State<DashboardScreen> {
       // Never-recorded shots are listed rather than hidden, so the player can
       // see what the app would analyse if they filmed it — and they carry no
       // chart and no number at all.
-      for (final ShotType shotType in insights.notRecorded) ...<Widget>[
-        ShotTypeBlankCard(shotType: shotType),
-        const SizedBox(height: AppSpacing.sm),
+      if (insights.notRecorded.isNotEmpty) ...<Widget>[
+        ShotTypesNotRecordedCard(shotTypes: insights.notRecorded),
+        const SizedBox(height: AppSpacing.md),
       ],
       const SizedBox(height: AppSpacing.md),
     ];
@@ -382,12 +471,15 @@ class DashboardScreenState extends State<DashboardScreen> {
 
 /// Greeting, account, sign-out.
 class _DashboardHeader extends StatelessWidget {
-  const _DashboardHeader();
+  const _DashboardHeader({required this.email, required this.onSignOut});
+
+  final String? email;
+  final Future<void> Function() onSignOut;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final String? email = Supabase.instance.client.auth.currentUser?.email;
+    final String? email = this.email;
     final String initial =
         (email == null || email.isEmpty) ? '?' : email[0].toUpperCase();
 
@@ -421,7 +513,7 @@ class _DashboardHeader extends StatelessWidget {
         ),
         const AppLogo(size: 28),
         const SizedBox(width: AppSpacing.xs),
-        const _OverflowMenu(),
+        _OverflowMenu(onSignOut: onSignOut),
       ],
     );
   }
@@ -437,14 +529,16 @@ class _DashboardHeader extends StatelessWidget {
 /// The overflow menu: sign out. The app is light-only, so there is no theme
 /// choice to offer here.
 class _OverflowMenu extends StatelessWidget {
-  const _OverflowMenu();
+  const _OverflowMenu({required this.onSignOut});
+
+  final Future<void> Function() onSignOut;
 
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert),
       onSelected: (String value) {
-        if (value == 'sign_out') Supabase.instance.client.auth.signOut();
+        if (value == 'sign_out') onSignOut();
       },
       itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
         PopupMenuItem<String>(
@@ -458,9 +552,17 @@ class _OverflowMenu extends StatelessWidget {
 
 /// The latest session, as a score ring with its context.
 class _HeroCard extends StatelessWidget {
-  const _HeroCard({required this.latest, required this.delta});
+  const _HeroCard({
+    required this.latest,
+    required this.delta,
+    required this.coverage,
+  });
 
   final AnalysisSummary latest;
+
+  /// This session's own metric coverage, or null when its detail is not
+  /// loaded.
+  final CoverageSummary? coverage;
 
   /// Only non-null when this session and the previous one of the SAME shot
   /// type were both scored.
@@ -495,10 +597,24 @@ class _HeroCard extends StatelessWidget {
                 _ShotChip(shotType: latest.shotType.label),
                 const SizedBox(height: AppSpacing.sm),
                 Text(
-                  _relativeTime(latest.createdAt),
+                  <String>[
+                    _relativeTime(latest.createdAt),
+                    // No speed at all when the clip was not calibrated.
+                    if (latest.ballSpeedMph != null)
+                      '${latest.ballSpeedMph} mph',
+                  ].join(' · '),
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
+                if (coverage case final CoverageSummary c
+                    when c.total > 0) ...<Widget>[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    '${c.available} of ${c.total} metrics measured',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
               ],
             ),
           ),

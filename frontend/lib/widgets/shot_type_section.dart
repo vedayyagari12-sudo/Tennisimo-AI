@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import 'app_card.dart';
 import 'inline_stats.dart';
 import 'mini_trend.dart';
+import 'split_row.dart';
 
 /// One shot type's own block: its counts, its records, its score trend, its
 /// ball speed and its category small multiples.
@@ -79,12 +80,16 @@ class ShotTypeSection extends StatelessWidget {
               title: 'Overall score',
               points: insight.scorePoints,
             ),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              _consistencyLine(),
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
+            // With one scored clip the panel above already says a trend needs
+            // two; a spread caption repeating it said the same thing twice.
+            if (_consistencyLine() case final String line) ...<Widget>[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                line,
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ],
           ],
           const SizedBox(height: AppSpacing.lg),
           ..._speed(context),
@@ -96,36 +101,28 @@ class ShotTypeSection extends StatelessWidget {
   }
 
   Widget _title(ThemeData theme) {
-    return Row(
-      children: <Widget>[
-        Expanded(
-          child: Text(
-            insight.shotType.label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleMedium,
-          ),
-        ),
-        const SizedBox(width: AppSpacing.sm),
-        Flexible(
-          child: Text(
-            '${insight.sessions} ${insight.sessions == 1 ? 'clip' : 'clips'}',
-            textAlign: TextAlign.end,
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-        ),
-      ],
+    return SplitRow(
+      label: Text(
+        insight.shotType.label,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.titleMedium,
+      ),
+      trailing: Text(
+        '${insight.sessions} ${insight.sessions == 1 ? 'clip' : 'clips'}',
+        textAlign: TextAlign.end,
+        style: theme.textTheme.labelSmall
+            ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
     );
   }
 
-  /// Spread, in words. Silent when there is only one score to spread.
-  String _consistencyLine() {
+  /// Spread, in words. Null — silent — when there is only one score to
+  /// spread.
+  String? _consistencyLine() {
     final ConsistencySummary c = insight.consistency;
     final double? spread = c.spread;
-    if (spread == null) {
-      return 'One scored clip — record another to see how repeatable it is.';
-    }
+    if (spread == null) return null;
     switch (c.band!) {
       case ConsistencyBand.tight:
         return 'Repeatable: ${spread.round()} points between your best and '
@@ -193,7 +190,10 @@ class ShotTypeSection extends StatelessWidget {
       // target for point interrogation smaller than a fingertip.
       LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
-          final bool twoUp = constraints.maxWidth >= 300;
+          // 260, not 300: a 360dp phone leaves 296dp inside this card, and
+          // the old cut sent the most common Android width to one column —
+          // five full-width panels stacked, for no gain in legibility.
+          final bool twoUp = constraints.maxWidth >= 260;
           final double width = twoUp
               ? (constraints.maxWidth - AppSpacing.lg) / 2
               : constraints.maxWidth;
@@ -236,45 +236,50 @@ class ShotTypeSection extends StatelessWidget {
   }
 }
 
-/// A shot type the player has never recorded.
+/// The shot types the player has never recorded, together in one card.
 ///
-/// Deliberately a flat line of copy and nothing else. A zeroed chart or a
-/// greyed-out stat row here would look like measured data at a glance, and it
-/// would be a lie: there is no clip.
-class ShotTypeBlankCard extends StatelessWidget {
-  const ShotTypeBlankCard({super.key, required this.shotType});
+/// Deliberately copy and nothing else. A zeroed chart or a greyed-out stat
+/// row here would look like measured data at a glance, and it would be a lie:
+/// there is no clip. One card rather than one per shot: five near-empty cards
+/// stacked took more height than a recorded shot's whole stat row.
+class ShotTypesNotRecordedCard extends StatelessWidget {
+  const ShotTypesNotRecordedCard({super.key, required this.shotTypes});
 
-  final ShotType shotType;
+  final List<ShotType> shotTypes;
 
   @override
   Widget build(BuildContext context) {
+    if (shotTypes.isEmpty) return const SizedBox.shrink();
     final ThemeData theme = Theme.of(context);
     return AppCard(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.md,
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Expanded(
-            child: Text(
-              shotType.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          Text(
+            'NOT RECORDED YET',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(width: AppSpacing.sm),
-          // Flexible: at a 2.0x font scale "Not recorded yet" is wider than a
-          // 320dp card on its own, so it has to be allowed to wrap.
-          Flexible(
-            child: Text(
-              'Not recorded yet',
-              textAlign: TextAlign.end,
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
+          const SizedBox(height: AppSpacing.xs),
+          // Separate runs, not one dot-joined string: a joined line wrapped
+          // with a dangling separator at its end.
+          Wrap(
+            spacing: AppSpacing.lg,
+            runSpacing: 2,
+            children: <Widget>[
+              for (final ShotType s in shotTypes)
+                Text(
+                  s.label,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+            ],
           ),
         ],
       ),
