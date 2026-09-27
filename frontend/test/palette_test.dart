@@ -529,25 +529,25 @@ void main() {
   // -------------------------------------------------------------------------
   // The dashboard's sparklines.
   //
-  // The dashboard adds NO new categorical series colours: it is built from
-  // small multiples, one titled panel per series, so identity is carried by
-  // words and every mark on the screen is the same accent. That is a design
-  // decision with teeth, and it is the reason there is no new series palette
-  // to gate here — a second hue would have to clear `kMinCvdSeparation`, and
-  // in the default flavor `primary` and `secondary` collapse to 0.026 under
-  // deuteranopia, so it could not.
+  // Every SINGLE-series chart — the sparklines and the full score line — is
+  // the one primary accent, with identity carried by its title. Only the
+  // charts whose series ARE the subject (the shot-mix donut, the radar, the
+  // grouped bars) use colour for identity, and they draw from the separate
+  // categorical palette gated in the next group, never from `secondary`: in
+  // the default flavor `primary` and `secondary` collapse to 0.026 under
+  // deuteranopia, so that pair could never carry identity.
   //
-  // What the sparkline DID newly make load-bearing is its own chrome: a
-  // recessive baseline, and a tap marker drawn as a surface-filled ring inside
-  // the line colour. Those pairings are gated below.
+  // What the sparkline made load-bearing is its own chrome: a recessive
+  // baseline, and a tap marker drawn as a surface-filled ring inside the line
+  // colour. Those pairings are gated below.
   // -------------------------------------------------------------------------
   group('the sparkline mark and its chrome', () {
     for (final BrandFlavorCase c in _cases) {
-      test('${c.label} — the dashboard uses exactly one chart-mark colour',
+      test('${c.label} — single-series charts use one chart-mark colour',
           () {
-        // MiniTrend takes no colour parameter; this asserts the token it is
-        // hard-wired to is a real text-tier accent, so the invariant cannot be
-        // broken by re-pointing the widget at an ungated token.
+        // MiniTrend and ScoreLineChart take no colour parameter; this asserts
+        // the token they are hard-wired to is a real text-tier accent, so the
+        // invariant cannot be broken by re-pointing them at an ungated token.
         expect(chromaticTextTier(c.palette).values, contains(c.palette.primary));
       });
 
@@ -586,6 +586,136 @@ void main() {
           lessThan(contrast(p.primary, p.surfaceContainer)),
           reason: '${c.label}: the baseline competes with the data line',
         );
+      });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // The categorical chart palette.
+  //
+  // Series IDENTITY for the charts where the series are the subject: donut
+  // slices, the radar's two swings, the grouped bars' two series. The gates
+  // mirror the data-viz standard's categorical checks (OKLCH lightness band,
+  // chroma floor, Machado 2009 CVD separation on every pair that can touch,
+  // a normal-vision floor, 3:1 against the surface) and add two of this
+  // app's own: every slot stays clear of the score ramp, so a series never
+  // reads as a verdict, and the "Other" neutral stays clear of the slots it
+  // borders.
+  //
+  // "Can touch" is chart-specific and spelled out: neighbours in slot order
+  // (bars, radar), the wrap-around pair of a full donut ring, and the
+  // "Other" slice against the last named slot and the first.
+  // -------------------------------------------------------------------------
+  group('the categorical chart palette', () {
+    /// Protanopia / deuteranopia separation target in OKLab (0.08 is the
+    /// standard's Delta E 8).
+    const double kSeriesCvd = 0.08;
+
+    /// Worst pair under normal vision (the standard's Delta E 15).
+    const double kSeriesNormal = 0.15;
+
+    /// The OKLCH lightness band for categorical marks on a light surface.
+    const ({double min, double max}) kSeriesBand = (min: 0.43, max: 0.77);
+
+    /// Below this chroma a hue reads as grey and stops carrying identity.
+    const double kSeriesChroma = 0.10;
+
+    /// Index pairs that can sit side by side in some chart: [n] named slots,
+    /// then "Other" at index n.
+    List<(int, int)> touching(int n) => <(int, int)>[
+          for (int i = 0; i < n; i++) (i, (i + 1) % n),
+          (n - 1, n),
+          (n, 0),
+        ];
+
+    for (final BrandFlavorCase c in _cases) {
+      final AppPalette p = c.palette;
+      final List<Color> slots = <Color>[...p.chartSeries, p.chartOther];
+      String name(int i) =>
+          i == p.chartSeries.length ? 'Other' : 'slot ${i + 1}';
+
+      test('${c.label} — four distinct hues in a fixed order', () {
+        expect(p.chartSeries, hasLength(4));
+        expect(slots.toSet(), hasLength(5));
+      });
+
+      test('${c.label} — every slot sits in the band, above the chroma floor',
+          () {
+        for (int i = 0; i < p.chartSeries.length; i++) {
+          final Color s = p.chartSeries[i];
+          expect(perceptualLightness(s),
+              inInclusiveRange(kSeriesBand.min, kSeriesBand.max),
+              reason: '${c.label} ${name(i)} is at L '
+                  '${perceptualLightness(s).toStringAsFixed(3)}');
+          expect(_chroma(s), greaterThanOrEqualTo(kSeriesChroma),
+              reason: '${c.label} ${name(i)} chroma '
+                  '${_chroma(s).toStringAsFixed(3)} reads as grey');
+        }
+      });
+
+      test('${c.label} — every mark clears 3:1 on every surface', () {
+        for (int i = 0; i < slots.length; i++) {
+          surfaces(p).forEach((String bg, Color bgColor) {
+            expect(contrast(slots[i], bgColor), greaterThanOrEqualTo(kAaLarge),
+                reason: '${c.label}: ${name(i)} on $bg is '
+                    '${contrast(slots[i], bgColor).toStringAsFixed(2)}:1');
+          });
+        }
+      });
+
+      test('${c.label} — every pair that can touch survives CVD', () {
+        for (final (int a, int b) in touching(p.chartSeries.length)) {
+          final Color x = slots[a];
+          final Color y = slots[b];
+          final String pair = '${name(a)}/${name(b)}';
+          expect(deltaEOk(x, y), greaterThanOrEqualTo(kSeriesNormal),
+              reason: '${c.label} $pair normal vision '
+                  '${deltaEOk(x, y).toStringAsFixed(3)}');
+          for (final Cvd d in Cvd.values) {
+            final double seen = deltaEOk(simulate(x, d), simulate(y, d));
+            // Tritanopia is rare; it is held to the app's own 0.07 gate.
+            final double gate =
+                d == Cvd.tritanopia ? kMinCvdSeparation : kSeriesCvd;
+            expect(seen, greaterThanOrEqualTo(gate),
+                reason: '${c.label} $pair collapses to '
+                    '${seen.toStringAsFixed(3)} under ${d.name}');
+          }
+        }
+      });
+
+      test('${c.label} — any two slots are tellable apart in a legend', () {
+        for (int a = 0; a < slots.length; a++) {
+          for (int b = a + 1; b < slots.length; b++) {
+            expect(deltaEOk(slots[a], slots[b]),
+                greaterThanOrEqualTo(kSeriesNormal),
+                reason: '${c.label} ${name(a)}/${name(b)}');
+          }
+        }
+      });
+
+      test('${c.label} — no series slot impersonates the score ramp', () {
+        // Green / amber / red is STATUS. A series painted near one of them
+        // would read as a verdict on the swing.
+        final Map<String, Color> status = <String, Color>{
+          'scoreHigh': p.scoreHigh,
+          'scoreMid': p.scoreMid,
+          'scoreLow': p.scoreLow,
+          'scoreHighFill': p.scoreHighFill,
+          'scoreMidFill': p.scoreMidFill,
+          'scoreLowFill': p.scoreLowFill,
+        };
+        for (int i = 0; i < p.chartSeries.length; i++) {
+          status.forEach((String token, Color s) {
+            expect(deltaEOk(p.chartSeries[i], s),
+                greaterThanOrEqualTo(kSeriesNormal),
+                reason: '${c.label} ${name(i)} sits on $token');
+          });
+        }
+      });
+
+      test('${c.label} — "Other" reads as a neutral beside every hue', () {
+        final double weakest = p.chartSeries.map(_chroma).reduce(math.min);
+        expect(_chroma(p.chartOther), lessThan(weakest * 0.5));
       });
     }
   });

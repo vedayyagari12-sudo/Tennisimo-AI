@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../models/analysis_response.dart';
 import '../models/ball_speed.dart';
+import '../models/chart_data.dart';
 import '../models/coaching_feedback.dart';
 import '../models/enums.dart';
 import '../models/key_numbers.dart';
 import '../models/metric_score.dart';
 import '../models/swing_advice.dart';
 import '../widgets/content_width.dart';
+import '../widgets/skill_radar.dart';
 import '../widgets/swing_advice_list.dart';
 
 /// Renders one finished analysis.
@@ -109,7 +111,7 @@ class ResultsScreen extends StatelessWidget {
             // below is the detail behind them. It does not replace the metric
             // list. The metric list itself is closed by default: its raw
             // torso-unit figures are for advanced players, not a beginner.
-            _CategoriesSection(categories: analysis.categories),
+            _CategoriesSection(analysis: analysis),
             if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
             _MetricsSection(metrics: analysis.metrics),
           ],
@@ -445,18 +447,26 @@ class _LabelledLine extends StatelessWidget {
 /// Same [_SectionCard] + divider-separated-rows shape as [_MetricsSection], so
 /// it reads as a peer of the metric list rather than a new kind of thing.
 class _CategoriesSection extends StatelessWidget {
-  const _CategoriesSection({required this.categories});
+  const _CategoriesSection({required this.analysis});
 
-  final List<CategoryScore> categories;
+  final AnalysisResponse analysis;
 
   @override
   Widget build(BuildContext context) {
+    final List<CategoryScore> categories = analysis.categories;
     if (categories.isEmpty) return const SizedBox.shrink();
+    // This one swing's shape. A single series, so no legend: the card title
+    // names it. The rows below are its exact numbers.
+    final SkillProfile? profile = buildSkillProfile(analysis);
     return _SectionCard(
       title: 'Score breakdown',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          if (profile != null) ...<Widget>[
+            SkillRadar(profile: profile),
+            const Divider(height: 24),
+          ],
           for (int i = 0; i < categories.length; i++) ...<Widget>[
             if (i > 0) const Divider(height: 24),
             _CategoryRow(category: categories[i]),

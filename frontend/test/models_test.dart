@@ -618,7 +618,7 @@ void main() {
       expect(category.isMeasured, isFalse);
       expect(category.displayScore, 'not measured');
       expect(category.displayScore, isNot(contains('0')));
-      expect(category.displayCoverage, startsWith('0 of 1 metrics'));
+      expect(category.displayCoverage, startsWith('0 of 1 metric ·'));
     });
 
     test('all five categories thread through Scorecard parsing', () {

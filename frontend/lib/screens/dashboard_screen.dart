@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/analysis_response.dart';
+import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
 import '../models/key_numbers.dart';
 import '../models/swing_advice.dart';
@@ -18,8 +19,10 @@ import '../widgets/focus_card.dart';
 import '../widgets/inline_stats.dart';
 import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
+import '../widgets/shot_mix_chart.dart';
 import '../widgets/shot_type_section.dart';
 import '../widgets/skeleton_block.dart';
+import '../widgets/skill_radar.dart';
 import '../widgets/swing_advice_list.dart';
 import 'home_shell.dart';
 import 'record_screen.dart';
@@ -310,7 +313,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: AppSpacing.lg),
         ..._buildFocus(insights),
-        AppCard(child: InlineStats(stats: _overallStats(insights))),
+        _buildOverview(insights),
         const SizedBox(height: AppSpacing.lg),
         ..._buildLatestBreakdown(),
         ..._buildSwingNotes(),
@@ -336,6 +339,37 @@ class DashboardScreenState extends State<DashboardScreen> {
       FocusCard(insight: insights.latestShotType),
       const SizedBox(height: AppSpacing.lg),
     ];
+  }
+
+  /// The overall counts, and the shot mix they break down into, in one card.
+  ///
+  /// The mix is a COUNT per shot type — a part-to-whole of clips — which is
+  /// the one cross-shot-type view that is legitimate: nothing is averaged.
+  Widget _buildOverview(DashboardInsights insights) {
+    final ThemeData theme = Theme.of(context);
+    final List<ShotMixSlice> mix = buildShotMix(insights.shotTypes);
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          InlineStats(stats: _overallStats(insights)),
+          if (mix.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            const Divider(height: 1),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'SHOT MIX',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            ShotMixChart(slices: mix),
+          ],
+        ],
+      ),
+    );
   }
 
   /// The only cross-shot-type numbers allowed: counts and one record.
@@ -403,9 +437,29 @@ class DashboardScreenState extends State<DashboardScreen> {
       ];
     }
     if (latest.categories.isEmpty) return const <Widget>[];
+    // The radar shows the SHAPE, against the previous swing of the same shot
+    // when that one loaded; the bars under it are its exact numbers and
+    // coverage, so no value on the radar is reachable only by tapping.
+    final SkillProfile? profile = buildSkillProfile(
+      latest,
+      previous: previousOfSameShot(_items, _details),
+    );
     return <Widget>[
       const SectionHeader(title: 'Latest breakdown'),
-      AppCard(child: CategoryBars(categories: latest.categories)),
+      AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            if (profile != null) ...<Widget>[
+              SkillRadar(profile: profile),
+              const SizedBox(height: AppSpacing.md),
+              const Divider(height: 1),
+              const SizedBox(height: AppSpacing.md),
+            ],
+            CategoryBars(categories: latest.categories),
+          ],
+        ),
+      ),
       const SizedBox(height: AppSpacing.lg),
     ];
   }
@@ -610,7 +664,8 @@ class _HeroCard extends StatelessWidget {
                     when c.total > 0) ...<Widget>[
                   const SizedBox(height: AppSpacing.xs),
                   Text(
-                    '${c.available} of ${c.total} metrics measured',
+                    '${c.available} of ${c.total} '
+                    '${plural(c.total, 'metric')} measured',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),

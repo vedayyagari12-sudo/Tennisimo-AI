@@ -78,6 +78,8 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.scoreHighFill,
     required this.scoreMidFill,
     required this.scoreLowFill,
+    required this.chartSeries,
+    required this.chartOther,
   });
 
   /// The canvas this set was stepped against. Never inferred from a colour,
@@ -152,6 +154,28 @@ class AppPalette extends ThemeExtension<AppPalette> {
   /// Bottom band of the score ramp, as a large fill.
   final Color scoreLowFill;
 
+  /// The categorical chart palette: series IDENTITY, never status.
+  ///
+  /// Four hues in a FIXED order, assigned in sequence and never cycled. The
+  /// order is the colour-blind-safety mechanism, not taste: every pair that
+  /// can touch — neighbours, the wrap-around pair of a donut ring, and each
+  /// end against [chartOther] — was stepped to stay apart under the Machado
+  /// 2009 dichromacy simulations, and `test/palette_test.dart` gates it.
+  ///
+  /// Slot 0 is always "this swing" and slot 1 always the thing it is compared
+  /// with (the previous swing, or the player's average), so one colour means
+  /// one thing everywhere it appears.
+  ///
+  /// Never used for text: labels, values and legends wear the ink tokens and
+  /// sit BESIDE a swatch of the series colour. Never green / amber / red
+  /// either — those are the score ramp's, and a series painted in them would
+  /// read as a verdict.
+  final List<Color> chartSeries;
+
+  /// The de-emphasised "Other" slice of a part-to-whole chart: a neutral that
+  /// reads as "the rest", clear of every [chartSeries] slot it can touch.
+  final Color chartOther;
+
   /// The score -> text colour ramp.
   ///
   /// SEMANTIC, not decorative: green / amber / red is the whole signal that
@@ -207,6 +231,8 @@ class AppPalette extends ThemeExtension<AppPalette> {
     Color? scoreHighFill,
     Color? scoreMidFill,
     Color? scoreLowFill,
+    List<Color>? chartSeries,
+    Color? chartOther,
   }) {
     return AppPalette(
       brightness: brightness ?? this.brightness,
@@ -239,6 +265,8 @@ class AppPalette extends ThemeExtension<AppPalette> {
       scoreHighFill: scoreHighFill ?? this.scoreHighFill,
       scoreMidFill: scoreMidFill ?? this.scoreMidFill,
       scoreLowFill: scoreLowFill ?? this.scoreLowFill,
+      chartSeries: chartSeries ?? this.chartSeries,
+      chartOther: chartOther ?? this.chartOther,
     );
   }
 
@@ -281,6 +309,13 @@ class AppPalette extends ThemeExtension<AppPalette> {
       scoreHighFill: c(scoreHighFill, other.scoreHighFill),
       scoreMidFill: c(scoreMidFill, other.scoreMidFill),
       scoreLowFill: c(scoreLowFill, other.scoreLowFill),
+      chartSeries: <Color>[
+        for (int i = 0; i < chartSeries.length; i++)
+          i < other.chartSeries.length
+              ? c(chartSeries[i], other.chartSeries[i])
+              : chartSeries[i],
+      ],
+      chartOther: c(chartOther, other.chartOther),
     );
   }
 }
@@ -336,6 +371,15 @@ const AppPalette tennisimoLight = AppPalette(
   scoreHighFill: _scoreHighFillLight,
   scoreMidFill: _scoreMidFillLight,
   scoreLowFill: _scoreLowFillLight,
+  // Cerulean, burnt orange, indigo, plum: cool/warm alternation so each
+  // neighbour differs in hue AND lightness, stepped for the tan canvas.
+  chartSeries: <Color>[
+    Color(0xFF027FBB),
+    Color(0xFFD14B0D),
+    Color(0xFF5040A8),
+    Color(0xFF912E6E),
+  ],
+  chartOther: Color(0xFF7B7261),
 );
 
 /// Alternate flavor: the powder-blue / yellow / white scheme, on a near-white
@@ -370,6 +414,15 @@ const AppPalette schoolLight = AppPalette(
   scoreHighFill: _scoreHighFillLight,
   scoreMidFill: _scoreMidFillLight,
   scoreLowFill: _scoreLowFillLight,
+  // Royal blue, burnt orange, plum, lavender: the same alternation, stepped
+  // for the blue-white canvas.
+  chartSeries: <Color>[
+    Color(0xFF154FAC),
+    Color(0xFFCC5E35),
+    Color(0xFF823073),
+    Color(0xFFA063CA),
+  ],
+  chartOther: Color(0xFF64798A),
 );
 
 /// The token set for a flavor. Exhaustive over [BrandFlavor], so there is no

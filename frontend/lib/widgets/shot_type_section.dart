@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
 import '../models/enums.dart';
 import '../theme/app_theme.dart';
 import 'app_card.dart';
+import 'comparison_bars.dart';
 import 'inline_stats.dart';
 import 'mini_trend.dart';
+import 'score_line_chart.dart';
 import 'split_row.dart';
 
 /// One shot type's own block: its counts, its records, its score trend, its
@@ -76,9 +79,13 @@ class ShotTypeSection extends StatelessWidget {
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             )
           else ...<Widget>[
-            MiniTrend(
+            // The full chart, not a sparkline: this is the one number per
+            // shot type a player tracks, so it gets ticks, dates and a
+            // crosshair.
+            ScoreLineChart(
               title: 'Overall score',
               points: insight.scorePoints,
+              dates: insight.sessionDates,
             ),
             // With one scored clip the panel above already says a trend needs
             // two; a spread caption repeating it said the same thing twice.
@@ -93,6 +100,7 @@ class ShotTypeSection extends StatelessWidget {
           ],
           const SizedBox(height: AppSpacing.lg),
           ..._speed(context),
+          ..._comparison(context),
           ..._categories(context),
           ..._coverage(context),
         ],
@@ -156,6 +164,34 @@ class ShotTypeSection extends StatelessWidget {
         title: 'Ball speed',
         points: insight.speedPoints,
         unit: 'mph',
+      ),
+      const SizedBox(height: AppSpacing.lg),
+    ];
+  }
+
+  /// The newest clip against the average of this shot's earlier clips.
+  ///
+  /// Only when the newest clip's own analysis loaded: otherwise the last
+  /// point of each trend is an older clip, and labelling it "latest" would
+  /// pass one swing off as another.
+  List<Widget> _comparison(BuildContext context) {
+    if (!insight.newestDetailLoaded) return const <Widget>[];
+    final List<CategoryComparison> rows =
+        buildCategoryComparison(insight.categoryTrends);
+    if (rows.isEmpty) return const <Widget>[];
+    final ThemeData theme = Theme.of(context);
+    return <Widget>[
+      Text(
+        'Latest clip vs your average',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      const SizedBox(height: AppSpacing.sm),
+      ComparisonBars(
+        rows: rows,
+        earlierClips: insight.detailsInspected - 1,
       ),
       const SizedBox(height: AppSpacing.lg),
     ];
@@ -226,9 +262,11 @@ class ShotTypeSection extends StatelessWidget {
       Text(
         coverage.hasGaps
             ? 'Latest clip measured ${coverage.available} of '
-                '${coverage.total} metrics. Film side-on with your whole body '
-                'in frame to measure more.'
-            : 'Latest clip measured all ${coverage.total} metrics.',
+                '${coverage.total} ${plural(coverage.total, 'metric')}. Film '
+                'side-on with your whole body in frame to measure more.'
+            : coverage.total == 1
+                ? 'Latest clip measured its 1 metric.'
+                : 'Latest clip measured all ${coverage.total} metrics.',
         style: theme.textTheme.labelSmall
             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
       ),

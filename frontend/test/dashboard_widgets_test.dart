@@ -15,6 +15,7 @@ import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/widgets/focus_card.dart';
 import 'package:tennisimo_ai/widgets/inline_stats.dart';
 import 'package:tennisimo_ai/widgets/mini_trend.dart';
+import 'package:tennisimo_ai/widgets/score_line_chart.dart';
 import 'package:tennisimo_ai/widgets/shot_type_section.dart';
 import 'package:tennisimo_ai/widgets/trend_direction_chip.dart';
 
@@ -304,9 +305,17 @@ void main() {
         insight: _insight(scores: const <double?>[71], speeds: const <double?>[null]),
       )));
 
-      // The score panel says a trend needs two; no spread is claimed, and it
-      // is not said twice.
-      expect(find.text(MiniTrend.singlePointMessage), findsOneWidget);
+      // The score chart shows the value and says a trend needs two, with no
+      // line; no spread is claimed, and it is not said twice.
+      expect(find.text(ScoreLineChart.singlePointMessage), findsOneWidget);
+      // Once as the Best stat, once as the chart's lone value.
+      expect(find.text('71'), findsNWidgets(2));
+      expect(
+        find.byWidgetPredicate(
+          (Widget w) => w is CustomPaint && w.painter is ScoreLinePainter,
+        ),
+        findsNothing,
+      );
       expect(find.textContaining('between your best'), findsNothing);
       expect(find.text('0'), findsNothing);
     });

@@ -13,6 +13,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
+import 'package:tennisimo_ai/widgets/comparison_bars.dart';
+import 'package:tennisimo_ai/widgets/shot_mix_chart.dart';
+import 'package:tennisimo_ai/widgets/skill_radar.dart';
 
 import 'dashboard_layout_matrix_test.dart' show kTextScales, kViewports;
 import 'support/dashboard_fixtures.dart';
@@ -135,6 +138,60 @@ void main() {
       );
       expect(find.textContaining(' TU'), findsNothing);
     });
+
+    testWidgets('the shot mix is a donut only when there is a mix', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, severalShotTypes());
+      expect(find.byType(ShotMixChart), findsOneWidget);
+      expect(find.text('5 · 56%'), findsOneWidget);
+    });
+
+    testWidgets('one shot type is a sentence, not a full ring', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, forehandOnly());
+      expect(
+        find.textContaining('All 8 clips so far are Forehand topspin'),
+        findsOneWidget,
+      );
+      expect(
+        find.byWidgetPredicate(
+          (Widget w) => w is CustomPaint && w.painter is DonutPainter,
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('a latest swing with two categories gets words, not a radar', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, unscoredServesAndVolleys());
+      expect(find.text(SkillRadar.tooFewMessage(2)), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (Widget w) => w is CustomPaint && w.painter is RadarPainter,
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('the radar overlays the previous swing of the same shot', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, forehandOnly());
+      expect(find.text('Previous swing'), findsOneWidget);
+    });
+
+    testWidgets(
+      'a failed newest detail drops the latest-vs-average bars entirely',
+      (WidgetTester tester) async {
+        await _pumpDashboard(tester, partialDetailFailure());
+        await _scrollThrough(tester);
+        expect(find.byType(ComparisonBars), findsNothing);
+        expect(find.text('Latest clip vs your average'), findsNothing);
+      },
+    );
 
     testWidgets('never-recorded shots share one card', (
       WidgetTester tester,

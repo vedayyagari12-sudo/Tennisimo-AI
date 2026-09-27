@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/analysis_response.dart';
+import '../models/chart_data.dart';
 import '../theme/app_theme.dart';
 import 'split_row.dart';
 
@@ -49,7 +50,7 @@ class _CategoryBar extends StatelessWidget {
     final String coverage = category.metricsTotal <= 0
         ? 'No reference ranges for this shot'
         : '${category.metricsAvailable} of ${category.metricsTotal} '
-            'metrics measured';
+            '${plural(category.metricsTotal, 'metric')} measured';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

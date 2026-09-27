@@ -51,7 +51,7 @@ void main() {
     expect(find.text('Preparation'), findsOneWidget);
     expect(find.text('74'), findsOneWidget);
     expect(find.text('25% of the score'), findsNothing);
-    expect(find.text('1 of 1 metrics \u00b7 25% of the score'), findsOneWidget);
+    expect(find.text('1 of 1 metric \u00b7 25% of the score'), findsOneWidget);
 
     // The metric-level section is still there, behind its expander: this is
     // an addition, not a replacement.

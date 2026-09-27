@@ -166,7 +166,7 @@ void main() {
 
       // One bar for one measured category: the null one draws nothing.
       expect(find.byType(FractionallySizedBox), findsOneWidget);
-      expect(find.text('0 of 1 metrics measured'), findsOneWidget);
+      expect(find.text('0 of 1 metric measured'), findsOneWidget);
     });
 
     testWidgets('no categories renders nothing at all',

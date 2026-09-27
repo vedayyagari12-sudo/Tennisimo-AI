@@ -13,6 +13,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/models/analysis_response.dart';
+import 'package:tennisimo_ai/models/chart_data.dart';
 import 'package:tennisimo_ai/models/dashboard_insights.dart';
 import 'package:tennisimo_ai/models/enums.dart';
 import 'package:tennisimo_ai/screens/home_shell.dart';
@@ -20,13 +21,17 @@ import 'package:tennisimo_ai/screens/results_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/widgets/app_card.dart';
 import 'package:tennisimo_ai/widgets/category_bars.dart';
+import 'package:tennisimo_ai/widgets/comparison_bars.dart';
 import 'package:tennisimo_ai/widgets/content_width.dart';
 import 'package:tennisimo_ai/widgets/focus_card.dart';
 import 'package:tennisimo_ai/widgets/inline_stats.dart';
 import 'package:tennisimo_ai/widgets/mini_trend.dart';
+import 'package:tennisimo_ai/widgets/score_line_chart.dart';
 import 'package:tennisimo_ai/widgets/score_ring.dart';
 import 'package:tennisimo_ai/widgets/section_header.dart';
+import 'package:tennisimo_ai/widgets/shot_mix_chart.dart';
 import 'package:tennisimo_ai/widgets/shot_type_section.dart';
+import 'package:tennisimo_ai/widgets/skill_radar.dart';
 
 import 'support/dashboard_fixtures.dart';
 
@@ -79,19 +84,27 @@ CategoryTrend _trend(String name, String display, List<double?> points) =>
     CategoryTrend(category: name, displayName: display, points: points);
 
 /// The worst case the screen can produce: the longest shot label, every stat
-/// populated to its widest formatting, all five category panels.
+/// populated to its widest formatting, all five category panels, the full
+/// score chart with dates, and the latest-vs-average bars with a gap in them.
 ShotTypeInsight _densest() => ShotTypeInsight(
       shotType: ShotType.backhandTwoHanded,
       scorePoints: const <double?>[61, 70, 88, 74],
       speedPoints: const <double?>[70, 74, 81, 104],
       detailsInspected: 4,
       latestCoverage: const CoverageSummary(available: 11, total: 15),
+      sessionDates: <DateTime?>[
+        DateTime(2026, 8, 30),
+        DateTime(2026, 9, 3),
+        DateTime(2026, 9, 12),
+        DateTime(2026, 9, 27),
+      ],
+      newestDetailLoaded: true,
       categoryTrends: <CategoryTrend>[
         _trend('preparation', 'Preparation', const <double?>[55, 60, 72, 68]),
         _trend('swing_path', 'Swing path', const <double?>[40, 44, 51, 49]),
         _trend('contact', 'Contact', const <double?>[80, 78, 84, 88]),
-        _trend(
-            'follow_through', 'Follow through', const <double?>[62, 66, 61, 70]),
+        _trend('follow_through', 'Follow through',
+            const <double?>[62, 66, 61, null]),
         _trend('balance', 'Balance', const <double?>[71, 69, 75, 77]),
       ],
     );
@@ -203,6 +216,110 @@ void main() {
               ],
             ),
           ),
+        ],
+      ),
+    ),
+  );
+
+  // The charts, each at its widest content: the longest shot names in a
+  // five-slice donut, a radar with two series and two unmeasured axes, bars
+  // with both kinds of gap, and a line broken by an unscored clip.
+  forEveryViewport(
+    'the shot-mix donut with five long-named slices',
+    () => AppCard(
+      child: ShotMixChart(
+        slices: buildShotMix(<ShotTypeInsight>[
+          for (final (ShotType, int) s in <(ShotType, int)>[
+            (ShotType.backhandTwoHanded, 104),
+            (ShotType.backhandOneHanded, 88),
+            (ShotType.forehandTopspin, 57),
+            (ShotType.forehandSlice, 23),
+            (ShotType.serve, 9),
+            (ShotType.volley, 2),
+          ])
+            ShotTypeInsight(
+              shotType: s.$1,
+              scorePoints: List<double?>.filled(s.$2, null),
+              speedPoints: List<double?>.filled(s.$2, null),
+              categoryTrends: const <CategoryTrend>[],
+              detailsInspected: 0,
+              latestCoverage: null,
+            ),
+        ]),
+      ),
+    ),
+  );
+
+  forEveryViewport(
+    'the skill radar with a previous swing and unmeasured axes',
+    () => const AppCard(
+      child: SkillRadar(
+        profile: SkillProfile(
+          axes: <RadarAxis>[
+            RadarAxis(category: 'preparation', displayName: 'Preparation'),
+            RadarAxis(category: 'contact', displayName: 'Contact'),
+            RadarAxis(category: 'swing_path', displayName: 'Swing path'),
+            RadarAxis(category: 'balance', displayName: 'Balance'),
+            RadarAxis(
+                category: 'follow_through', displayName: 'Follow through'),
+          ],
+          current: RadarSeries(
+            label: 'This swing',
+            values: <double?>[100, null, 48, 74, null],
+          ),
+          previous: RadarSeries(
+            label: 'Previous swing',
+            values: <double?>[70, 60, 44, 72, 90],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  forEveryViewport(
+    'the latest-vs-average bars with gaps',
+    () => const AppCard(
+      child: ComparisonBars(
+        earlierClips: 11,
+        rows: <CategoryComparison>[
+          CategoryComparison(
+            category: 'follow_through',
+            displayName: 'Follow through',
+            current: 100,
+            average: 99.5,
+            averageOf: 11,
+          ),
+          CategoryComparison(
+            category: 'contact',
+            displayName: 'Contact',
+            current: null,
+            average: 71,
+            averageOf: 3,
+          ),
+          CategoryComparison(
+            category: 'swing_path',
+            displayName: 'Swing path',
+            current: 48,
+            average: null,
+            averageOf: 0,
+          ),
+        ],
+      ),
+    ),
+  );
+
+  forEveryViewport(
+    'the score line chart broken by an unscored clip',
+    () => AppCard(
+      child: ScoreLineChart(
+        title: 'Overall score',
+        points: const <double?>[61, null, 88, 100, 74],
+        dates: <DateTime?>[
+          DateTime(2026, 8, 30),
+          DateTime(2026, 9, 3),
+          DateTime(2026, 9, 12),
+          DateTime(2026, 9, 20),
+          DateTime(2026, 9, 27),
         ],
       ),
     ),

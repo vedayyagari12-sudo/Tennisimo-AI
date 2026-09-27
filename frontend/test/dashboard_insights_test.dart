@@ -58,6 +58,65 @@ AnalysisResponse _analysis({
     );
 
 void main() {
+  group('chart inputs on ShotTypeInsight', () {
+    test('session dates are oldest first, aligned with the scores', () {
+      final DateTime older = DateTime(2026, 9, 1);
+      final DateTime newer = DateTime(2026, 9, 5);
+      final DashboardInsights insights = buildDashboardInsights(
+        history: <AnalysisSummary>[
+          AnalysisSummary(
+            analysisId: 'b',
+            createdAt: newer,
+            shotType: ShotType.serve,
+            overallScore: 70,
+            ballSpeedMph: null,
+          ),
+          AnalysisSummary(
+            analysisId: 'a',
+            createdAt: older,
+            shotType: ShotType.serve,
+            overallScore: null,
+            ballSpeedMph: null,
+          ),
+        ],
+        details: const <AnalysisResponse>[],
+      );
+      final ShotTypeInsight serve = insights.shotTypes.single;
+      expect(serve.sessionDates, <DateTime?>[older, newer]);
+      expect(serve.scorePoints, <double?>[null, 70]);
+    });
+
+    test('newestDetailLoaded is true only when the NEWEST clip loaded', () {
+      final List<AnalysisSummary> history = <AnalysisSummary>[
+        _summary(id: 'new', score: 70),
+        _summary(id: 'old', score: 60),
+      ];
+      expect(
+        buildDashboardInsights(
+          history: history,
+          details: <AnalysisResponse>[_analysis(id: 'new'), _analysis(id: 'old')],
+        ).shotTypes.single.newestDetailLoaded,
+        isTrue,
+      );
+      // Only the older clip loaded: its trend points must not be called
+      // "latest".
+      expect(
+        buildDashboardInsights(
+          history: history,
+          details: <AnalysisResponse>[_analysis(id: 'old')],
+        ).shotTypes.single.newestDetailLoaded,
+        isFalse,
+      );
+      expect(
+        buildDashboardInsights(
+          history: history,
+          details: const <AnalysisResponse>[],
+        ).shotTypes.single.newestDetailLoaded,
+        isFalse,
+      );
+    });
+  });
+
   group('CategoryTrend', () {
     test('nulls are kept as gaps and never counted as zeros', () {
       const CategoryTrend trend = CategoryTrend(

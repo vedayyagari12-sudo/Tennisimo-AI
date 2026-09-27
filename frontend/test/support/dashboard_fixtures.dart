@@ -699,10 +699,84 @@ DashboardFixture partialDetailFailure() => DashboardFixture(
   _source(_forehands(), failing: <String>{'fh0', 'fh3', 'fh5'}),
 );
 
+/// Six shot types, so the shot mix has to fold its tail: four named slices
+/// and one "Other" holding the two smallest.
+DashboardFixture wideShotMix() {
+  final List<_Session> fh = _forehands(count: 5);
+  return DashboardFixture(
+    'wide_shot_mix',
+    _source(<_Session>[
+      fh[0],
+      _backhand(
+        'bh0',
+        const Duration(hours: 20),
+        63,
+        prep: 66,
+        path: 58,
+        balance: 71,
+      ),
+      _unbanded(
+        'sv0',
+        const Duration(days: 1),
+        ShotType.serve,
+        prep: 70,
+        path: 62,
+        balance: 66,
+        mph: 88,
+      ),
+      fh[1],
+      _unbanded(
+        'vo0',
+        const Duration(days: 2),
+        ShotType.volley,
+        prep: 64,
+        path: 55,
+        balance: 70,
+      ),
+      _backhand(
+        'bh1',
+        const Duration(days: 2, hours: 4),
+        57,
+        prep: 60,
+        path: 50,
+        balance: 68,
+      ),
+      _unbanded(
+        'fs0',
+        const Duration(days: 3),
+        ShotType.forehandSlice,
+        prep: 61,
+        path: 57,
+        balance: 63,
+      ),
+      fh[2],
+      _unbanded(
+        'sv1',
+        const Duration(days: 4),
+        ShotType.serve,
+        prep: 66,
+        path: 60,
+        balance: 61,
+      ),
+      _unbanded(
+        'b1h0',
+        const Duration(days: 5),
+        ShotType.backhandOneHanded,
+        prep: 58,
+        path: 49,
+        balance: 60,
+      ),
+      fh[3],
+      fh[4],
+    ]),
+  );
+}
+
 List<DashboardFixture> allFixtures() => <DashboardFixture>[
   newUser(),
   forehandOnly(),
   severalShotTypes(),
   unscoredServesAndVolleys(),
   partialDetailFailure(),
+  wideShotMix(),
 ];

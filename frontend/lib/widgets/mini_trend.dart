@@ -10,8 +10,10 @@ import '../theme/app_theme.dart';
 ///
 /// ## There is deliberately no series colour on this widget
 ///
-/// The mark is ALWAYS the primary accent — there is no `lineColor` parameter
-/// and no categorical palette anywhere on this screen. Small multiples give
+/// The mark is ALWAYS the primary accent — there is no `lineColor` parameter.
+/// The dashboard's categorical palette is for the charts whose series ARE
+/// the subject (the shot mix, the radar, the grouped bars), never for these
+/// one-series panels. Small multiples give
 /// every series its own titled frame, so identity is already carried by words;
 /// a second hue would add a colour-carried distinction that has to clear the
 /// CVD separation bar and buys nothing. It would also fail: the default

@@ -61,9 +61,11 @@ class CategoryScore {
   String get displayScore =>
       score == null ? 'not measured' : score!.round().toString();
 
-  /// `3 of 5 metrics · 25% of the score`.
+  /// `3 of 5 metrics · 25% of the score`; `1 of 1 metric · ...` — the noun
+  /// agrees with the total.
   String get displayCoverage =>
-      '$metricsAvailable of $metricsTotal metrics · '
+      '$metricsAvailable of $metricsTotal '
+      '${metricsTotal == 1 ? 'metric' : 'metrics'} · '
       '${(weight * 100).round()}% of the score';
 }
 

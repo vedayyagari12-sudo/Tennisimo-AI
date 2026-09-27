@@ -238,4 +238,20 @@ void main() {
     await _growToFit(tester, screen, const Size(412, 915));
     await _save(tester, '$out/results_forehand_412_full.png', 1);
   });
+
+  // An unbanded serve: two of five categories are null by construction, so
+  // this is the radar's broken-outline case.
+  for (final MapEntry<String, Size> viewport in _viewports.entries) {
+    testWidgets('render results screen for a serve ${viewport.key}', (
+      WidgetTester tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      final ResultsScreen screen = ResultsScreen(
+        analysis: unscoredServesAndVolleys().source.details['sv1']!,
+      );
+      await _pump(tester, screen, viewport.value);
+      await _growToFit(tester, screen, viewport.value);
+      await _save(tester, '$out/results_serve_${viewport.key}_full.png', 1);
+    });
+  }
 }

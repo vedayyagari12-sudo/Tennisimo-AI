@@ -181,9 +181,22 @@ class ShotTypeInsight {
     required this.categoryTrends,
     required this.detailsInspected,
     required this.latestCoverage,
+    this.sessionDates = const <DateTime?>[],
+    this.newestDetailLoaded = false,
   });
 
   final ShotType shotType;
+
+  /// When each session of this type was recorded, OLDEST FIRST, aligned with
+  /// [scorePoints]. May be empty (or hold nulls) when dates are unknown; a
+  /// chart then labels sessions by position instead of inventing a date.
+  final List<DateTime?> sessionDates;
+
+  /// True when the NEWEST session of this type is among the fetched details,
+  /// so the last point of every [CategoryTrend] really is the latest clip.
+  /// When that one request failed, the last point is an older clip, and no
+  /// chart may present it as "your latest".
+  final bool newestDetailLoaded;
 
   /// Overall score per session of this type, OLDEST FIRST, nulls kept.
   final List<double?> scorePoints;
@@ -383,6 +396,11 @@ ShotTypeInsight _insightFor(
     latestCoverage: detailsNewestFirst.isEmpty
         ? null
         : coverageOf(detailsNewestFirst.first),
+    sessionDates:
+        oldestFirst.map((AnalysisSummary e) => e.createdAt).toList(),
+    newestDetailLoaded: detailsNewestFirst.isNotEmpty &&
+        newestFirst.isNotEmpty &&
+        detailsNewestFirst.first.analysisId == newestFirst.first.analysisId,
   );
 }
 
