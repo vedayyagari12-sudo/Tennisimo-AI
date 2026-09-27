@@ -101,42 +101,31 @@ class _ShotMixChartState extends State<ShotMixChart> {
       onSelect: _toggle,
     );
 
-    final String spoken = <String>[
-      for (final ShotMixSlice s in slices)
-        '${s.label}: ${s.count} ${plural(s.count, 'clip')}, ${s.percent}%',
-    ].join('. ');
-
-    return Semantics(
-      label: 'Shot mix. $spoken.',
-      child: ExcludeSemantics(
-        child: LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            // Side by side when the legend keeps ~130dp at the reader's text
-            // size; stacked below that, so long shot names wrap instead of
-            // squeezing the counts off the card.
-            final double legendMin =
-                130 * MediaQuery.textScalerOf(context).scale(1);
-            if (constraints.maxWidth >=
-                widget.size + AppSpacing.lg + legendMin) {
-              return Row(
-                children: <Widget>[
-                  donut,
-                  const SizedBox(width: AppSpacing.lg),
-                  Expanded(child: legend),
-                ],
-              );
-            }
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Center(child: donut),
-                const SizedBox(height: AppSpacing.md),
-                legend,
-              ],
-            );
-          },
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // Side by side when the legend keeps ~130dp at the reader's text
+        // size; stacked below that, so long shot names wrap instead of
+        // squeezing the counts off the card.
+        final double legendMin =
+            130 * MediaQuery.textScalerOf(context).scale(1);
+        if (constraints.maxWidth >= widget.size + AppSpacing.lg + legendMin) {
+          return Row(
+            children: <Widget>[
+              donut,
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(child: legend),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Center(child: donut),
+            const SizedBox(height: AppSpacing.md),
+            legend,
+          ],
+        );
+      },
     );
   }
 }

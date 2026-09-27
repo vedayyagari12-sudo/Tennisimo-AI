@@ -109,10 +109,7 @@ class _SkillRadarState extends State<SkillRadar> {
           ),
           const SizedBox(height: AppSpacing.sm),
         ],
-        Semantics(
-          label: _semanticsLabel(p),
-          child: ExcludeSemantics(child: _chart(context, palette)),
-        ),
+        _chart(context, palette),
         const SizedBox(height: AppSpacing.xs),
         Text(
           _readout(p),
@@ -201,13 +198,6 @@ class _SkillRadarState extends State<SkillRadar> {
         : '${p.previous!.label.toLowerCase()} ${before.round()}';
     return '$name: $nowText · $beforeText';
   }
-
-  String _semanticsLabel(SkillProfile p) => <String>[
-    'Skill profile',
-    for (int i = 0; i < p.axes.length; i++)
-      '${p.axes[i].displayName} '
-          '${p.current.values[i] == null ? 'not measured' : p.current.values[i]!.round()}',
-  ].join('. ');
 }
 
 /// Where everything on the radar goes, for one width.
