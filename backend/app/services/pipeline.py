@@ -118,7 +118,10 @@ CONTACT_FAILING_FLAGS: Final[tuple[str, ...]] = (SEQUENCE_UNUSABLE, CONTACT_NOT_
 #: it feeds is ``FeedbackInput.truncated_clip``, which suppresses Gemini.
 TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 
-PIPELINE_VERSION: Final[str] = "v2"
+#: v3: ``swing_path_angle_deg`` is folded onto the swing's own direction of
+#: travel, so a leftward-travelling swing no longer reads ~180 deg off. v2 rows
+#: with a leftward swing carry the old value and must not be trended against v3.
+PIPELINE_VERSION: Final[str] = "v3"
 
 
 class StageTimer:

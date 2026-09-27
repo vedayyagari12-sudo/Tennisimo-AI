@@ -306,7 +306,7 @@ def test_run_persists_a_validatable_analysis(completed_run: dict[str, Any]) -> N
     response: AnalysisResponse = completed_run["response"]
 
     assert row.id == response.analysis_id
-    assert row.pipeline_version == "v2"
+    assert row.pipeline_version == "v3"
     assert row.rubric_version == response.scorecard.rubric_version
     assert row.shot_type is response.shot_type.shot_type
     assert row.overall_score == response.scorecard.overall_score

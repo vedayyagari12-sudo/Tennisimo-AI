@@ -225,6 +225,24 @@ def fit_trajectory_line(points: np.ndarray) -> tuple[float, float] | None:
     return angle, float(np.sqrt(np.mean(np.square(residuals))))
 
 
+def fold_to_forward_travel_deg(angle_deg: float) -> float:
+    """Re-express a direction-of-travel angle as rise over FORWARD run.
+
+    ``fit_trajectory_line`` measures from +x, so a 45 deg low-to-high path
+    travelling LEFTWARD in frame reads 135 deg. The swing's own direction of
+    travel defines "forward", so leftward travel is mirrored onto rightward:
+    135 -> 45, -135 -> -45, 180 -> 0. The sign (low-to-high vs high-to-low)
+    is preserved, and the result is in [-90, 90]. The fold is continuous at
+    +/-90 deg, so a near-vertical path cannot jump across it.
+    """
+    angle = float(angle_deg)
+    if angle > 90.0:
+        return 180.0 - angle
+    if angle < -90.0:
+        return -180.0 - angle
+    return angle
+
+
 def position_spread_tu(points: np.ndarray) -> float | None:
     """Std-dev of a (N, 2) point cloud, as RMS distance from its own mean.
 
@@ -482,6 +500,12 @@ def swing_path_fit(
 
     Returns ``(swing_path_angle_deg, swing_plane_deviation_tu)``. Positive angle
     = low-to-high, because y is positive up in this frame.
+
+    The angle is folded onto the window's OWN direction of travel
+    (:func:`fold_to_forward_travel_deg`), so it does not depend on which side
+    of the player the camera stood. ``seq.swing_direction_sign`` is deliberately
+    NOT used: it is a whole-clip proxy (slowest-to-fastest frame of whichever
+    wrist moved more), not a measurement of this fit window.
     """
     wrist = racket_wrist_index(handedness)
     frames = frame_window(
@@ -496,7 +520,10 @@ def swing_path_fit(
     if frames.shape[0] < MIN_FIT_POINTS:
         return None
     points = np.asarray(seq.points, dtype=np.float64)
-    return fit_trajectory_line(points[frames, wrist, :])
+    fit = fit_trajectory_line(points[frames, wrist, :])
+    if fit is None:
+        return None
+    return fold_to_forward_travel_deg(fit[0]), fit[1]
 
 
 def front_knee_side(

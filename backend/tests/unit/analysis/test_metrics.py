@@ -25,6 +25,7 @@ from app.analysis.metrics import (
     contact_point_forward_tu,
     elbow_angle_at_contact_deg,
     fit_trajectory_line,
+    fold_to_forward_travel_deg,
     follow_through_height_tu,
     front_knee_side,
     head_stillness_tu,
@@ -372,6 +373,65 @@ def test_swing_path_fit_window_is_contact_minus_six_to_plus_three() -> None:
     fit = swing_path_fit(seq, Handedness.RIGHT, CONTACT_FRAME)
     assert fit is not None
     assert fit[0] == pytest.approx(45.0)
+
+
+def test_fold_to_forward_travel_mirrors_leftward_travel_and_keeps_the_sign() -> None:
+    assert fold_to_forward_travel_deg(135.0) == pytest.approx(45.0)
+    assert fold_to_forward_travel_deg(-135.0) == pytest.approx(-45.0)
+    assert fold_to_forward_travel_deg(180.0) == pytest.approx(0.0)
+    assert fold_to_forward_travel_deg(-180.0) == pytest.approx(0.0)
+    # Rightward travel and the vertical boundary are untouched.
+    for angle in (-90.0, -30.0, 0.0, 25.0, 90.0):
+        assert fold_to_forward_travel_deg(angle) == pytest.approx(angle)
+
+
+# Synthetic wrist paths through the swing_path fit window, one per case. Each
+# leftward case is the rightward case mirrored in x (the camera on the other
+# side of the player); swing_direction_sign is held at +1 for both on purpose,
+# so the fold cannot be leaning on it.
+_SWING_PATH_CASES: dict[str, tuple[float, float, float]] = {
+    # name: (dx per frame, dy per frame, expected angle)
+    "topspin": (0.1, math.tan(math.radians(25.0)) * 0.1, 25.0),
+    "slice": (0.1, math.tan(math.radians(-18.0)) * 0.1, -18.0),
+    "flat": (0.1, 0.0, 0.0),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_SWING_PATH_CASES))
+@pytest.mark.parametrize("swing_direction_sign", [1, -1])
+def test_swing_path_angle_is_the_same_whichever_way_the_swing_travels(
+    case: str, swing_direction_sign: int
+) -> None:
+    dx, dy, expected = _SWING_PATH_CASES[case]
+    rightward = build_sequence(
+        wrist_xy=straight_path(dx, dy), swing_direction_sign=swing_direction_sign
+    )
+    leftward = build_sequence(
+        wrist_xy=straight_path(-dx, dy, origin=(-0.3, 0.2)),
+        swing_direction_sign=swing_direction_sign,
+    )
+    right_fit = swing_path_fit(rightward, Handedness.RIGHT, CONTACT_FRAME)
+    left_fit = swing_path_fit(leftward, Handedness.RIGHT, CONTACT_FRAME)
+    assert right_fit is not None and left_fit is not None
+    assert right_fit[0] == pytest.approx(expected, abs=1e-9)
+    assert left_fit[0] == pytest.approx(right_fit[0], abs=1e-9)
+    assert left_fit[1] == pytest.approx(right_fit[1], abs=1e-9)
+
+
+def test_leftward_topspin_scores_as_topspin_not_one_hundred_and_fifty_five() -> None:
+    # The regression: a 25 deg low-to-high swing travelling leftward used to
+    # read 155 deg -- "above range" in the 15-35 deg topspin band.
+    dy = math.tan(math.radians(25.0)) * 0.1
+    seq = build_sequence(wrist_xy=straight_path(-0.1, dy, origin=(-0.3, 0.2)))
+    metrics, _ = compute_swing_metrics(seq, RIGHT_HANDED, build_contact(), build_phases())
+    assert metrics.swing_path_angle_deg == pytest.approx(25.0)
+
+
+def test_leftward_slice_stays_negative() -> None:
+    dy = math.tan(math.radians(-18.0)) * 0.1
+    seq = build_sequence(wrist_xy=straight_path(-0.1, dy, origin=(-0.3, 0.2)))
+    metrics, _ = compute_swing_metrics(seq, RIGHT_HANDED, build_contact(), build_phases())
+    assert metrics.swing_path_angle_deg == pytest.approx(-18.0)
 
 
 # --- contact-frame metrics ---------------------------------------------------
