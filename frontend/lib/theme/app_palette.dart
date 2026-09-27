@@ -1,10 +1,16 @@
 /// The colour tokens, one immutable set per brand flavor.
 ///
-/// ## One canvas
+/// ## Two canvases, one of them web-only
 ///
-/// This app is light-only. There is no dark set here to be selected, so there
-/// is no second canvas for a token to be mis-stepped against, and no runtime
-/// brightness for anything to go stale over.
+/// Each flavor has a light set and a dark set. The mobile app is light-only:
+/// `main.dart` never hands a dark set to `MaterialApp`, so on a phone the dark
+/// constants below are compiled in but unreachable as a theme. The web app
+/// offers a light / dark / follow-system choice, and only there is a dark set
+/// ever attached (see `theme_controller.dart`).
+///
+/// A dark set is re-stepped for its canvas, never a light token reused: an
+/// accent picked against a light canvas glares on a dark one, and a fill
+/// calibrated for a dark canvas muddies on a light one.
 ///
 /// ## Why this is a [ThemeExtension] and not a set of `const` globals
 ///
@@ -34,9 +40,11 @@
 ///   [errorFill], [scoreHighFill], [scoreMidFill], [scoreLowFill]) is for the
 ///   score ring, the trend area, the category bars and the brand mark's ball.
 ///   It is gated on WCAG 3:1 *and* on a perceptual-lightness band (OKLab L
-///   0.32-0.60), because a large area painted with a text-calibrated accent
-///   muddies on a light canvas.
-/// * A **light fill** is the one exception, and only [secondaryFill],
+///   0.32-0.60 on light, 0.55-0.78 on dark), because a large area painted
+///   with a text-calibrated accent muddies on a light canvas and glares on a
+///   dark one.
+/// * A **light fill** is the one exception, on the light canvas only, and only
+///   [secondaryFill],
 ///   [ballAccent], [actionFill] and [navIndicator] may take it: a bright,
 ///   saturated fill (the alternate flavor's gold) that carries DARK ink and is
 ///   never itself text. It cannot clear 3:1 against a light canvas — no bright
@@ -92,8 +100,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.chartOther,
   });
 
-  /// The canvas this set was stepped against. Never inferred from a colour,
-  /// and always [Brightness.light]: this app has one canvas.
+  /// The canvas this set was stepped against. Never inferred from a colour.
   final Brightness brightness;
 
   /// Scaffold background.
@@ -301,10 +308,9 @@ class AppPalette extends ThemeExtension<AppPalette> {
     );
   }
 
-  /// Interpolates every token. Nothing in this app swaps one palette for
-  /// another, but [ThemeExtension] requires it and Material animates theme
-  /// changes generically. [brightness] is discrete and flips at the halfway
-  /// point.
+  /// Interpolates every token. Material animates a theme change through this
+  /// when the web app's light / dark choice flips (instantly under reduced
+  /// motion). [brightness] is discrete and flips at the halfway point.
   @override
   AppPalette lerp(ThemeExtension<AppPalette>? other, double t) {
     if (other is! AppPalette) return this;
@@ -496,8 +502,154 @@ const AppPalette schoolLight = AppPalette(
   chartOther: Color(0xFF766E67),
 );
 
-/// The token set for a flavor. Exhaustive over [BrandFlavor], so there is no
-/// "half-themed" flavor to fall into.
+// ---------------------------------------------------------------------------
+// The dark score ramp: the same green / amber / red, re-stepped for a dark
+// canvas and shared by both dark flavors exactly as the light ramp is shared
+// by both light ones.
+//
+// OKLab L 0.87 / 0.82 / 0.72 as text and 0.76 / 0.71 / 0.61 as fills, solved
+// by exhaustive search over green / amber / red hues for the largest minimum
+// Machado 2009 separation that still clears WCAG AA (text) or 3:1 (fills) on
+// every surface of BOTH dark flavors. Monotone in lightness, like the light
+// ramp, because lightness is the one channel every dichromacy keeps.
+// ---------------------------------------------------------------------------
+
+const Color _scoreHighDark = Color(0xFF86F09F);
+const Color _scoreMidDark = Color(0xFFFCB60D);
+const Color _scoreLowDark = Color(0xFFFF7172);
+const Color _scoreHighFillDark = Color(0xFF6ACB82);
+const Color _scoreMidFillDark = Color(0xFFDB8F00);
+const Color _scoreLowFillDark = Color(0xFFDE444C);
+
+/// Default flavor, dark: the tan canvas's warm charcoal counterpart
+/// (`#17130F`-`#302C27`, OKLab hue ~68 like the light tan, stepped ~0.03 L per
+/// elevation), with the brand green and the chartreuse lifted into the dark
+/// text and fill bands and dark ink on every accent.
+///
+/// WEB ONLY: `main.dart` attaches a dark theme to `MaterialApp` only when
+/// `kIsWeb`. On a phone this constant is compiled in but never shown.
+const AppPalette tennisimoDark = AppPalette(
+  brightness: Brightness.dark,
+  surface: Color(0xFF17130F),
+  surfaceContainerLowest: Color(0xFF100C08),
+  surfaceContainerLow: Color(0xFF1D1914),
+  surfaceContainer: Color(0xFF221D19),
+  surfaceContainerHigh: Color(0xFF292420),
+  surfaceContainerHighest: Color(0xFF302C27),
+  onSurface: Color(0xFFF3EEE6),
+  onSurfaceVariant: Color(0xFFBBB3AA),
+  outline: Color(0xFF877F75),
+  outlineVariant: Color(0xFF423C36),
+  primary: Color(0xFF66DA85),
+  onPrimary: Color(0xFF091A0D),
+  primaryFill: Color(0xFF3BB360),
+  onPrimaryFill: Color(0xFF091A0D),
+  secondary: Color(0xFFC4E951),
+  onSecondary: Color(0xFF171D07),
+  secondaryFill: Color(0xFF9FC12C),
+  ballAccent: Color(0xFF9FC12C),
+  // The same rule as the light set: the button face is primaryFill, and the
+  // nav pill is primary (#66DA85) at 16%, spelled out channel by channel.
+  actionFill: Color(0xFF3BB360),
+  onActionFill: Color(0xFF091A0D),
+  navIndicator: Color.from(
+    alpha: 0.16,
+    red: 0x66 / 255,
+    green: 0xDA / 255,
+    blue: 0x85 / 255,
+  ),
+  error: Color(0xFFFB979A),
+  onError: Color(0xFF2E1011),
+  errorFill: Color(0xFFE15955),
+  scoreHigh: _scoreHighDark,
+  scoreMid: _scoreMidDark,
+  scoreLow: _scoreLowDark,
+  scoreHighFill: _scoreHighFillDark,
+  scoreMidFill: _scoreMidFillDark,
+  scoreLowFill: _scoreLowFillDark,
+  // Sky blue, pink, violet, orchid. Not the light set's hues re-stepped: on a
+  // dark canvas the score ramp is bright, and no orange (or gold) can be
+  // stepped to sit 0.15 OKLab clear of both the bright amber and the bright
+  // red, so the warm slot moves to pink, the one warm family the dark ramp
+  // leaves free. Neighbours alternate cool / warm and differ in lightness.
+  chartSeries: <Color>[
+    Color(0xFF1AABFB),
+    Color(0xFFFEADDF),
+    Color(0xFF7369FB),
+    Color(0xFFC54EBE),
+  ],
+  chartOther: Color(0xFF8B857F),
+);
+
+/// Alternate flavor, dark: the light set inverted. The navy that is ink on
+/// the light canvas becomes the canvas (`#0C1B2F`), with lighter navy cards
+/// (`#17263B`) standing on it, powder blue as the text accent, and gold still
+/// only a fill under navy ink.
+///
+/// Gold is stepped down to `#E0AE03` (OKLab L 0.775) to sit inside the dark
+/// fill band: the light set's `#FFC72C` (L 0.857) glares as a large face on a
+/// navy canvas.
+///
+/// The nav pill is NOT gold here, unlike the light set: the selected nav icon
+/// and label wear [AppPalette.onSurface], which on this canvas is near-white,
+/// and near-white on gold fails AA. It is powder blue at 20% instead.
+///
+/// WEB ONLY, like [tennisimoDark].
+const AppPalette schoolDark = AppPalette(
+  brightness: Brightness.dark,
+  surface: Color(0xFF0C1B2F),
+  surfaceContainerLowest: Color(0xFF061428),
+  surfaceContainerLow: Color(0xFF122136),
+  surfaceContainer: Color(0xFF17263B),
+  surfaceContainerHigh: Color(0xFF1E2D43),
+  surfaceContainerHighest: Color(0xFF24344A),
+  onSurface: Color(0xFFEAF3FA),
+  onSurfaceVariant: Color(0xFFB0C0CE),
+  outline: Color(0xFF788C9D),
+  outlineVariant: Color(0xFF3D4C5D),
+  primary: Color(0xFFA4D5F7),
+  onPrimary: Color(0xFF0B1F3A),
+  primaryFill: Color(0xFF589AED),
+  onPrimaryFill: Color(0xFF0B1F3A),
+  // Ball-speed text stays a blue, as on the light set: a gold text accent
+  // would sit beside the amber score band and read as a verdict.
+  secondary: Color(0xFF62C5EF),
+  onSecondary: Color(0xFF0B1F3A),
+  secondaryFill: Color(0xFFE0AE03),
+  ballAccent: Color(0xFFE0AE03),
+  actionFill: Color(0xFFE0AE03),
+  onActionFill: Color(0xFF0B1F3A),
+  navIndicator: Color.from(
+    alpha: 0.20,
+    red: 0xA4 / 255,
+    green: 0xD5 / 255,
+    blue: 0xF7 / 255,
+  ),
+  error: Color(0xFFFB979A),
+  onError: Color(0xFF2E1011),
+  errorFill: Color(0xFFE15955),
+  scoreHigh: _scoreHighDark,
+  scoreMid: _scoreMidDark,
+  scoreLow: _scoreLowDark,
+  scoreHighFill: _scoreHighFillDark,
+  scoreMidFill: _scoreMidFillDark,
+  scoreLowFill: _scoreLowFillDark,
+  // Royal blue, pink, lavender, orchid. The light set's old gold cannot
+  // follow onto this canvas (any gold bright enough to read here sits on the
+  // amber score band), so "what it is compared with" is pink, which stays
+  // apart from the blue under every dichromacy by lightness (0.61 vs 0.84).
+  chartSeries: <Color>[
+    Color(0xFF0488DA),
+    Color(0xFFFFACD5),
+    Color(0xFFA591FB),
+    Color(0xFFB558AE),
+  ],
+  chartOther: Color(0xFF7E7771),
+);
+
+/// The light token set for a flavor: the only set the mobile app can show.
+/// Exhaustive over [BrandFlavor], so there is no "half-themed" flavor to fall
+/// into.
 AppPalette paletteFor(BrandFlavor flavor) {
   switch (flavor) {
     case BrandFlavor.tennisimo:
@@ -507,8 +659,25 @@ AppPalette paletteFor(BrandFlavor flavor) {
   }
 }
 
-/// Every palette this binary can show, for tests that must cover both flavors.
+/// The dark token set for a flavor. Only ever attached to a theme on web.
+AppPalette darkPaletteFor(BrandFlavor flavor) {
+  switch (flavor) {
+    case BrandFlavor.tennisimo:
+      return tennisimoDark;
+    case BrandFlavor.school:
+      return schoolDark;
+  }
+}
+
+/// Every palette `MaterialApp.theme` can be given (on mobile, every palette
+/// the app can show at all), for tests that must cover both flavors.
 const List<AppPalette> kAllPalettes = <AppPalette>[
   tennisimoLight,
   schoolLight,
+];
+
+/// The web-only dark sets, one per flavor.
+const List<AppPalette> kAllDarkPalettes = <AppPalette>[
+  tennisimoDark,
+  schoolDark,
 ];

@@ -8,10 +8,12 @@
 /// the palette has to have. A token can move freely inside its band; it cannot
 /// leave the band without failing here.
 ///
-/// Every check runs over both brand flavors. The app is light-only, so there
-/// is one canvas per flavor and every gate below applies to it: a flavor that
-/// was only half-validated is exactly the failure this suite exists to
-/// prevent.
+/// Every check runs over all four palettes: both brand flavors, on the light
+/// canvas the mobile app is limited to and on the dark canvas only the web app
+/// can show. Every gate applies to every one of them, with the lightness bands
+/// taken for the canvas the palette was stepped for: a palette that was only
+/// half-validated is exactly the failure this suite exists to prevent, and a
+/// web-only palette is no exception.
 library;
 
 import 'dart:math' as math;
@@ -171,14 +173,22 @@ const double kAaLarge = 3.0;
 /// values happen to clear.
 const double kMinCvdSeparation = 0.070;
 
-/// The perceptual-lightness window a *chromatic text* accent must sit in on
-/// this app's light canvas.
-const ({double min, double max}) kTextBand = (min: 0.24, max: 0.52);
+/// The perceptual-lightness window a *chromatic text* accent must sit in, for
+/// the canvas it was stepped against.
+({double min, double max}) textBand(Brightness brightness) =>
+    brightness == Brightness.dark
+        ? (min: 0.62, max: 0.92)
+        : (min: 0.24, max: 0.52);
 
-/// The window a *large fill* must sit in. This is the anti-mud band, the whole
-/// reason the two tiers exist: a large area painted with a text-calibrated
-/// accent on a near-white canvas reads as a smear.
-const ({double min, double max}) kFillBand = (min: 0.32, max: 0.60);
+/// The window a *large fill* must sit in. On light this is the anti-mud band:
+/// a large area painted with a text-calibrated accent on a near-white canvas
+/// reads as a smear. On dark it is the same discipline upside down, the
+/// anti-glare band: a text-bright accent as a large face on a near-black
+/// canvas glares.
+({double min, double max}) fillBand(Brightness brightness) =>
+    brightness == Brightness.dark
+        ? (min: 0.55, max: 0.78)
+        : (min: 0.32, max: 0.60);
 
 /// Text, icon and small-mark tokens: gated on WCAG body contrast.
 Map<String, Color> textTier(AppPalette p) => <String, Color>{
@@ -219,7 +229,8 @@ Map<String, Color> fillTier(AppPalette p) => <String, Color>{
 
 /// The OKLab lightness at and above which a fill is a LIGHT fill: a bright,
 /// saturated face that carries dark ink, rather than a mid-dark one that
-/// carries white. Between [kFillBand]'s top (0.60) and this is the dead zone
+/// carries white. Between the light [fillBand]'s top (0.60) and this is the
+/// dead zone
 /// in which a fill clears neither white ink nor 3:1 against the canvas, and
 /// no fill may sit there.
 const double kLightFillMinL = 0.78;
@@ -237,19 +248,24 @@ const Set<String> kLightFillCapable = <String>{
 /// The light fills [p] actually uses: capable tokens that are opaque and at or
 /// above [kLightFillMinL]. (The default flavor's nav pill is a translucent
 /// accent wash, not a fill, and is gated separately.)
+///
+/// Always empty on a dark canvas. The exception exists because no bright fill
+/// can clear 3:1 against a LIGHT canvas; against a dark one every fill can and
+/// must, so every dark-canvas fill is gated as a dark fill.
 Map<String, Color> lightFills(AppPalette p) => <String, Color>{
       for (final MapEntry<String, Color> e in <String, Color>{
         ...fillTier(p),
         'navIndicator': p.navIndicator,
       }.entries)
-        if (kLightFillCapable.contains(e.key) &&
+        if (p.brightness == Brightness.light &&
+            kLightFillCapable.contains(e.key) &&
             e.value.a == 1.0 &&
             perceptualLightness(e.value) >= kLightFillMinL)
           e.key: e.value,
     };
 
 /// [fillTier] minus the light fills: every one of these is gated as a dark
-/// fill, on 3:1 and on [kFillBand].
+/// fill, on 3:1 and on [fillBand].
 Map<String, Color> darkFills(AppPalette p) {
   final Map<String, Color> light = lightFills(p);
   return <String, Color>{
@@ -288,7 +304,11 @@ Map<String, Color> controlBackgrounds(AppPalette p) => <String, Color>{
       'surfaceContainerHigh': p.surfaceContainerHigh,
     };
 
-String _name(AppPalette p) => p == tennisimoLight ? 'tennisimo' : 'alternate';
+String _name(AppPalette p) {
+  final String flavor =
+      p == tennisimoLight || p == tennisimoDark ? 'tennisimo' : 'alternate';
+  return '$flavor/${p.brightness.name}';
+}
 
 void main() {
   group('the maths itself', () {
@@ -341,8 +361,61 @@ void main() {
     test('there is exactly one palette per flavor', () {
       expect(kAllPalettes, hasLength(2));
       expect(kAllPalettes.toSet(), hasLength(2));
-      for (final BrandFlavorCase c in _cases) {
+      for (final BrandFlavorCase c in _lightCases) {
         expect(kAllPalettes, contains(c.palette));
+      }
+    });
+
+    test('there is exactly one web-only dark palette per flavor', () {
+      expect(kAllDarkPalettes, hasLength(2));
+      expect(kAllDarkPalettes.toSet(), hasLength(2));
+      for (final BrandFlavorCase c in _darkCases) {
+        expect(kAllDarkPalettes, contains(c.palette));
+      }
+      expect(darkPaletteFor(BrandFlavor.tennisimo), same(tennisimoDark));
+      expect(darkPaletteFor(BrandFlavor.school), same(schoolDark));
+    });
+
+    test('every dark palette is a dark canvas, and says so', () {
+      for (final AppPalette p in kAllDarkPalettes) {
+        expect(p.brightness, Brightness.dark, reason: _name(p));
+        expect(
+          perceptualLightness(p.surface),
+          lessThan(0.40),
+          reason: '${_name(p)} surface',
+        );
+      }
+    });
+
+    test('no token is reused across the two canvases', () {
+      // The lesson the dark sets were first built from: one constant on both
+      // canvases is the bug. Every accent, surface and ink is re-stepped.
+      Map<String, Color> tokens(AppPalette p) => <String, Color>{
+            ...chromaticTextTier(p),
+            ...fillTier(p),
+            ...surfaces(p),
+            'outline': p.outline,
+            'outlineVariant': p.outlineVariant,
+            'onSurface': p.onSurface,
+            'onSurfaceVariant': p.onSurfaceVariant,
+            'navIndicator': p.navIndicator,
+            for (int i = 0; i < p.chartSeries.length; i++)
+              'chartSeries[$i]': p.chartSeries[i],
+            'chartOther': p.chartOther,
+          };
+      for (final (AppPalette dark, AppPalette light) in <(
+        AppPalette,
+        AppPalette
+      )>[
+        (tennisimoDark, tennisimoLight),
+        (schoolDark, schoolLight),
+      ]) {
+        final Map<String, Color> a = tokens(dark);
+        final Map<String, Color> b = tokens(light);
+        for (final String token in a.keys) {
+          expect(a[token], isNot(b[token]),
+              reason: '${_name(dark)}: $token is the light value');
+        }
       }
     });
 
@@ -396,7 +469,8 @@ void main() {
 
       test('${c.label} — chromatic accents sit in the text lightness band',
           () {
-        const ({double min, double max}) band = kTextBand;
+        final ({double min, double max}) band =
+            textBand(c.palette.brightness);
         chromaticTextTier(c.palette).forEach((String token, Color colour) {
           final double l = perceptualLightness(colour);
           expect(l, inInclusiveRange(band.min, band.max),
@@ -424,7 +498,8 @@ void main() {
       });
 
       test('${c.label} — every dark fill sits in the fill lightness band', () {
-        const ({double min, double max}) band = kFillBand;
+        final ({double min, double max}) band =
+            fillBand(c.palette.brightness);
         darkFills(c.palette).forEach((String token, Color colour) {
           final double l = perceptualLightness(colour);
           expect(l, inInclusiveRange(band.min, band.max),
@@ -472,7 +547,7 @@ void main() {
           if (light.containsKey(token)) {
             expect(l, greaterThanOrEqualTo(kLightFillMinL));
           } else {
-            expect(l, lessThanOrEqualTo(kFillBand.max),
+            expect(l, lessThanOrEqualTo(fillBand(c.palette.brightness).max),
                 reason: '${c.label}: $token is at OKLab L '
                     '${l.toStringAsFixed(3)}');
           }
@@ -714,8 +789,13 @@ void main() {
     /// Worst pair under normal vision (the standard's Delta E 15).
     const double kSeriesNormal = 0.15;
 
-    /// The OKLCH lightness band for categorical marks on a light surface.
-    const ({double min, double max}) kSeriesBand = (min: 0.43, max: 0.77);
+    /// The OKLCH lightness band for categorical marks: the standard's band on
+    /// a light surface, and on a dark one the band that clears 3:1 against a
+    /// dark card without reaching the pastel glare at the top.
+    ({double min, double max}) seriesBand(Brightness brightness) =>
+        brightness == Brightness.dark
+            ? (min: 0.60, max: 0.88)
+            : (min: 0.43, max: 0.77);
 
     /// Below this chroma a hue reads as grey and stops carrying identity.
     const double kSeriesChroma = 0.10;
@@ -743,8 +823,8 @@ void main() {
           () {
         for (int i = 0; i < p.chartSeries.length; i++) {
           final Color s = p.chartSeries[i];
-          expect(perceptualLightness(s),
-              inInclusiveRange(kSeriesBand.min, kSeriesBand.max),
+          final ({double min, double max}) band = seriesBand(p.brightness);
+          expect(perceptualLightness(s), inInclusiveRange(band.min, band.max),
               reason: '${c.label} ${name(i)} is at L '
                   '${perceptualLightness(s).toStringAsFixed(3)}');
           expect(_chroma(s), greaterThanOrEqualTo(kSeriesChroma),
@@ -912,6 +992,28 @@ void main() {
       expect(theme.cardTheme.color, p.surfaceContainer);
       expect(theme.colorScheme.surfaceContainer, p.surfaceContainer);
     });
+
+    test('the web-only dark theme is built from the dark palette, the same way',
+        () {
+      final ThemeData theme = buildDarkAppTheme();
+      final AppPalette p = darkPaletteFor(kBrandFlavor);
+      expect(theme.brightness, Brightness.dark);
+      expect(theme.extension<AppPalette>(), same(p));
+      expect(theme.scaffoldBackgroundColor, p.surface);
+      expect(
+        theme.filledButtonTheme.style!.backgroundColor!
+            .resolve(<WidgetState>{}),
+        p.actionFill,
+      );
+      expect(
+        theme.filledButtonTheme.style!.foregroundColor!
+            .resolve(<WidgetState>{}),
+        p.onActionFill,
+      );
+      expect(theme.navigationBarTheme.indicatorColor, p.navIndicator);
+      expect(theme.cardTheme.color, p.surfaceContainer);
+      expect(theme.colorScheme.surfaceContainer, p.surfaceContainer);
+    });
   });
 
   group('the derived M3 container roles are readable', () {
@@ -956,7 +1058,18 @@ class BrandFlavorCase {
   final AppPalette palette;
 }
 
-const List<BrandFlavorCase> _cases = <BrandFlavorCase>[
+const List<BrandFlavorCase> _lightCases = <BrandFlavorCase>[
   BrandFlavorCase('default', tennisimoLight),
   BrandFlavorCase('alternate', schoolLight),
+];
+
+/// The web-only dark sets. Held to every gate the light sets are.
+const List<BrandFlavorCase> _darkCases = <BrandFlavorCase>[
+  BrandFlavorCase('default/dark', tennisimoDark),
+  BrandFlavorCase('alternate/dark', schoolDark),
+];
+
+const List<BrandFlavorCase> _cases = <BrandFlavorCase>[
+  ..._lightCases,
+  ..._darkCases,
 ];

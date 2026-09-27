@@ -11,6 +11,7 @@ import '../services/api_client.dart';
 import '../services/api_client.dart' as api
     show fetchAnalysisDetail, fetchHistory;
 import '../theme/app_theme.dart';
+import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
@@ -589,22 +590,48 @@ class _DashboardHeader extends StatelessWidget {
   }
 }
 
-/// The overflow menu: sign out. The app is light-only, so there is no theme
-/// choice to offer here.
+/// The overflow menu: the light / dark choice, then sign out.
+///
+/// The theme entries render only under a [ThemeScope], which `main.dart`
+/// installs on the web and nowhere else. On mobile, and in a widget test that
+/// mounts the dashboard on its own, this is the sign-out menu it always was.
 class _OverflowMenu extends StatelessWidget {
   const _OverflowMenu({required this.onSignOut});
 
   final Future<void> Function() onSignOut;
 
+  static const Map<ThemeMode, String> _themeLabels = <ThemeMode, String>{
+    ThemeMode.system: 'Follow system',
+    ThemeMode.light: 'Light',
+    ThemeMode.dark: 'Dark',
+  };
+
   @override
   Widget build(BuildContext context) {
+    final ThemeController? controller = ThemeScope.maybeOf(context);
+
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert),
       onSelected: (String value) {
-        if (value == 'sign_out') onSignOut();
+        if (value == 'sign_out') {
+          onSignOut();
+          return;
+        }
+        for (final ThemeMode mode in _themeLabels.keys) {
+          if (value == 'theme_${mode.name}') controller?.setMode(mode);
+        }
       },
-      itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
-        PopupMenuItem<String>(
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        if (controller != null) ...<PopupMenuEntry<String>>[
+          for (final MapEntry<ThemeMode, String> entry in _themeLabels.entries)
+            CheckedPopupMenuItem<String>(
+              value: 'theme_${entry.key.name}',
+              checked: controller.mode == entry.key,
+              child: Text(entry.value),
+            ),
+          const PopupMenuDivider(),
+        ],
+        const PopupMenuItem<String>(
           value: 'sign_out',
           child: Text('Sign out'),
         ),

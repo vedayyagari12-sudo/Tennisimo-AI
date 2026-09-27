@@ -45,7 +45,39 @@
       /* Keep overscroll from exposing the page at all, where supported. */
       overscroll-behavior: none;
     }
+    /* The same palette's dark `surface`, #0C1B2F, for a visitor whose theme
+       choice resolves to dark. Set by the script below, before first paint. */
+    html.dark-canvas, html.dark-canvas body {
+      background-color: #0C1B2F;
+    }
   </style>
+  <!--
+    The web app's light / dark choice is stored by shared_preferences in
+    localStorage as `flutter.theme_mode`, JSON-encoded: "light", "dark" or
+    "system" (absent means "system"). This reads that same entry synchronously,
+    before the body paints, so a visitor who chose dark (or follows a dark
+    system) never sees a light flash before Flutter boots. The key, the values
+    and both hexes are pinned to lib/theme/theme_controller.dart and
+    lib/theme/app_palette.dart by test/web_theme_gating_test.dart.
+  -->
+  <script>
+    (function () {
+      var mode = 'system';
+      try {
+        var raw = window.localStorage.getItem('flutter.theme_mode');
+        if (raw !== null) mode = JSON.parse(raw);
+      } catch (e) {
+        // No storage, or an unreadable value: follow the system.
+      }
+      var dark = mode === 'dark' ||
+        (mode !== 'light' && window.matchMedia &&
+          window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (!dark) return;
+      document.documentElement.className += ' dark-canvas';
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', '#0C1B2F');
+    })();
+  </script>
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">

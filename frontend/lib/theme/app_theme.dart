@@ -1,4 +1,5 @@
-/// The app's design system: one light canvas x two build-time brand flavors.
+/// The app's design system: two build-time brand flavors, each with a light
+/// canvas and a web-only dark one.
 ///
 /// The colour tokens themselves live in `app_palette.dart`, which also explains
 /// why they are a [ThemeExtension] rather than `const` globals. This file turns
@@ -11,7 +12,10 @@
 ///   cards, deep navy ink, and gold as a fill only (buttons, the nav pill, the
 ///   logo ball), always under navy ink.
 ///
-/// The app is light-only: there is no dark [ThemeData] to build.
+/// The mobile app is light-only. [buildDarkAppTheme] exists for the web app's
+/// light / dark choice and nothing else; `main.dart` and
+/// `theme_controller.dart` are the one place that decides whether it is ever
+/// attached.
 ///
 /// The score ramp is deliberately not part of either flavor's identity. See
 /// [AppPalette.scoreColor].
@@ -120,7 +124,12 @@ ColorScheme buildColorScheme(AppPalette palette) {
   );
 }
 
-/// The status-bar style for this app's one light canvas.
+/// The status-bar style for the light canvas: the mobile app's only canvas.
+///
+/// Used unconditionally, including by the web-only dark theme. That is not an
+/// oversight: this style only means anything to a native status bar, and the
+/// dark theme is only ever attached on web, which has none. On mobile the
+/// canvas is always light, so this is always the right answer there.
 ///
 /// This must be stated explicitly, and it must NOT be keyed to a brightness
 /// the framework works out for itself. The app bar is deliberately
@@ -178,17 +187,23 @@ TextTheme _textTheme(TextTheme base) {
   );
 }
 
-/// The app theme. There is exactly one, and it is light: `main.dart` hands it
-/// to [MaterialApp.theme] and supplies no [MaterialApp.darkTheme], so a dark
-/// canvas is not something the framework can choose.
+/// The light app theme.
+///
+/// `main.dart` hands the light theme to [MaterialApp.theme]; on mobile it
+/// supplies no [MaterialApp.darkTheme], so a dark canvas is not something the
+/// framework can choose there.
 ///
 /// The palette travels with the theme as a [ThemeExtension], which is what
 /// makes every widget that read a token pick up a theme change.
-ThemeData buildAppTheme() {
-  final AppPalette palette = paletteFor(kBrandFlavor);
+ThemeData buildAppTheme() => _buildTheme(paletteFor(kBrandFlavor));
+
+/// The web-only dark theme for the compiled flavor.
+ThemeData buildDarkAppTheme() => _buildTheme(darkPaletteFor(kBrandFlavor));
+
+ThemeData _buildTheme(AppPalette palette) {
   final ThemeData base = ThemeData(
     useMaterial3: true,
-    brightness: Brightness.light,
+    brightness: palette.brightness,
   );
   final ColorScheme scheme = buildColorScheme(palette);
 

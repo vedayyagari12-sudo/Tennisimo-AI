@@ -8,7 +8,10 @@
 /// flutter test test/review/dashboard_render_review.dart --dart-define=BRAND=school
 /// ```
 ///
-/// Images land in `build/dashboard_review/<flavor>/`, which is gitignored.
+/// Every render is made twice: on the light canvas, and on the web-only dark
+/// canvas, both through `resolveAppTheme(isWeb: true, ...)` so the dark images
+/// are exactly what the web app attaches. Images land in
+/// `build/dashboard_review/<flavor>/<light|dark>/`, which is gitignored.
 /// There are no golden comparisons here on purpose: glyph rasterisation
 /// differs between Windows and Linux, so a golden generated on one fails on
 /// the other for reasons unrelated to layout. Regression protection is the
@@ -30,9 +33,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
+import 'package:tennisimo_ai/screens/login_screen.dart';
 import 'package:tennisimo_ai/screens/results_screen.dart';
-import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/theme/brand.dart';
+import 'package:tennisimo_ai/theme/theme_controller.dart';
 
 import '../support/dashboard_fixtures.dart';
 
@@ -113,18 +117,33 @@ Widget _navBar(ColorScheme scheme) => NavigationBar(
 
 final GlobalKey _boundary = GlobalKey();
 
-Future<void> _pump(WidgetTester tester, Widget home, Size size) async {
+/// The canvas being rendered, set per test by [main]'s loop.
+ThemeMode _mode = ThemeMode.light;
+
+/// Only the theme-menu render passes a controller, so the web-only entries
+/// are drawn; every other render is the plain screen.
+Future<void> _pump(
+  WidgetTester tester,
+  Widget home,
+  Size size, {
+  ThemeController? controller,
+}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
-  final ThemeData theme = buildAppTheme();
+  final AppThemeConfig config = resolveAppTheme(isWeb: true, requested: _mode);
+  final Widget app = MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: config.theme,
+    darkTheme: config.darkTheme,
+    themeMode: config.themeMode,
+    home: home,
+  );
   await tester.pumpWidget(
     RepaintBoundary(
       key: _boundary,
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: theme,
-        home: home,
-      ),
+      child: controller == null
+          ? app
+          : ThemeScope(controller: controller, child: app),
     ),
   );
   // Let the fake futures resolve and every entrance animation finish.
@@ -191,10 +210,17 @@ Future<bool> _growToFit(WidgetTester tester, Widget home, Size start) async {
 }
 
 void main() {
-  final String out = 'build/dashboard_review/${kBrandFlavor.flag}';
-
   setUpAll(_loadFonts);
 
+  for (final ThemeMode mode in <ThemeMode>[ThemeMode.light, ThemeMode.dark]) {
+    group(mode.name, () {
+      setUp(() => _mode = mode);
+      _renders('build/dashboard_review/${kBrandFlavor.flag}/${mode.name}');
+    });
+  }
+}
+
+void _renders(String out) {
   for (final DashboardFixture fixture in allFixtures()) {
     for (final MapEntry<String, Size> viewport in _viewports.entries) {
       testWidgets('render ${fixture.name} ${viewport.key}', (
@@ -254,4 +280,49 @@ void main() {
       await _save(tester, '$out/results_serve_${viewport.key}_full.png', 1);
     });
   }
+
+  testWidgets('render login screen', (WidgetTester tester) async {
+    addTearDown(tester.view.reset);
+    await _pump(tester, const LoginScreen(), const Size(412, 915));
+    expect(tester.takeException(), isNull);
+    await _save(tester, '$out/login_412.png', 2);
+  });
+
+  // The web-only theme entries, open, as a web user sees them.
+  testWidgets('render the overflow menu with the theme choice', (
+    WidgetTester tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    final ThemeController controller = ThemeController(
+      store: const _NoStore(),
+    );
+    await controller.setMode(_mode);
+    await _pump(
+      tester,
+      Scaffold(
+        body: DashboardScreen(
+          dataSource: forehandOnly().source,
+          onSeeAllHistory: () {},
+        ),
+      ),
+      const Size(412, 915),
+      controller: controller,
+    );
+    await tester.tap(find.byIcon(Icons.more_vert));
+    for (int i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await _save(tester, '$out/theme_menu_412.png', 2);
+  });
+}
+
+/// The review tool never persists anything.
+class _NoStore implements ThemeModeStore {
+  const _NoStore();
+
+  @override
+  Future<ThemeMode?> read() async => null;
+
+  @override
+  Future<void> write(ThemeMode mode) async {}
 }

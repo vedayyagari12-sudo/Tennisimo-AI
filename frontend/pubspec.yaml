@@ -16,6 +16,9 @@ dependencies:
   camera: ^0.11.0
   file_picker: ^13.1.0
   video_player: ^2.11.1
+  # Web theme choice only. Already transitive via supabase_flutter; its Android
+  # plugin declares no permissions.
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
