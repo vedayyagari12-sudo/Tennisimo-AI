@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Native-side colours. These are NOT theme tokens and cannot be: they are read
+  by the OS before any Dart runs, so the brand flavor (a dart-define) is not
+  known yet. They are kept in one file so the two places the OS paints before
+  Flutter's first frame — the launcher icon mask and the splash — are edited
+  together.
+-->
+<resources>
+    <!--
+      The backdrop already baked into ic_launcher.png, restated so the
+      adaptive icon's background layer meets the inset foreground with no
+      visible seam.
+    -->
+    <color name="ic_launcher_background">#0E1512</color>
+
+    <!--
+      The app canvas of the shipping flavor (AppPalette.tennisimoLight.surface,
+      #F6F0EA). The splash used plain white, which flashed against the tan the
+      app draws a frame later. The alternate flavor's canvas is a different
+      near-white, so this cannot be exact for both; it is set to the one that
+      ships.
+    -->
+    <color name="launch_background">#F6F0EA</color>
+</resources>

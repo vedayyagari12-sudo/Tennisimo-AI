@@ -33,6 +33,9 @@ class ScoreRing extends StatelessWidget {
   /// Difference against the previous session. Rendered as "+4.2 vs last".
   final double? delta;
 
+  /// Ceiling on the system font scale INSIDE the ring. See [build].
+  static const double _maxNumeralScale = 1.3;
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -61,56 +64,66 @@ class ScoreRing extends StatelessWidget {
               : theme.colorScheme.error),
     );
 
-    return SizedBox(
-      width: size,
-      height: size,
-      child: TweenAnimationBuilder<double>(
-        // Keyed on the value so a NEW score re-runs the sweep from zero
-        // instead of silently swapping the numeral.
-        key: ValueKey<double?>(value),
-        tween: Tween<double>(begin: 0.0, end: target),
-        duration: duration,
-        curve: kEnterCurve,
-        builder: (BuildContext context, double shown, Widget? child) {
-          final double progress = (shown / 100).clamp(0.0, 1.0).toDouble();
-          return CustomPaint(
-            painter: _ScoreRingPainter(
-              progress: progress,
-              arcColor: arcColor,
-              trackColor: theme.colorScheme.surfaceContainerHigh,
-              dashedTrackColor: theme.colorScheme.outline,
-              strokeWidth: strokeWidth,
-              // No measurable score -> no arc at all, just a dashed track.
-              dashed: value == null,
-            ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(
-                    // Never "0" for a null score. For a real one the numeral
-                    // counts up on the same curve the arc sweeps on, so the
-                    // digits and the arc can never disagree.
-                    value == null
-                        ? '—'
-                        : shown.round().toString(),
-                    style: theme.textTheme.displaySmall?.copyWith(
-                      fontSize: size * 0.30,
-                      height: 1.0,
-                      color: value == null
-                          ? theme.colorScheme.onSurfaceVariant
-                          : theme.colorScheme.onSurface,
-                      fontFeatures: kTabularFigures,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  child!,
-                ],
+    // The ring is a fixed-geometry graphic: the numeral is already sized off
+    // the diameter (0.30 of it — around 40pt on the hero), so the system font
+    // scale is applied to something that is display-sized to begin with. Left
+    // unclamped it bursts the circle: at 2.0x the numeral and its caption
+    // overflowed a 132dp ring by 47px. Clamped to 1.3x the numeral still grows
+    // with the setting and still fits, and the caption underneath is free to
+    // wrap to two lines inside the ring.
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: _maxNumeralScale,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: TweenAnimationBuilder<double>(
+          // Keyed on the value so a NEW score re-runs the sweep from zero
+          // instead of silently swapping the numeral.
+          key: ValueKey<double?>(value),
+          tween: Tween<double>(begin: 0.0, end: target),
+          duration: duration,
+          curve: kEnterCurve,
+          builder: (BuildContext context, double shown, Widget? child) {
+            final double progress = (shown / 100).clamp(0.0, 1.0).toDouble();
+            return CustomPaint(
+              painter: _ScoreRingPainter(
+                progress: progress,
+                arcColor: arcColor,
+                trackColor: theme.colorScheme.surfaceContainerHigh,
+                dashedTrackColor: theme.colorScheme.outline,
+                strokeWidth: strokeWidth,
+                // No measurable score -> no arc at all, just a dashed track.
+                dashed: value == null,
               ),
-            ),
-          );
-        },
-        child: caption,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      // Never "0" for a null score. For a real one the numeral
+                      // counts up on the same curve the arc sweeps on, so the
+                      // digits and the arc can never disagree.
+                      value == null
+                          ? '—'
+                          : shown.round().toString(),
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        fontSize: size * 0.30,
+                        height: 1.0,
+                        color: value == null
+                            ? theme.colorScheme.onSurfaceVariant
+                            : theme.colorScheme.onSurface,
+                        fontFeatures: kTabularFigures,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    child!,
+                  ],
+                ),
+              ),
+            );
+          },
+          child: caption,
+        ),
       ),
     );
   }

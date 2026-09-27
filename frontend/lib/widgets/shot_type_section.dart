@@ -107,10 +107,13 @@ class ShotTypeSection extends StatelessWidget {
           ),
         ),
         const SizedBox(width: AppSpacing.sm),
-        Text(
-          '${insight.sessions} ${insight.sessions == 1 ? 'clip' : 'clips'}',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        Flexible(
+          child: Text(
+            '${insight.sessions} ${insight.sessions == 1 ? 'clip' : 'clips'}',
+            textAlign: TextAlign.end,
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
         ),
       ],
     );
@@ -185,7 +188,9 @@ class ShotTypeSection extends StatelessWidget {
       const SizedBox(height: AppSpacing.sm),
       // Small multiples: five one-series panels on a shared form, rather than
       // five coloured lines in one frame. No categorical palette is needed and
-      // none is invented.
+      // none is invented. They take the DEFAULT panel height — a shorter one
+      // here squashed a 12px marker into 22px of plot band and made the tap
+      // target for point interrogation smaller than a fingertip.
       LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
           final bool twoUp = constraints.maxWidth >= 300;
@@ -202,7 +207,6 @@ class ShotTypeSection extends StatelessWidget {
                   child: MiniTrend(
                     title: trend.displayName,
                     points: trend.points,
-                    height: 34,
                   ),
                 ),
             ],
@@ -262,10 +266,15 @@ class ShotTypeBlankCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.sm),
-          Text(
-            'Not recorded yet',
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          // Flexible: at a 2.0x font scale "Not recorded yet" is wider than a
+          // 320dp card on its own, so it has to be allowed to wrap.
+          Flexible(
+            child: Text(
+              'Not recorded yet',
+              textAlign: TextAlign.end,
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
           ),
         ],
       ),

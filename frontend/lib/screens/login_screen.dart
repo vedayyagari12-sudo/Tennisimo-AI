@@ -249,9 +249,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   Center(
                     child: TextButton(
                       onPressed: _busy ? null : _toggleMode,
-                      child: Text(signUp
-                          ? 'Already have an account? Sign in'
-                          : 'New here? Create an account'),
+                      // Centred, not just centred-as-a-box: at a 2.0x font
+                      // scale this label wraps to two lines and without this
+                      // the second line hung left under a centred first.
+                      child: Text(
+                        signUp
+                            ? 'Already have an account? Sign in'
+                            : 'New here? Create an account',
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ),
                   if (_notice != null) ...<Widget>[

@@ -31,8 +31,10 @@ class SectionHeader extends StatelessWidget {
             TextButton(
               onPressed: onAction,
               style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 32),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                // 44dp is the smallest comfortable touch target; 32 was
+                // below it, and this is the only control on the row.
+                minimumSize: const Size(64, 44),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               child: Text(label),

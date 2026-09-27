@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Without this the launcher had no adaptive icon at all on Android 8+, so the
+  square ic_launcher.png was letterboxed inside the system's white circle
+  badge — a small dark square floating in a ring, next to a drawer of icons
+  that all fill their mask. The Android 12+ splash screen showed the same raw
+  square.
+
+  The foreground is the existing artwork inset to the 66dp safe zone of the
+  108dp adaptive canvas, over a background of the colour the artwork already
+  had, so the mask sees one continuous field whatever shape the launcher cuts.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground>
+        <inset
+            android:drawable="@mipmap/ic_launcher_foreground"
+            android:inset="18%" />
+    </foreground>
+</adaptive-icon>

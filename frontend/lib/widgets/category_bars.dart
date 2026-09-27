@@ -56,15 +56,22 @@ class _CategoryBar extends StatelessWidget {
               ),
             ),
             const SizedBox(width: AppSpacing.md),
-            Text(
-              score == null ? 'Not measured' : score.round().toString(),
-              style: score == null
-                  ? theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
-                  : theme.textTheme.titleMedium?.copyWith(
-                      color: numeralColour,
-                      fontFeatures: kTabularFigures,
-                    ),
+            // Flexible, not a bare Text: "Not measured" is three times the
+            // width of a numeral and at a 2.0x font scale it walked straight
+            // off a 320dp row. It wraps rather than ellipsises — half of the
+            // word "measured" would read as a truncated number.
+            Flexible(
+              child: Text(
+                score == null ? 'Not measured' : score.round().toString(),
+                textAlign: TextAlign.end,
+                style: score == null
+                    ? theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
+                    : theme.textTheme.titleMedium?.copyWith(
+                        color: numeralColour,
+                        fontFeatures: kTabularFigures,
+                      ),
+              ),
             ),
           ],
         ),

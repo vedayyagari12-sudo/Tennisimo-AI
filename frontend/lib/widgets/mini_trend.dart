@@ -42,7 +42,7 @@ class MiniTrend extends StatefulWidget {
     required this.title,
     required this.points,
     this.unit,
-    this.height = 40,
+    this.height = 44,
     this.emptyMessage = 'Not measured',
   });
 
@@ -55,6 +55,11 @@ class MiniTrend extends StatefulWidget {
   /// Appended to the direct label, e.g. `mph`.
   final String? unit;
 
+  /// Height of the plot band, in logical pixels.
+  ///
+  /// 44 is a floor rather than a taste: the plot is the tap target for point
+  /// interrogation, and 6px of inset top and bottom plus a 12px marker leave
+  /// only 32px of usable amplitude even at this height.
   final double height;
 
   /// Shown instead of a chart when nothing in [points] was measured.
@@ -215,7 +220,13 @@ class MiniTrendPainter extends CustomPainter {
   final Color baselineColor;
   final Color dotFill;
 
-  /// Horizontal breathing room so the end markers are not clipped.
+  /// Breathing room on every edge so the end markers are not clipped.
+  ///
+  /// It has to be at least the marker's outer radius — 5px of fill plus a 2px
+  /// stroke centred on that edge, so 6 — in BOTH axes. It used to be 6
+  /// horizontally and 5 vertically, which shaved a pixel off the top of a
+  /// marker sitting on the series maximum and off the bottom of one sitting on
+  /// the minimum: exactly the two points a reader looks at.
   static const double inset = 6;
 
   @override
@@ -224,8 +235,8 @@ class MiniTrendPainter extends CustomPainter {
 
     final double left = inset;
     final double right = size.width - inset;
-    final double top = 5;
-    final double bottom = size.height - 5;
+    final double top = inset;
+    final double bottom = size.height - inset;
     if (right <= left || bottom <= top) return;
 
     double lo = values.reduce((double a, double b) => a < b ? a : b);
