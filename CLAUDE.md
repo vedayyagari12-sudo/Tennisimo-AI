@@ -64,6 +64,19 @@ frontend/
   `NSMicrophoneUsageDescription` reverted in `b2163ee`: that one had no code
   path using it at all, which is what made it a store-review liability rather
   than the cost of a needed feature.
-- UNRESOLVED: `RECORD_AUDIO` still merges into the APK from
-  `camera_android_camerax`'s own manifest despite `b2163ee`. Fully stripping it
-  would need `tools:node="remove"`. Recorded as a known issue, not a decision.
+- RESOLVED: the app declares only `CAMERA`, yet plugins merged in three
+  permissions it never uses. Each is now stripped with `tools:node="remove"`
+  in `android/app/src/main/AndroidManifest.xml`, which documents why each is
+  safe to drop:
+  - `RECORD_AUDIO` -- from `camera_android_camerax`; `enableAudio: false`
+    means it is never requested.
+  - `WRITE_EXTERNAL_STORAGE` (maxSdk 28) -- from camerax; captures go to
+    `getCacheDir()`, which needs no permission.
+  - `READ_EXTERNAL_STORAGE` -- declared by NO plugin. The manifest merger
+    IMPLIES it from camerax's WRITE, and the implied copy loses the maxSdk 28
+    scope, widening it to every Android version up to 12. `android_file_picker`
+    uses the Storage Access Framework and needs no storage permission.
+  The shipped permission set is INTERNET, CAMERA, ACCESS_NETWORK_STATE,
+  WAKE_LOCK -- CAMERA the only dangerous one. Always verify against the
+  MERGED manifest in `build/`, never the source manifest alone: the source
+  file said "RECORD_AUDIO is not declared" the whole time it was shipping.
