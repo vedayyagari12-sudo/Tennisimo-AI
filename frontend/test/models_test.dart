@@ -118,7 +118,7 @@ void main() {
   });
 
   group('MetricScore', () {
-    test('null value renders as not measurable, never zero', () {
+    test('null value renders as not measured, never zero', () {
       final MetricScore metric = MetricScore.fromJson(<String, dynamic>{
         'name': 'wrist_lag_deg',
         'value': null,
@@ -127,8 +127,10 @@ void main() {
       });
       expect(metric.value, isNull);
       expect(metric.isMeasurable, isFalse);
-      expect(metric.displayValue, 'not measurable in this clip');
+      expect(metric.displayValue, 'not measured');
       expect(metric.displayValue, isNot(contains('0')));
+      // A null cannot say WHY it is null, so it must not blame the clip.
+      expect(metric.displayValue, isNot(contains('clip')));
     });
 
     test('missing optional fields do not throw', () {
@@ -426,8 +428,7 @@ void main() {
         },
       });
       expect(analysis.status, AnalysisStatus.partial);
-      expect(analysis.metrics.single.displayValue,
-          'not measurable in this clip');
+      expect(analysis.metrics.single.displayValue, 'not measured');
     });
 
     test('an empty payload parses without throwing', () {

@@ -67,10 +67,14 @@ class MetricScore {
     return cleaned[0].toUpperCase() + cleaned.substring(1);
   }
 
-  /// Formatted value, or the not-measurable wording. Never "0" for null.
+  /// Formatted value, or the not-measured wording. Never "0" for null.
+  ///
+  /// Neutral on purpose: a null can mean this clip hid the metric OR that
+  /// the pipeline never measures it, and the payload cannot tell the two
+  /// apart. "in this clip" would blame the clip for the second case.
   String get displayValue {
     final double? v = value;
-    if (v == null) return 'not measurable in this clip';
+    if (v == null) return 'not measured';
     final String number = (v.abs() >= 100 ? v.toStringAsFixed(0) : v.toStringAsFixed(1));
     return '$number${unit.suffix}';
   }

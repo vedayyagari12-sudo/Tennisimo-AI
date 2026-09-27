@@ -16,6 +16,7 @@ import 'package:tennisimo_ai/models/analysis_response.dart';
 import 'package:tennisimo_ai/models/dashboard_insights.dart';
 import 'package:tennisimo_ai/models/enums.dart';
 import 'package:tennisimo_ai/screens/home_shell.dart';
+import 'package:tennisimo_ai/screens/results_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/widgets/app_card.dart';
 import 'package:tennisimo_ai/widgets/category_bars.dart';
@@ -26,6 +27,8 @@ import 'package:tennisimo_ai/widgets/mini_trend.dart';
 import 'package:tennisimo_ai/widgets/score_ring.dart';
 import 'package:tennisimo_ai/widgets/section_header.dart';
 import 'package:tennisimo_ai/widgets/shot_type_section.dart';
+
+import 'support/dashboard_fixtures.dart';
 
 /// Logical sizes, named. The physical size is derived with a DPR of 1 so the
 /// numbers below ARE logical pixels.
@@ -206,6 +209,7 @@ void main() {
   );
 
   _painterGeometryTests();
+  _resultsScreenTests();
 
   forEveryViewport(
     'a mini trend on its own',
@@ -257,4 +261,66 @@ void _painterGeometryTests() {
       expect(c.centre.dx + ink, lessThanOrEqualTo(panel.width));
     }
   });
+}
+
+/// The whole results screen, scrolled end to end, with the measurements
+/// expander both closed (the default) and open. The list is lazy, so every
+/// screenful is built and checked in turn rather than just the first.
+void _resultsScreenTests() {
+  Future<void> scrollToEnd(WidgetTester tester) async {
+    final Finder list = find.byType(Scrollable).first;
+    for (int i = 0; i < 200; i++) {
+      final ScrollableState state = tester.state(list);
+      if (state.position.pixels >= state.position.maxScrollExtent) break;
+      await tester.drag(list, const Offset(0, -300));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    }
+  }
+
+  for (final bool expanded in <bool>[false, true]) {
+    final String state = expanded ? 'expanded' : 'collapsed';
+    for (final MapEntry<String, Size> viewport in kViewports.entries) {
+      for (final double scale in kTextScales) {
+        testWidgets(
+            'the results screen, measurements $state — '
+            '${viewport.key} @ ${scale}x', (WidgetTester tester) async {
+          tester.view.physicalSize = viewport.value;
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.reset);
+          // The densest fixture swing: feedback with strengths and three
+          // improvements, ball speed, five categories, and null metrics.
+          final AnalysisResponse analysis =
+              forehandOnly().source.details['fh0']!;
+
+          await tester.pumpWidget(MaterialApp(
+            theme: buildAppTheme(),
+            home: Builder(
+              builder: (BuildContext context) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: ResultsScreen(analysis: analysis),
+              ),
+            ),
+          ));
+          await tester.pump();
+          expect(tester.takeException(), isNull);
+
+          if (expanded) {
+            final Finder toggle = find.text('See all measurements');
+            await tester.scrollUntilVisible(toggle, 300,
+                scrollable: find.byType(Scrollable).first);
+            await tester.ensureVisible(toggle);
+            await tester.pumpAndSettle();
+            await tester.tap(toggle);
+            await tester.pumpAndSettle();
+            expect(tester.takeException(), isNull);
+            expect(find.text('Shoulder turn'), findsOneWidget);
+          }
+
+          await scrollToEnd(tester);
+        });
+      }
+    }
+  }
 }

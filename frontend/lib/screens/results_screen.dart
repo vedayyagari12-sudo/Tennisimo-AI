@@ -58,6 +58,16 @@ class ResultsScreen extends StatelessWidget {
             ],
             _ShotHeader(analysis: analysis),
             const SizedBox(height: 16),
+            // The plain "do this" bullets lead: they are written for a
+            // beginner, and they come from the rule table, so they are here
+            // whether or not the AI feedback below arrived.
+            if (notes.isNotEmpty) ...<Widget>[
+              _SectionCard(
+                title: 'Swing notes',
+                child: SwingAdviceList(bullets: notes),
+              ),
+              const SizedBox(height: 16),
+            ],
             if (feedback != null && feedback.summary.isNotEmpty) ...<Widget>[
               _SectionCard(
                 title: 'Coach summary',
@@ -66,7 +76,14 @@ class ResultsScreen extends StatelessWidget {
               const SizedBox(height: 16),
             ],
             ..._buildBallSpeed(context),
-            if (feedback != null && feedback.strengths.isNotEmpty) ...<Widget>[
+            // A strength is said once. When the swing notes already praise
+            // something, they are the source: deterministic, tied to a
+            // measured number, and never a template fallback. The AI's own
+            // list only appears when the notes have nothing good to say, so
+            // a swing is never left without a single positive.
+            if (feedback != null &&
+                feedback.strengths.isNotEmpty &&
+                !notes.any((AdviceBullet b) => b.isPraise)) ...<Widget>[
               _SectionCard(
                 title: 'What is working',
                 child: Column(
@@ -75,13 +92,6 @@ class ResultsScreen extends StatelessWidget {
                       .map((String s) => _Bullet(text: s))
                       .toList(),
                 ),
-              ),
-              const SizedBox(height: 16),
-            ],
-            if (notes.isNotEmpty) ...<Widget>[
-              _SectionCard(
-                title: 'Swing notes',
-                child: SwingAdviceList(bullets: notes),
               ),
               const SizedBox(height: 16),
             ],
@@ -97,7 +107,8 @@ class ResultsScreen extends StatelessWidget {
             // are the breakdown of the overall score shown in the header above,
             // so they read as the "why" of that number, and the metric list
             // below is the detail behind them. It does not replace the metric
-            // list.
+            // list. The metric list itself is closed by default: its raw
+            // torso-unit figures are for advanced players, not a beginner.
             _CategoriesSection(categories: analysis.categories),
             if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
             _MetricsSection(metrics: analysis.metrics),
@@ -492,6 +503,10 @@ class _CategoryRow extends StatelessWidget {
   }
 }
 
+/// Every raw measurement, behind an expander that starts closed.
+///
+/// Nothing is dropped: opening it shows the full list exactly as before. It
+/// is collapsed so a beginner is not met with a page of torso-unit figures.
 class _MetricsSection extends StatelessWidget {
   const _MetricsSection({required this.metrics});
 
@@ -500,10 +515,18 @@ class _MetricsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (metrics.isEmpty) return const SizedBox.shrink();
-    return _SectionCard(
-      title: 'Metrics',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final ThemeData theme = Theme.of(context);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        // The card already draws the outline; no extra lines when open.
+        shape: const Border(),
+        collapsedShape: const Border(),
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        title: Text('See all measurements',
+            style: theme.textTheme.titleMedium),
         children: <Widget>[
           for (int i = 0; i < metrics.length; i++) ...<Widget>[
             if (i > 0) const Divider(height: 24),
@@ -529,6 +552,9 @@ class _MetricRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Row(
+          // Pushes the value to the right edge: a Flexible value leaves its
+          // unused share as free space, which goes between the two.
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Expanded(
@@ -536,28 +562,32 @@ class _MetricRow extends StatelessWidget {
                   style: theme.textTheme.titleSmall),
             ),
             const SizedBox(width: 12),
-            Text(
-              metric.displayValue,
-              style: metric.isMeasurable
-                  ? theme.textTheme.titleSmall
-                  : theme.textTheme.bodySmall,
+            // Flexible so a long value at large text wraps instead of
+            // overflowing a narrow phone now the list can be opened there.
+            Flexible(
+              child: Text(
+                metric.displayValue,
+                textAlign: TextAlign.end,
+                style: metric.isMeasurable
+                    ? theme.textTheme.titleSmall
+                    : theme.textTheme.bodySmall,
+              ),
             ),
           ],
         ),
         const SizedBox(height: 4),
-        Row(
-          children: <Widget>[
-            Text(metric.verdict.label, style: theme.textTheme.bodySmall),
-            if (band != null) ...<Widget>[
-              Text(' · ', style: theme.textTheme.bodySmall),
-              Text('reference $band', style: theme.textTheme.bodySmall),
-            ],
-            if (metric.viewSensitive) ...<Widget>[
-              Text(' · ', style: theme.textTheme.bodySmall),
-              Text('camera-angle sensitive',
-                  style: theme.textTheme.bodySmall),
-            ],
-          ],
+        // One wrapping line rather than a Row of fixed pieces, so it cannot
+        // overflow a narrow phone at large text. The verdict is left out for
+        // an unmeasured value: the value already says "not measured".
+        Text(
+          <String>[
+            if (metric.isMeasurable ||
+                metric.verdict != MetricVerdict.unavailable)
+              metric.verdict.label,
+            if (band != null) 'reference $band',
+            if (metric.viewSensitive) 'camera-angle sensitive',
+          ].join(' · '),
+          style: theme.textTheme.bodySmall,
         ),
         if (metric.hasIdealBand) ...<Widget>[
           const SizedBox(height: 8),
