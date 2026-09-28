@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description"
+        content="Analyse your tennis swing from a phone video.">
+
+  <!--
+    Pre-boot chrome, and the page behind the Flutter canvas. A static file
+    cannot read a --dart-define, so this matches the canvas of the build these
+    files actually serve: the web build, which is built with the alternate
+    palette (`--dart-define=BRAND=school`, see README.md). It is that
+    palette's `surface`, #D6E8F5, exactly (OKLab dE 0). Painting it here,
+    before flutter_bootstrap.js runs, is what stops the browser flashing its
+    default white canvas on first paint.
+
+    THIS MUST TRACK THE APP'S SURFACE. It was a near-black (#0E1415) while the
+    app was dark, and stayed that way when the app went light-only -- which
+    showed up as a black band on overscroll, because this page is what is
+    behind the canvas when the user scrolls past the top.
+  -->
+  <meta name="theme-color" content="#D6E8F5">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background-color: #D6E8F5;
+      /* Keep overscroll from exposing the page at all, where supported. */
+      overscroll-behavior: none;
+    }
+    /* The same palette's dark `surface`, #02040A, for a visitor whose theme
+       choice resolves to dark. Set by the script below, before first paint. */
+    html.dark-canvas, html.dark-canvas body {
+      background-color: #02040A;
+    }
+  </style>
+  <!--
+    The web app's light / dark choice is stored by shared_preferences in
+    localStorage as `flutter.theme_mode`, JSON-encoded: "light", "dark" or
+    "system" (absent means "system"). This reads that same entry synchronously,
+    before the body paints, so a visitor who chose dark (or follows a dark
+    system) never sees a light flash before Flutter boots. The key, the values
+    and both hexes are pinned to lib/theme/theme_controller.dart and
+    lib/theme/app_palette.dart by test/web_theme_gating_test.dart.
+  -->
+  <script>
+    (function () {
+      var mode = 'system';
+      try {
+        var raw = window.localStorage.getItem('flutter.theme_mode');
+        if (raw !== null) mode = JSON.parse(raw);
+      } catch (e) {
+        // No storage, or an unreadable value: follow the system.
+      }
+      var dark = mode === 'dark' ||
+        (mode !== 'light' && window.matchMedia &&
+          window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (!dark) return;
+      document.documentElement.className += ' dark-canvas';
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', '#02040A');
+    })();
+  </script>
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Tennisimo AI">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>Tennisimo AI</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
