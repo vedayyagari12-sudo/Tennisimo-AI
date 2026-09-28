@@ -101,7 +101,14 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.scoreLowFill,
     required this.chartSeries,
     required this.chartOther,
-  });
+    Color? recordAction,
+    Color? onRecordAction,
+    Color? comparisonCurrent,
+    Color? comparisonAverage,
+  }) : _recordAction = recordAction,
+       _onRecordAction = onRecordAction,
+       _comparisonCurrent = comparisonCurrent,
+       _comparisonAverage = comparisonAverage;
 
   /// The canvas this set was stepped against. Never inferred from a colour.
   final Brightness brightness;
@@ -199,7 +206,9 @@ class AppPalette extends ThemeExtension<AppPalette> {
   ///
   /// Slot 0 is always "this swing" and slot 1 always the thing it is compared
   /// with (the previous swing, or the player's average), so one colour means
-  /// one thing everywhere it appears.
+  /// one thing everywhere it appears. The comparison bars read their own pair,
+  /// [comparisonCurrent] and [comparisonAverage], which fall back to these two
+  /// slots.
   ///
   /// Never used for text: labels, values and legends wear the ink tokens and
   /// sit BESIDE a swatch of the series colour. Never green / amber / red
@@ -210,6 +219,34 @@ class AppPalette extends ThemeExtension<AppPalette> {
   /// The de-emphasised "Other" slice of a part-to-whole chart: a neutral that
   /// reads as "the rest", clear of every [chartSeries] slot it can touch.
   final Color chartOther;
+
+  final Color? _recordAction;
+  final Color? _onRecordAction;
+  final Color? _comparisonCurrent;
+  final Color? _comparisonAverage;
+
+  /// The face of the Record destination in the navigation bar: the one filled
+  /// square in the bar. Its own role, not [primary], because [primary] is
+  /// also the ink of links and trend text, which must not turn green with it.
+  ///
+  /// A set that does not name one keeps the face it has always had,
+  /// [primary].
+  Color get recordAction => _recordAction ?? primary;
+
+  /// The camera icon on [recordAction]. Gated at WCAG 4.5:1 on it. Defaults
+  /// to [onPrimary], alongside [recordAction]'s default.
+  Color get onRecordAction => _onRecordAction ?? onPrimary;
+
+  /// The "latest clip" bar of the comparison bars.
+  ///
+  /// Its own role rather than [chartSeries] slot 0, so the bars can be
+  /// recoloured without moving the radar or the donut, which keep reading the
+  /// shared series. A set that does not name one keeps slot 0.
+  Color get comparisonCurrent => _comparisonCurrent ?? chartSeries[0];
+
+  /// The "your average" bar of the comparison bars. Defaults to
+  /// [chartSeries] slot 1, for the same reason as [comparisonCurrent].
+  Color get comparisonAverage => _comparisonAverage ?? chartSeries[1];
 
   /// The score -> text colour ramp.
   ///
@@ -271,6 +308,10 @@ class AppPalette extends ThemeExtension<AppPalette> {
     Color? scoreLowFill,
     List<Color>? chartSeries,
     Color? chartOther,
+    Color? recordAction,
+    Color? onRecordAction,
+    Color? comparisonCurrent,
+    Color? comparisonAverage,
   }) {
     return AppPalette(
       brightness: brightness ?? this.brightness,
@@ -308,6 +349,10 @@ class AppPalette extends ThemeExtension<AppPalette> {
       scoreLowFill: scoreLowFill ?? this.scoreLowFill,
       chartSeries: chartSeries ?? this.chartSeries,
       chartOther: chartOther ?? this.chartOther,
+      recordAction: recordAction ?? _recordAction,
+      onRecordAction: onRecordAction ?? _onRecordAction,
+      comparisonCurrent: comparisonCurrent ?? _comparisonCurrent,
+      comparisonAverage: comparisonAverage ?? _comparisonAverage,
     );
   }
 
@@ -359,6 +404,10 @@ class AppPalette extends ThemeExtension<AppPalette> {
               : chartSeries[i],
       ],
       chartOther: c(chartOther, other.chartOther),
+      recordAction: c(recordAction, other.recordAction),
+      onRecordAction: c(onRecordAction, other.onRecordAction),
+      comparisonCurrent: c(comparisonCurrent, other.comparisonCurrent),
+      comparisonAverage: c(comparisonAverage, other.comparisonAverage),
     );
   }
 }
@@ -503,6 +552,21 @@ const AppPalette schoolLight = AppPalette(
   // A WARM grey on purpose: a cool slate collapses into the royal-blue slot
   // it borders under tritanopia.
   chartOther: Color(0xFF766E67),
+  // A go-green Record face (OKLCh L 0.54, C 0.13, hue 151) under white:
+  // 4.7:1 for the icon, and 4.7:1 against the white nav bar (3.6:1 against
+  // the darkest surface). As light a green as white ink allows, because
+  // lightness is what keeps it clear of the amber and red score fills under
+  // red-green deficiency.
+  recordAction: Color(0xFF1D8545),
+  onRecordAction: Color(0xFFFFFFFF),
+  // The comparison bars: a royal blue for the latest clip and a light pink
+  // (L 0.69) for the average, in place of the old gold. The pink is the
+  // lightest that still clears 3:1 on the white card. The blue is slot 0's
+  // lifted a step (L 0.56 to 0.61): at slot 0's own lightness it falls to
+  // 0.050 from the green score fill under tritanopia, and these bars share a
+  // card with the score bars.
+  comparisonCurrent: Color(0xFF1D7FF7),
+  comparisonAverage: Color(0xFFE766A1),
 );
 
 // ---------------------------------------------------------------------------
@@ -661,6 +725,16 @@ const AppPalette schoolDark = AppPalette(
     Color(0xFF6B66FE),
   ],
   chartOther: Color(0xFF7E7771),
+  // A brighter go-green for the dark canvas (L 0.77, C 0.17, hue 154) under
+  // the navy ink: 8.6:1 for the icon.
+  recordAction: Color(0xFF44D482),
+  onRecordAction: Color(0xFF0B1F3A),
+  // The comparison bars, softened: a dusty cornflower (L 0.67, C 0.12) and a
+  // muted orchid pink (L 0.60, C 0.10), in place of the vivid cyan and
+  // magenta the series carries. Pink cannot sit higher here: a lighter,
+  // equally soft pink closes on the bright red score band.
+  comparisonCurrent: Color(0xFF4C9CDB),
+  comparisonAverage: Color(0xFFA06AA1),
 );
 
 /// The light token set for a flavor: the only set the mobile app can show.

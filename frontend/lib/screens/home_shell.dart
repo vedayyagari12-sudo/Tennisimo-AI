@@ -56,7 +56,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final AppPalette palette = context.palette;
 
     return Scaffold(
       // IndexedStack keeps each tab's state and scroll position alive across
@@ -86,10 +86,14 @@ class _HomeShellState extends State<HomeShell> {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: scheme.primary,
+                color: palette.recordAction,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Icon(Icons.videocam, color: scheme.onPrimary, size: 22),
+              child: Icon(
+                Icons.videocam,
+                color: palette.onRecordAction,
+                size: 22,
+              ),
             ),
             label: 'Record',
           ),

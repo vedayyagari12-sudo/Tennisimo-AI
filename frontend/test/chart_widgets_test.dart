@@ -36,7 +36,11 @@ Widget _host(Widget child, {bool reduceMotion = false}) => MaterialApp(
 
 /// Every [Text] under [root] — none may wear a series colour.
 void _expectInkOnly(WidgetTester tester, Finder root) {
-  final Set<Color> series = <Color>{..._palette.chartSeries};
+  final Set<Color> series = <Color>{
+    ..._palette.chartSeries,
+    _palette.comparisonCurrent,
+    _palette.comparisonAverage,
+  };
   for (final Text t in tester.widgetList<Text>(
     find.descendant(of: root, matching: find.byType(Text)),
   )) {
@@ -326,7 +330,10 @@ void main() {
             final Decoration? d = c.decoration;
             // Bars are rounded at the data end only; legend keys are not.
             return d is BoxDecoration &&
-                _palette.chartSeries.contains(d.color) &&
+                <Color>{
+                  _palette.comparisonCurrent,
+                  _palette.comparisonAverage,
+                }.contains(d.color) &&
                 d.borderRadius ==
                     const BorderRadius.horizontal(right: Radius.circular(4));
           });

@@ -100,6 +100,12 @@ double _chroma(Color c) {
   return math.sqrt(v[1] * v[1] + v[2] * v[2]);
 }
 
+/// OKLCh hue in degrees, 0..360.
+double _hue(Color c) {
+  final List<double> v = oklab(c);
+  return (math.atan2(v[2], v[1]) * 180 / math.pi + 360) % 360;
+}
+
 /// Euclidean distance in OKLab. Roughly 0.02 is one just-noticeable
 /// difference, so 0.07 is several.
 double deltaEOk(Color a, Color b) {
@@ -423,6 +429,10 @@ void main() {
             for (int i = 0; i < p.chartSeries.length; i++)
               'chartSeries[$i]': p.chartSeries[i],
             'chartOther': p.chartOther,
+            'recordAction': p.recordAction,
+            'onRecordAction': p.onRecordAction,
+            'comparisonCurrent': p.comparisonCurrent,
+            'comparisonAverage': p.comparisonAverage,
           };
       for (final (AppPalette dark, AppPalette light) in <(
         AppPalette,
@@ -933,6 +943,200 @@ void main() {
         expect(_chroma(p.chartOther), lessThan(weakest * 0.5));
       });
     }
+
+    // The comparison bars' own pair. Held to every categorical gate above,
+    // plus CVD clearance from the score ramp: the bars sit in the same card
+    // as the score bars, and a colour-blind reader must not take a bar's
+    // identity for a verdict.
+    test('the default flavor keeps drawing the bars in slots 0 and 1', () {
+      for (final AppPalette p in <AppPalette>[tennisimoLight, tennisimoDark]) {
+        expect(p.comparisonCurrent, p.chartSeries[0], reason: _name(p));
+        expect(p.comparisonAverage, p.chartSeries[1], reason: _name(p));
+      }
+    });
+
+    for (final BrandFlavorCase c in _schoolCases) {
+      final AppPalette p = c.palette;
+      final Map<String, Color> bars = <String, Color>{
+        'comparisonCurrent': p.comparisonCurrent,
+        'comparisonAverage': p.comparisonAverage,
+      };
+
+      test('${c.label} — the bars have their own pair, not the series', () {
+        // Slot 1 is the radar's "previous swing" and a donut slice; the bars
+        // moving off it is the point.
+        expect(p.comparisonAverage, isNot(p.chartSeries[1]));
+        expect(p.comparisonCurrent, isNot(p.comparisonAverage));
+      });
+
+      test('${c.label} — the latest clip is blue and the average is pink', () {
+        expect(_hue(p.comparisonCurrent), inInclusiveRange(230, 270),
+            reason: 'hue ${_hue(p.comparisonCurrent).toStringAsFixed(1)}');
+        expect(_hue(p.comparisonAverage), inInclusiveRange(320, 360),
+            reason: 'hue ${_hue(p.comparisonAverage).toStringAsFixed(1)}');
+      });
+
+      test('${c.label} — each bar sits in the band, above the chroma floor',
+          () {
+        final ({double min, double max}) band = seriesBand(p.brightness);
+        bars.forEach((String token, Color colour) {
+          expect(perceptualLightness(colour),
+              inInclusiveRange(band.min, band.max),
+              reason: '${c.label} $token is at L '
+                  '${perceptualLightness(colour).toStringAsFixed(3)}');
+          expect(_chroma(colour), greaterThanOrEqualTo(kSeriesChroma),
+              reason: '${c.label} $token chroma '
+                  '${_chroma(colour).toStringAsFixed(3)} reads as grey');
+        });
+      });
+
+      test('${c.label} — each bar clears 3:1 on every chart surface', () {
+        bars.forEach((String token, Color colour) {
+          chartSurfaces(p).forEach((String bg, Color bgColor) {
+            expect(contrast(colour, bgColor), greaterThanOrEqualTo(kAaLarge),
+                reason: '${c.label}: $token on $bg is '
+                    '${contrast(colour, bgColor).toStringAsFixed(2)}:1');
+          });
+        });
+      });
+
+      test('${c.label} — the two bars survive CVD against each other', () {
+        final Color x = p.comparisonCurrent;
+        final Color y = p.comparisonAverage;
+        expect(deltaEOk(x, y), greaterThanOrEqualTo(kSeriesNormal),
+            reason: '${c.label} normal vision '
+                '${deltaEOk(x, y).toStringAsFixed(3)}');
+        for (final Cvd d in Cvd.values) {
+          final double seen = deltaEOk(simulate(x, d), simulate(y, d));
+          final double gate =
+              d == Cvd.tritanopia ? kMinCvdSeparation : kSeriesCvd;
+          expect(seen, greaterThanOrEqualTo(gate),
+              reason: '${c.label} the bars collapse to '
+                  '${seen.toStringAsFixed(3)} under ${d.name}');
+        }
+      });
+
+      test('${c.label} — neither bar impersonates the score ramp, under CVD '
+          'too', () {
+        final Map<String, Color> status = <String, Color>{
+          'scoreHigh': p.scoreHigh,
+          'scoreMid': p.scoreMid,
+          'scoreLow': p.scoreLow,
+          'scoreHighFill': p.scoreHighFill,
+          'scoreMidFill': p.scoreMidFill,
+          'scoreLowFill': p.scoreLowFill,
+        };
+        bars.forEach((String token, Color colour) {
+          status.forEach((String band, Color s) {
+            expect(deltaEOk(colour, s), greaterThanOrEqualTo(kSeriesNormal),
+                reason: '${c.label} $token sits on $band');
+            for (final Cvd d in Cvd.values) {
+              final double seen =
+                  deltaEOk(simulate(colour, d), simulate(s, d));
+              expect(seen, greaterThanOrEqualTo(kMinCvdSeparation),
+                  reason: '${c.label} $token collapses into $band under '
+                      '${d.name} at ${seen.toStringAsFixed(3)}');
+            }
+          });
+        });
+      });
+    }
+
+    test('alternate/dark — the bars are softer than the series they replace',
+        () {
+      // "Softer" as a number: less chroma than the vivid series slot each bar
+      // used to wear.
+      expect(_chroma(schoolDark.comparisonCurrent),
+          lessThan(_chroma(schoolDark.chartSeries[0])));
+      expect(_chroma(schoolDark.comparisonAverage),
+          lessThan(_chroma(schoolDark.chartSeries[1])));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The Record face in the navigation bar.
+  //
+  // Its own role, so the alternate flavor can make it green without turning
+  // every `primary` link and trend readout green with it. It is a large fill
+  // with an icon on it, and it is gated as one.
+  // -------------------------------------------------------------------------
+  group('the Record face', () {
+    test('the default flavor keeps the face it had: primary / onPrimary', () {
+      for (final AppPalette p in <AppPalette>[tennisimoLight, tennisimoDark]) {
+        expect(p.recordAction, p.primary, reason: _name(p));
+        expect(p.onRecordAction, p.onPrimary, reason: _name(p));
+      }
+    });
+
+    for (final BrandFlavorCase c in _schoolCases) {
+      final AppPalette p = c.palette;
+
+      test('${c.label} — the Record face is its own green, not primary', () {
+        expect(p.recordAction, isNot(p.primary));
+        // A go green: OKLCh hue between olive (~115) and teal (~180), and
+        // saturated enough to read as a colour at 40x40.
+        expect(_hue(p.recordAction), inInclusiveRange(135, 160),
+            reason: 'hue ${_hue(p.recordAction).toStringAsFixed(1)}');
+        expect(_chroma(p.recordAction), greaterThanOrEqualTo(0.12),
+            reason: 'chroma ${_chroma(p.recordAction).toStringAsFixed(3)}');
+      });
+
+      test('${c.label} — the icon clears AA on the Record face', () {
+        expect(contrast(p.onRecordAction, p.recordAction),
+            greaterThanOrEqualTo(kAaBody),
+            reason: '${c.label}: onRecordAction/recordAction is '
+                '${contrast(p.onRecordAction, p.recordAction).toStringAsFixed(2)}'
+                ':1');
+      });
+
+      test('${c.label} — the face clears 3:1 on every surface', () {
+        surfaces(p).forEach((String bg, Color bgColor) {
+          expect(contrast(p.recordAction, bgColor),
+              greaterThanOrEqualTo(kAaLarge),
+              reason: '${c.label}: recordAction on $bg is '
+                  '${contrast(p.recordAction, bgColor).toStringAsFixed(2)}:1');
+        });
+      });
+
+      test('${c.label} — the face sits in the fill lightness band', () {
+        final ({double min, double max}) band = fillBand(p.brightness);
+        final double l = perceptualLightness(p.recordAction);
+        expect(l, inInclusiveRange(band.min, band.max),
+            reason: '${c.label}: recordAction is at OKLab L '
+                '${l.toStringAsFixed(3)}');
+      });
+
+      test('${c.label} — Record is not read as an amber or red score', () {
+        // Green IS the ramp's top band, and a green Record button is what was
+        // asked for, so the green bands are deliberately not in this set.
+        // What a colour-blind reader must not do is see the button as an
+        // amber or red score: it is held apart from those bands under normal
+        // vision, and, fill against fill as the ramp itself is gated, under
+        // every dichromacy.
+        final Map<String, Color> warm = <String, Color>{
+          'scoreMid': p.scoreMid,
+          'scoreLow': p.scoreLow,
+          'scoreMidFill': p.scoreMidFill,
+          'scoreLowFill': p.scoreLowFill,
+        };
+        warm.forEach((String band, Color s) {
+          expect(deltaEOk(p.recordAction, s), greaterThanOrEqualTo(0.15),
+              reason: '${c.label}: recordAction sits on $band');
+        });
+        for (final (String band, Color s) in <(String, Color)>[
+          ('scoreMidFill', p.scoreMidFill),
+          ('scoreLowFill', p.scoreLowFill),
+        ]) {
+          for (final Cvd d in Cvd.values) {
+            final double seen =
+                deltaEOk(simulate(p.recordAction, d), simulate(s, d));
+            expect(seen, greaterThanOrEqualTo(kMinCvdSeparation),
+                reason: '${c.label}: recordAction collapses into $band under '
+                    '${d.name} at ${seen.toStringAsFixed(3)}');
+          }
+        }
+      });
+    }
   });
 
   group('the brand mark reads on the canvas', () {
@@ -1101,6 +1305,13 @@ const List<BrandFlavorCase> _lightCases = <BrandFlavorCase>[
 /// The web-only dark sets. Held to every gate the light sets are.
 const List<BrandFlavorCase> _darkCases = <BrandFlavorCase>[
   BrandFlavorCase('default/dark', tennisimoDark),
+  BrandFlavorCase('alternate/dark', schoolDark),
+];
+
+/// The alternate flavor on both canvases: the only sets that name their own
+/// Record face and comparison-bar pair.
+const List<BrandFlavorCase> _schoolCases = <BrandFlavorCase>[
+  BrandFlavorCase('alternate', schoolLight),
   BrandFlavorCase('alternate/dark', schoolDark),
 ];
 

@@ -35,6 +35,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
 import 'package:tennisimo_ai/screens/login_screen.dart';
 import 'package:tennisimo_ai/screens/results_screen.dart';
+import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/theme/theme_controller.dart';
 
@@ -88,7 +89,7 @@ String _flutterRoot() {
 }
 
 /// The shell's bottom bar, so the first viewport is judged at its real height.
-Widget _navBar(ColorScheme scheme) => NavigationBar(
+Widget _navBar(AppPalette palette) => NavigationBar(
   selectedIndex: 0,
   destinations: <Widget>[
     const NavigationDestination(
@@ -101,10 +102,10 @@ Widget _navBar(ColorScheme scheme) => NavigationBar(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: scheme.primary,
+          color: palette.recordAction,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: Icon(Icons.videocam, color: scheme.onPrimary, size: 22),
+        child: Icon(Icons.videocam, color: palette.onRecordAction, size: 22),
       ),
       label: 'Record',
     ),
@@ -232,7 +233,7 @@ void _renders(String out) {
             dataSource: fixture.source,
             onSeeAllHistory: () {},
           ),
-          bottomNavigationBar: _navBar(Theme.of(context).colorScheme),
+          bottomNavigationBar: _navBar(context.palette),
         );
 
         // The first screenful, exactly as a phone shows it.

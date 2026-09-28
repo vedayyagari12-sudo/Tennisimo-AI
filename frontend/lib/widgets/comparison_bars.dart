@@ -17,8 +17,9 @@ import 'chart_legend.dart';
 ///   10px thick, a 2px gap between them, rounded only at the data end.
 /// * A missing value is a GAP with words in it — "not measured", "no earlier
 ///   score" — never a zero-length bar that would look like a measurement.
-/// * Slot 0 is the newest clip and slot 1 the comparison, as on every chart;
-///   values and names are ink, beside the bars.
+/// * The newest clip wears [AppPalette.comparisonCurrent] and the average
+///   [AppPalette.comparisonAverage]; values and names are ink, beside the
+///   bars.
 ///
 /// Tapping a group shows its exact numbers and the difference.
 class ComparisonBars extends StatefulWidget {
@@ -57,8 +58,8 @@ class _ComparisonBarsState extends State<ComparisonBars> {
     if (widget.rows.isEmpty) return const SizedBox.shrink();
     final ThemeData theme = Theme.of(context);
     final AppPalette palette = context.palette;
-    final Color current = palette.chartSeries[0];
-    final Color average = palette.chartSeries[1];
+    final Color current = palette.comparisonCurrent;
+    final Color average = palette.comparisonAverage;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
