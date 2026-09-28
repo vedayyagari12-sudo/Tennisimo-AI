@@ -29391,7 +29391,7 @@ s=p}for(;;)switch(s){case 0:h=A.a3D()
 if(h==null){q=B.E3
 s=1
 break}p=4
-k=A.cK("https://tennisimo-ai.onrender.com/v1/uploads/ticket",0,null)
+k=A.cK("https://tennisform-api-143709056949.us-east1.run.app/v1/uploads/ticket",0,null)
 j=A.aE7(h,!0)
 s=7
 return A.k(A.aS_(k,B.a7.rM(A.a6(["content_type",a,"size_bytes",c,"duration_s",b],t.N,t.z),null),null,j),$async$aGg)
@@ -29438,7 +29438,7 @@ d=A.a3D()
 if(d==null){q=B.E2
 s=1
 break}p=4
-h=A.cK("https://tennisimo-ai.onrender.com/v1/analyses",0,null)
+h=A.cK("https://tennisform-api-143709056949.us-east1.run.app/v1/analyses",0,null)
 g=A.aE7(d,!0)
 n=A.v(t.N,t.z)
 J.hH(n,"storage_path",a1)
@@ -29505,7 +29505,7 @@ if(b3==null){q=B.E1
 s=1
 break}p=4
 s=7
-return A.k(A.aRB(A.cK("https://tennisimo-ai.onrender.com/v1/analyses/"+b5,0,null),A.aE7(b3,!1)),$async$a3G)
+return A.k(A.aRB(A.cK("https://tennisform-api-143709056949.us-east1.run.app/v1/analyses/"+b5,0,null),A.aE7(b3,!1)),$async$a3G)
 case 7:n=b7
 if(n.b<200||n.b>=300){e=n
 e=A.aF5(A.fc(A.fb(e.e)).bC(e.w),e.b)
@@ -29665,7 +29665,7 @@ if(d==null){q=B.E0
 s=1
 break}p=4
 s=7
-return A.k(A.aRB(A.cK("https://tennisimo-ai.onrender.com/v1/analyses?limit="+A.j(e),0,null),A.aE7(d,!1)),$async$a3J)
+return A.k(A.aRB(A.cK("https://tennisform-api-143709056949.us-east1.run.app/v1/analyses?limit="+A.j(e),0,null),A.aE7(d,!1)),$async$a3J)
 case 7:n=b
 if(n.b<200||n.b>=300){i=n
 i=A.aF5(A.fc(A.fb(i.e)).bC(i.w),i.b)
@@ -105538,7 +105538,7 @@ B.ar=new A.N0(0,"rectangle")
 B.e5=new A.N0(1,"circle")
 B.dg=new A.N1(0,"tight")
 B.o2=new A.N1(1,"max")
-B.f6=new A.a5k(0,"tennisimo")
+B.f6=new A.a5k(1,"school")
 B.dh=new A.Au(0,"blink")
 B.bX=new A.Au(1,"webkit")
 B.e6=new A.Au(2,"firefox")
