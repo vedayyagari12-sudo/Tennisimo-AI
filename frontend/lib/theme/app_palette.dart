@@ -42,7 +42,10 @@
 ///   It is gated on WCAG 3:1 *and* on a perceptual-lightness band (OKLab L
 ///   0.32-0.60 on light, 0.55-0.78 on dark), because a large area painted
 ///   with a text-calibrated accent muddies on a light canvas and glares on a
-///   dark one.
+///   dark one. On dark, a face that carries dark ink ([secondaryFill],
+///   [ballAccent], [actionFill]) may reach L 0.88, the ceiling the dark
+///   chart marks already have: a yellow capped at 0.78 cannot reach its
+///   chroma and reads as amber.
 /// * A **light fill** is the one exception, on the light canvas only, and only
 ///   [secondaryFill],
 ///   [ballAccent], [actionFill] and [navIndicator] may take it: a bright,
@@ -581,49 +584,56 @@ const AppPalette tennisimoDark = AppPalette(
   chartOther: Color(0xFF8B857F),
 );
 
-/// Alternate flavor, dark: the light set inverted. The navy that is ink on
-/// the light canvas becomes the canvas (`#0C1B2F`), with lighter navy cards
-/// (`#17263B`) standing on it, powder blue as the text accent, and gold still
-/// only a fill under navy ink.
+/// Alternate flavor, dark: near-black with a cool undertone, with a vivid sky
+/// blue and an athletic yellow as the two colours that stand out on it.
 ///
-/// Gold is stepped down to `#E0AE03` (OKLab L 0.775) to sit inside the dark
-/// fill band: the light set's `#FFC72C` (L 0.857) glares as a large face on a
-/// navy canvas.
+/// * **Surfaces** are near-black (`#02040A`, OKLab L 0.11) keeping a slight
+///   blue undertone (OKLab hue ~260, chroma ~0.02) so the flavor does not read
+///   as a generic dark UI. The tiers are re-stepped ~0.035 L apart rather
+///   than the light set's ~0.025, because dark steps compress on a real
+///   screen: the card (`#0C121C`, L 0.18) sits 0.074 L above the page.
+/// * **Sky blue** is the text accent, the chart line and the brand bolt,
+///   lifted to OKLab chroma 0.13-0.18 (the navy set's powder blue was 0.07).
+/// * **Yellow** (`#FFD000`, OKLab hue 92, not the amber-leaning 88 at L 0.78
+///   the navy set had to use) is still only a face under navy ink: the button,
+///   the logo ball and the ball-speed fill. It is a dark-ink face, so it is
+///   held to the dark-ink ceiling (`test/palette_test.dart`), not the 0.78
+///   ceiling for fills that carry meaning through their edge.
 ///
-/// The nav pill is NOT gold here, unlike the light set: the selected nav icon
+/// The nav pill is NOT yellow, unlike the light set: the selected nav icon
 /// and label wear [AppPalette.onSurface], which on this canvas is near-white,
-/// and near-white on gold fails AA. It is powder blue at 20% instead.
+/// and near-white on yellow fails AA. It is sky blue at 20% instead.
 ///
 /// WEB ONLY, like [tennisimoDark].
 const AppPalette schoolDark = AppPalette(
   brightness: Brightness.dark,
-  surface: Color(0xFF0C1B2F),
-  surfaceContainerLowest: Color(0xFF061428),
-  surfaceContainerLow: Color(0xFF122136),
-  surfaceContainer: Color(0xFF17263B),
-  surfaceContainerHigh: Color(0xFF1E2D43),
-  surfaceContainerHighest: Color(0xFF24344A),
+  surface: Color(0xFF02040A),
+  surfaceContainerLowest: Color(0xFF000105),
+  surfaceContainerLow: Color(0xFF070B13),
+  surfaceContainer: Color(0xFF0C121C),
+  surfaceContainerHigh: Color(0xFF131A25),
+  surfaceContainerHighest: Color(0xFF1A2230),
   onSurface: Color(0xFFEAF3FA),
   onSurfaceVariant: Color(0xFFB0C0CE),
   outline: Color(0xFF788C9D),
   outlineVariant: Color(0xFF3D4C5D),
-  primary: Color(0xFFA4D5F7),
+  primary: Color(0xFF4FC5FC),
   onPrimary: Color(0xFF0B1F3A),
-  primaryFill: Color(0xFF589AED),
+  primaryFill: Color(0xFF0F92F7),
   onPrimaryFill: Color(0xFF0B1F3A),
-  // Ball-speed text stays a blue, as on the light set: a gold text accent
+  // Ball-speed text stays a blue, as on the light set: a yellow text accent
   // would sit beside the amber score band and read as a verdict.
-  secondary: Color(0xFF62C5EF),
+  secondary: Color(0xFF23DAFC),
   onSecondary: Color(0xFF0B1F3A),
-  secondaryFill: Color(0xFFE0AE03),
-  ballAccent: Color(0xFFE0AE03),
-  actionFill: Color(0xFFE0AE03),
+  secondaryFill: Color(0xFFFFD000),
+  ballAccent: Color(0xFFFFD000),
+  actionFill: Color(0xFFFFD000),
   onActionFill: Color(0xFF0B1F3A),
   navIndicator: Color.from(
     alpha: 0.20,
-    red: 0xA4 / 255,
-    green: 0xD5 / 255,
-    blue: 0xF7 / 255,
+    red: 0x4F / 255,
+    green: 0xC5 / 255,
+    blue: 0xFC / 255,
   ),
   error: Color(0xFFFB979A),
   onError: Color(0xFF2E1011),
@@ -634,15 +644,21 @@ const AppPalette schoolDark = AppPalette(
   scoreHighFill: _scoreHighFillDark,
   scoreMidFill: _scoreMidFillDark,
   scoreLowFill: _scoreLowFillDark,
-  // Royal blue, pink, lavender, orchid. The light set's old gold cannot
-  // follow onto this canvas (any gold bright enough to read here sits on the
-  // amber score band), so "what it is compared with" is pink, which stays
-  // apart from the blue under every dichromacy by lightness (0.61 vs 0.84).
+  // Sky blue, magenta, orchid pink, electric violet. The yellow cannot follow
+  // the button into the charts: on this canvas the score ramp's amber is
+  // bright (#FCB60D), and no vivid yellow or gold in the series band (L 0.72
+  // and up, chroma 0.14 and up) sits 0.15 OKLab clear of both it and the
+  // bright green: the best reaches 0.11. Only a dull olive at L 0.60 or a
+  // near-white lemon at L 0.95 gets there. Orange and coral are taken by the
+  // amber and the red the same way, so the free hues run from blue through
+  // violet to pink, and the set is spread across them by lightness as well
+  // as hue: "this swing" (L 0.77) against "what it is compared with"
+  // (L 0.61) stays apart under every dichromacy.
   chartSeries: <Color>[
-    Color(0xFF0488DA),
-    Color(0xFFFFACD5),
-    Color(0xFFA591FB),
-    Color(0xFFB558AE),
+    Color(0xFF13C7F4),
+    Color(0xFFE008AD),
+    Color(0xFFFDA0FD),
+    Color(0xFF6B66FE),
   ],
   chartOther: Color(0xFF7E7771),
 );

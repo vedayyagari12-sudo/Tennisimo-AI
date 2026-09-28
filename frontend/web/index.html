@@ -45,10 +45,10 @@
       /* Keep overscroll from exposing the page at all, where supported. */
       overscroll-behavior: none;
     }
-    /* The same palette's dark `surface`, #0C1B2F, for a visitor whose theme
+    /* The same palette's dark `surface`, #02040A, for a visitor whose theme
        choice resolves to dark. Set by the script below, before first paint. */
     html.dark-canvas, html.dark-canvas body {
-      background-color: #0C1B2F;
+      background-color: #02040A;
     }
   </style>
   <!--
@@ -75,7 +75,7 @@
       if (!dark) return;
       document.documentElement.className += ' dark-canvas';
       var meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.setAttribute('content', '#0C1B2F');
+      if (meta) meta.setAttribute('content', '#02040A');
     })();
   </script>
 

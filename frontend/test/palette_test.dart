@@ -245,6 +245,27 @@ const Set<String> kLightFillCapable = <String>{
   'navIndicator',
 };
 
+/// On a dark canvas, the lightness ceiling for the [kLightFillCapable] faces:
+/// the ones that carry dark ink rather than meaning through their edge.
+///
+/// The 0.78 anti-glare ceiling in [fillBand] is right for the fills that ARE
+/// the signal (the score ring, the bars, the bolt). A dark-ink face is
+/// different in kind: it is a yellow button or ball, and yellow's chroma peaks
+/// near L 0.9, so a 0.78 cap forces it down to an amber that is no longer
+/// the brand colour. 0.88 is not a new number: it is the ceiling the dark
+/// categorical band (`seriesBand`, below) already allows large chart marks on
+/// the same card. Such a face still has to clear 3:1 on every surface, and
+/// above 0.78 it must also clear AA under the navy ink it carries.
+const double kDarkInkFaceMaxL = 0.88;
+
+/// [fillBand] as it applies to [token] on [brightness].
+({double min, double max}) fillBandFor(String token, Brightness brightness) {
+  final ({double min, double max}) band = fillBand(brightness);
+  return brightness == Brightness.dark && kLightFillCapable.contains(token)
+      ? (min: band.min, max: kDarkInkFaceMaxL)
+      : band;
+}
+
 /// The light fills [p] actually uses: capable tokens that are opaque and at or
 /// above [kLightFillMinL]. (The default flavor's nav pill is a translucent
 /// accent wash, not a fill, and is gated separately.)
@@ -498,13 +519,24 @@ void main() {
       });
 
       test('${c.label} — every dark fill sits in the fill lightness band', () {
-        final ({double min, double max}) band =
-            fillBand(c.palette.brightness);
         darkFills(c.palette).forEach((String token, Color colour) {
+          final ({double min, double max}) band =
+              fillBandFor(token, c.palette.brightness);
           final double l = perceptualLightness(colour);
           expect(l, inInclusiveRange(band.min, band.max),
               reason: '${c.label}: $token is at OKLab L '
                   '${l.toStringAsFixed(3)} — a fill calibrated like text');
+          // The other half of [kDarkInkFaceMaxL]: a face is only allowed past
+          // the anti-glare ceiling because dark ink sits on it, so that ink
+          // has to read on it at body-text AA.
+          if (l > fillBand(c.palette.brightness).max) {
+            expect(
+                contrast(c.palette.onActionFill, colour),
+                greaterThanOrEqualTo(kAaBody),
+                reason: '${c.label}: onActionFill on $token is '
+                    '${contrast(c.palette.onActionFill, colour).toStringAsFixed(2)}'
+                    ':1');
+          }
         });
       });
 
@@ -547,7 +579,10 @@ void main() {
           if (light.containsKey(token)) {
             expect(l, greaterThanOrEqualTo(kLightFillMinL));
           } else {
-            expect(l, lessThanOrEqualTo(fillBand(c.palette.brightness).max),
+            expect(
+                l,
+                lessThanOrEqualTo(
+                    fillBandFor(token, c.palette.brightness).max),
                 reason: '${c.label}: $token is at OKLab L '
                     '${l.toStringAsFixed(3)}');
           }
