@@ -13,3 +13,7 @@ backend/.env
 __pycache__/
 .dart_tool/
 build/
+
+tennis_clips/
+tennis_clips_v2/
+tennis_clips_lefty/
