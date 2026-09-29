@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -8,8 +10,10 @@ import '../models/enums.dart';
 import '../models/key_numbers.dart';
 import '../models/swing_advice.dart';
 import '../services/api_client.dart';
+import '../services/account_deletion.dart';
 import '../services/api_client.dart' as api
-    show fetchAnalysisDetail, fetchHistory;
+    show deleteAccount, fetchAnalysisDetail, fetchHistory;
+import '../services/haptics.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
@@ -27,6 +31,7 @@ import '../widgets/skeleton_block.dart';
 import '../widgets/skill_radar.dart';
 import '../widgets/swing_advice_list.dart';
 import 'home_shell.dart';
+import 'login_screen.dart';
 import 'record_screen.dart';
 import 'results_screen.dart';
 
@@ -51,6 +56,9 @@ class DashboardDataSource {
       Supabase.instance.client.auth.currentUser?.email;
 
   Future<void> signOut() => Supabase.instance.client.auth.signOut();
+
+  /// `DELETE /v1/account`: the account and all of its data, permanently.
+  Future<ApiResult<void>> deleteAccount() => api.deleteAccount();
 }
 
 /// The landing tab.
@@ -213,6 +221,37 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// The "Delete account" menu entry: confirm, delete, then leave.
+  ///
+  /// The dialog does the request itself and only closes with `true` once the
+  /// server has answered success, so nothing below runs on a failed or
+  /// unfinished deletion.
+  Future<void> _deleteAccount() async {
+    final bool? deleted = await showDialog<bool>(
+      context: context,
+      // Only an explicit Cancel closes it: a stray tap outside must not look
+      // like an answer to a question this serious.
+      barrierDismissible: false,
+      builder: (BuildContext context) =>
+          _DeleteAccountDialog(onDelete: widget.dataSource.deleteAccount),
+    );
+    if (deleted != true || !mounted) return;
+
+    // Queued BEFORE signing out: the sign-out is what makes the AuthGate build
+    // the login screen that shows it.
+    LoginNotice.post(kAccountDeletedNotice);
+    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
+    try {
+      // Local scope (gotrue's default): the session is removed from memory and
+      // storage FIRST, then the server is told. The server has already
+      // deleted the user, so that second step may fail — harmlessly, since
+      // the local session, and with it the cached token, is already gone.
+      await widget.dataSource.signOut();
+    } catch (_) {
+      // See above: nothing is left signed in on this device.
+    }
+  }
+
   Future<void> _record() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -241,6 +280,7 @@ class DashboardScreenState extends State<DashboardScreen> {
   Widget _header() => _DashboardHeader(
         email: widget.dataSource.accountEmail,
         onSignOut: widget.dataSource.signOut,
+        onDeleteAccount: _deleteAccount,
       );
 
   Widget _buildBody() {
@@ -535,10 +575,15 @@ class DashboardScreenState extends State<DashboardScreen> {
 
 /// Greeting, account, sign-out.
 class _DashboardHeader extends StatelessWidget {
-  const _DashboardHeader({required this.email, required this.onSignOut});
+  const _DashboardHeader({
+    required this.email,
+    required this.onSignOut,
+    required this.onDeleteAccount,
+  });
 
   final String? email;
   final Future<void> Function() onSignOut;
+  final Future<void> Function() onDeleteAccount;
 
   @override
   Widget build(BuildContext context) {
@@ -577,7 +622,10 @@ class _DashboardHeader extends StatelessWidget {
         ),
         const AppLogo(size: 28),
         const SizedBox(width: AppSpacing.xs),
-        _OverflowMenu(onSignOut: onSignOut),
+        _OverflowMenu(
+          onSignOut: onSignOut,
+          onDeleteAccount: onDeleteAccount,
+        ),
       ],
     );
   }
@@ -590,15 +638,19 @@ class _DashboardHeader extends StatelessWidget {
   }
 }
 
-/// The overflow menu: the light / dark choice, then sign out.
+/// The overflow menu: the light / dark choice, then sign out, then — set apart
+/// and in the error colour — delete account.
 ///
 /// The theme entries render only under a [ThemeScope], which `main.dart`
 /// installs on the web and nowhere else. On mobile, and in a widget test that
-/// mounts the dashboard on its own, this is the sign-out menu it always was.
+/// mounts the dashboard on its own, the theme entries are absent.
 class _OverflowMenu extends StatelessWidget {
-  const _OverflowMenu({required this.onSignOut});
+  const _OverflowMenu({required this.onSignOut, required this.onDeleteAccount});
 
   final Future<void> Function() onSignOut;
+
+  /// Opens the confirmation dialog. Choosing the menu entry deletes nothing.
+  final Future<void> Function() onDeleteAccount;
 
   static const Map<ThemeMode, String> _themeLabels = <ThemeMode, String>{
     ThemeMode.system: 'Follow system',
@@ -609,12 +661,17 @@ class _OverflowMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeController? controller = ThemeScope.maybeOf(context);
+    final Color destructive = Theme.of(context).colorScheme.error;
 
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert),
       onSelected: (String value) {
         if (value == 'sign_out') {
           onSignOut();
+          return;
+        }
+        if (value == 'delete_account') {
+          onDeleteAccount();
           return;
         }
         for (final ThemeMode mode in _themeLabels.keys) {
@@ -635,7 +692,153 @@ class _OverflowMenu extends StatelessWidget {
           value: 'sign_out',
           child: Text('Sign out'),
         ),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'delete_account',
+          child: Text(
+            'Delete account',
+            style: TextStyle(color: destructive),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+/// Confirms, then performs, the permanent deletion of the account.
+///
+/// Three deliberate steps stand between the menu and the request: the menu
+/// entry only opens this dialog; the delete button stays disabled until
+/// [kDeleteConfirmationPhrase] is typed (see its doc for why a typed word);
+/// and only then does a tap send anything.
+///
+/// The request runs HERE rather than after the dialog closes, so a failure is
+/// shown in the same place the user asked, with the typed word still in the
+/// field and the button relabelled "Try again". The dialog closes with `true`
+/// only on a server-confirmed success; nothing ever pretends otherwise.
+class _DeleteAccountDialog extends StatefulWidget {
+  const _DeleteAccountDialog({required this.onDelete});
+
+  final Future<ApiResult<void>> Function() onDelete;
+
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final TextEditingController _typed = TextEditingController();
+
+  /// True from the confirming tap until the server answers.
+  ///
+  /// Same idea as the record screen's intake guard: set synchronously, before
+  /// the first await, so a second tap in the same frame is refused by the
+  /// check in [_confirm] even before the rebuild disables the button. While it
+  /// is true the dialog also cannot be popped — the user must not be left
+  /// wondering whether a request they walked away from went through.
+  bool _inFlight = false;
+
+  /// The last failure, already worded for this action. See
+  /// [accountDeletionFailure].
+  ApiFailure? _failure;
+
+  @override
+  void dispose() {
+    _typed.dispose();
+    super.dispose();
+  }
+
+  bool get _canConfirm => !_inFlight && deleteConfirmationMatches(_typed.text);
+
+  Future<void> _confirm() async {
+    if (!_canConfirm) return;
+    setState(() {
+      _inFlight = true;
+      _failure = null;
+    });
+    unawaited(haptics.accountDeletionConfirmed());
+
+    final ApiResult<void> result = await widget.onDelete();
+    if (!mounted) return;
+
+    if (result.isOk) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _inFlight = false;
+      _failure = accountDeletionFailure(result.failure!);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme colors = theme.colorScheme;
+    final ApiFailure? failure = _failure;
+
+    return PopScope<bool>(
+      canPop: !_inFlight,
+      child: AlertDialog(
+        scrollable: true,
+        title: const Text('Delete your account?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              'This permanently deletes your account and every swing you have '
+              'recorded: the videos, the scores and the coaching notes. It '
+              'cannot be undone.',
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            const Text('Type $kDeleteConfirmationPhrase to confirm.'),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: _typed,
+              enabled: !_inFlight,
+              autocorrect: false,
+              enableSuggestions: false,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: kDeleteConfirmationPhrase,
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _confirm(),
+            ),
+            if (failure != null) ...<Widget>[
+              const SizedBox(height: AppSpacing.lg),
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                  color: colors.errorContainer,
+                  borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
+                ),
+                child: Text(
+                  failure.plainLanguageWithDebugDetail,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: colors.onErrorContainer),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: _inFlight ? null : () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: colors.error),
+            onPressed: _canConfirm ? _confirm : null,
+            child: Text(
+              _inFlight
+                  ? 'Deleting…'
+                  : (failure == null ? 'Delete forever' : 'Try again'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

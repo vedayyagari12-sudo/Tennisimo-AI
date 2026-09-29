@@ -693,6 +693,37 @@ Future<ApiResult<List<AnalysisSummary>>> fetchHistory({int limit = 50}) async {
   }
 }
 
+/// Permanently deletes the signed-in account and every recording, analysis and
+/// video it owns: `DELETE /v1/account`, answered `204 No Content`.
+///
+/// The account is identified by the JWT alone, exactly like every other call
+/// here; there is no body. Any 2xx is success. Anything else is the server's
+/// own `{code, message, retryable}` envelope, parsed by the same
+/// [apiFailureFromErrorBody] every other endpoint uses.
+///
+/// [client] and [accessToken] are test seams only; production passes neither
+/// and gets the shared `http` client and the live Supabase session.
+Future<ApiResult<void>> deleteAccount({
+  http.Client? client,
+  String? Function() accessToken = currentAccessToken,
+}) async {
+  final String? token = accessToken();
+  if (token == null) return const ApiResult<void>.err(_notSignedIn);
+
+  final Uri uri = Uri.parse('$baseUrl/v1/account');
+  try {
+    final http.Response response = client == null
+        ? await http.delete(uri, headers: _authHeaders(token))
+        : await client.delete(uri, headers: _authHeaders(token));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return ApiResult<void>.err(_failureFromResponse(response));
+    }
+    return const ApiResult<void>.ok(null);
+  } catch (e) {
+    return ApiResult<void>.err(networkFailure(e));
+  }
+}
+
 /// Fetches one finished analysis, for tapping through from history.
 Future<ApiResult<AnalysisResponse>> fetchAnalysisDetail(
     String analysisId) async {

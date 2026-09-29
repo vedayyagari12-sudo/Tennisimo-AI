@@ -92,6 +92,11 @@ class Haptics {
   /// where a deliberate press produced nothing.
   Future<void> actionFailed() => _fire(HapticKind.light);
 
+  /// The user committed to permanently deleting their account. A firm feel
+  /// for the one irreversible press in the app, but not [HapticKind.heavy],
+  /// which stays reserved for the camera.
+  Future<void> accountDeletionConfirmed() => _fire(HapticKind.medium);
+
   Future<void> _fire(HapticKind kind) async {
     // The one and only web gate.
     if (_isWeb) return;

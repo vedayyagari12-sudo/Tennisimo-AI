@@ -22,6 +22,7 @@ Map<String, Future<void> Function(Haptics)> _allActions() =>
       'tabSelected': (Haptics h) => h.tabSelected(),
       'analysisComplete': (Haptics h) => h.analysisComplete(),
       'actionFailed': (Haptics h) => h.actionFailed(),
+      'accountDeletionConfirmed': (Haptics h) => h.accountDeletionConfirmed(),
     };
 
 void main() {
@@ -64,6 +65,12 @@ void main() {
       await haptics.actionFailed();
       expect(driver.calls, <HapticKind>[HapticKind.light]);
       expect(driver.calls, isNot(contains(HapticKind.heavy)));
+    });
+
+    test('confirming account deletion is firm, but not the camera thump',
+        () async {
+      await haptics.accountDeletionConfirmed();
+      expect(driver.calls, <HapticKind>[HapticKind.medium]);
     });
   });
 

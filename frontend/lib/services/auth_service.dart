@@ -84,6 +84,21 @@ String? validatePassword(String raw, {required AuthMode mode}) {
   return null;
 }
 
+/// Validation error for the sign-up "Confirm password" field, or null when it
+/// repeats [password] exactly.
+///
+/// Sign-up only: sign-in never shows the field. The comparison is exact — no
+/// trimming — because a password is compared byte for byte by the server, so a
+/// stray space here is a genuinely different password.
+String? validatePasswordConfirmation(
+  String confirmation, {
+  required String password,
+}) {
+  if (confirmation.isEmpty) return 'Enter your password again.';
+  if (confirmation != password) return 'The passwords do not match.';
+  return null;
+}
+
 /// Reads a sign-up response, or null if its shape says nothing conclusive.
 ///
 /// Null is returned rather than a guess: a response with neither a session nor

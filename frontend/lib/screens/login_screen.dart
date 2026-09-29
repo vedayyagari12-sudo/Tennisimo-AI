@@ -17,21 +17,79 @@ import '../widgets/content_width.dart';
 /// either produces a session or an error, while a successful sign-up on this
 /// project produces no session at all — email confirmation is on — and says so
 /// rather than pretending to log the user in. See [SignUpOutcome].
+///
+/// Sign-up asks for the password twice. A mistyped password on a brand-new
+/// account is otherwise only discovered at the first sign-in, as a "wrong
+/// password" the user cannot explain.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.auth = const LoginAuthActions()});
+
+  /// Always the default in the app; see [LoginAuthActions].
+  final LoginAuthActions auth;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
+}
+
+/// The two auth calls the screen makes.
+///
+/// The default is the live Supabase client and production never passes
+/// anything else. It exists as a seam only so the submit path can be driven in
+/// a widget test, which it otherwise cannot be: both members reach
+/// `Supabase.instance`.
+class LoginAuthActions {
+  const LoginAuthActions();
+
+  Future<AuthResponse> signUp({
+    required String email,
+    required String password,
+  }) =>
+      Supabase.instance.client.auth.signUp(email: email, password: password);
+
+  Future<AuthResponse> signInWithPassword({
+    required String email,
+    required String password,
+  }) =>
+      Supabase.instance.client.auth
+          .signInWithPassword(email: email, password: password);
+}
+
+/// A one-time message for the NEXT [LoginScreen] that is built.
+///
+/// Exists for exactly one moment: account deletion. The dashboard posts here
+/// only after the server confirmed the deletion, then signs out, and the
+/// AuthGate swaps in a fresh [LoginScreen] — which takes the message in
+/// `initState` and shows it in its notice banner. Taking it clears it, so it
+/// is shown once and never again on a later sign-out.
+///
+/// A banner on the login screen was chosen over a snackbar: a snackbar would
+/// have to survive the whole screen being replaced and then times out, while
+/// the banner stays until the user acts, so "your account was deleted" cannot
+/// be missed.
+abstract final class LoginNotice {
+  static String? _pending;
+
+  /// Queues [message] for the next [LoginScreen].
+  static void post(String message) => _pending = message;
+
+  /// The queued message, or null. Clears it.
+  static String? take() {
+    final String? message = _pending;
+    _pending = null;
+    return message;
+  }
 }
 
 class _LoginScreenState extends State<LoginScreen> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmController = TextEditingController();
 
   AuthMode _mode = AuthMode.signIn;
   bool _busy = false;
   bool _passwordVisible = false;
+  bool _confirmVisible = false;
 
   /// The last failure, shown verbatim. Never replaced by a generic stand-in.
   ApiFailure? _failure;
@@ -41,10 +99,25 @@ class _LoginScreenState extends State<LoginScreen> {
   /// read as a problem.
   String? _notice;
 
+  /// The icon beside [_notice]: the envelope for the confirmation email, a
+  /// tick for a completed account deletion.
+  IconData _noticeIcon = Icons.mark_email_unread_outlined;
+
+  @override
+  void initState() {
+    super.initState();
+    final String? pending = LoginNotice.take();
+    if (pending != null) {
+      _notice = pending;
+      _noticeIcon = Icons.check_circle_outline;
+    }
+  }
+
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmController.dispose();
     super.dispose();
   }
 
@@ -55,9 +128,11 @@ class _LoginScreenState extends State<LoginScreen> {
     // value, so what the user typed is put back afterwards.
     final String email = _emailController.text;
     final String password = _passwordController.text;
+    final String confirmation = _confirmController.text;
     _formKey.currentState?.reset();
     _emailController.text = email;
     _passwordController.text = password;
+    _confirmController.text = confirmation;
 
     setState(() {
       _mode = _mode.isSignUp ? AuthMode.signIn : AuthMode.signUp;
@@ -67,6 +142,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
+    // In sign-up mode this includes the confirm field, so a mismatch stops
+    // here, inline, and signUp is never called.
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() {
@@ -81,8 +158,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       if (mode.isSignUp) {
-        final AuthResponse response =
-            await Supabase.instance.client.auth.signUp(
+        final AuthResponse response = await widget.auth.signUp(
           email: email,
           password: password,
         );
@@ -91,7 +167,7 @@ class _LoginScreenState extends State<LoginScreen> {
       } else {
         // On success the auth state stream fires and AuthGate swaps this screen
         // for the app, so there is nothing to do here.
-        await Supabase.instance.client.auth.signInWithPassword(
+        await widget.auth.signInWithPassword(
           email: email,
           password: password,
         );
@@ -122,8 +198,10 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() {
         _notice = 'Account created. We sent a confirmation link to '
             '${_emailController.text.trim()} — open it, then sign in.';
+        _noticeIcon = Icons.mark_email_unread_outlined;
         _mode = AuthMode.signIn;
         _passwordController.clear();
+        _confirmController.clear();
       });
       return;
     }
@@ -222,7 +300,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                     ),
-                    textInputAction: TextInputAction.done,
+                    textInputAction: signUp
+                        ? TextInputAction.next
+                        : TextInputAction.done,
                     autofillHints: <String>[
                       if (signUp)
                         AutofillHints.newPassword
@@ -230,11 +310,50 @@ class _LoginScreenState extends State<LoginScreen> {
                         AutofillHints.password,
                     ],
                     onFieldSubmitted: (_) {
-                      if (!_busy) _submit();
+                      if (!_busy && !signUp) _submit();
                     },
                     validator: (String? value) =>
                         validatePassword(value ?? '', mode: _mode),
                   ),
+                  if (signUp) ...<Widget>[
+                    const SizedBox(height: AppSpacing.lg),
+                    TextFormField(
+                      controller: _confirmController,
+                      enabled: !_busy,
+                      obscureText: !_confirmVisible,
+                      decoration: InputDecoration(
+                        labelText: 'Confirm password',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: Icon(_confirmVisible
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                          tooltip: _confirmVisible
+                              ? 'Hide password'
+                              : 'Show password',
+                          onPressed: () => setState(
+                            () => _confirmVisible = !_confirmVisible,
+                          ),
+                        ),
+                      ),
+                      textInputAction: TextInputAction.done,
+                      // Flutter's AutofillHints has no separate "confirm"
+                      // hint. newPassword is the standard for this field too:
+                      // it is what iOS strong-password suggestions and the
+                      // HTML autocomplete spec ("new-password") expect on BOTH
+                      // fields of a create-account form, so a password
+                      // manager fills the pair with the same value.
+                      autofillHints: const <String>[AutofillHints.newPassword],
+                      onFieldSubmitted: (_) {
+                        if (!_busy) _submit();
+                      },
+                      validator: (String? value) =>
+                          validatePasswordConfirmation(
+                        value ?? '',
+                        password: _passwordController.text,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: AppSpacing.xl),
                   SizedBox(
                     width: double.infinity,
@@ -263,7 +382,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   if (_notice != null) ...<Widget>[
                     const SizedBox(height: AppSpacing.lg),
                     _AuthBanner(
-                      icon: Icons.mark_email_unread_outlined,
+                      icon: _noticeIcon,
                       text: _notice!,
                       background: colors.primaryContainer,
                       foreground: colors.onPrimaryContainer,

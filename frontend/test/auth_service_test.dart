@@ -3,7 +3,12 @@ import 'dart:io' show SocketException;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
-    show AuthApiException, AuthRetryableFetchException;
+    show
+        AuthApiException,
+        AuthResponse,
+        AuthRetryableFetchException,
+        User,
+        UserIdentity;
 import 'package:tennisimo_ai/screens/login_screen.dart';
 import 'package:tennisimo_ai/services/api_client.dart';
 import 'package:tennisimo_ai/services/auth_service.dart';
@@ -18,6 +23,44 @@ AuthApiException _api(
   int status = 400,
 }) =>
     AuthApiException(message, statusCode: '$status', code: code);
+
+/// Records every sign-up the screen attempts, and answers the way this
+/// project's auth server answers a first-time sign-up with email confirmation
+/// on: a user with one identity and no session.
+class _RecordingAuth extends LoginAuthActions {
+  final List<String> signUps = <String>[];
+  String? lastPassword;
+
+  @override
+  Future<AuthResponse> signUp({
+    required String email,
+    required String password,
+  }) async {
+    signUps.add(email);
+    lastPassword = password;
+    return AuthResponse(
+      user: User(
+        id: 'new-user',
+        appMetadata: const <String, dynamic>{},
+        userMetadata: const <String, dynamic>{},
+        aud: 'authenticated',
+        email: email,
+        createdAt: '2026-09-29T00:00:00Z',
+        identities: <UserIdentity>[
+          UserIdentity(
+            id: 'new-user',
+            userId: 'new-user',
+            identityData: <String, dynamic>{'email': email},
+            identityId: 'identity',
+            provider: 'email',
+            createdAt: '2026-09-29T00:00:00Z',
+            lastSignInAt: '2026-09-29T00:00:00Z',
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 void main() {
   group('email validation', () {
@@ -63,6 +106,44 @@ void main() {
       expect(
         validatePassword('a' * (kMinPasswordLength - 1), mode: AuthMode.signUp),
         contains('$kMinPasswordLength'),
+      );
+    });
+  });
+
+  group('password confirmation', () {
+    test('a repeat of the same password passes', () {
+      expect(
+        validatePasswordConfirmation('abc123', password: 'abc123'),
+        isNull,
+      );
+    });
+
+    test('a different password is a mismatch', () {
+      expect(
+        validatePasswordConfirmation('abc124', password: 'abc123'),
+        'The passwords do not match.',
+      );
+    });
+
+    test('the comparison is exact: case and spaces count', () {
+      expect(
+        validatePasswordConfirmation('ABC123', password: 'abc123'),
+        'The passwords do not match.',
+      );
+      expect(
+        validatePasswordConfirmation('abc123 ', password: 'abc123'),
+        'The passwords do not match.',
+      );
+    });
+
+    test('an empty confirmation asks for it, whatever the password is', () {
+      expect(
+        validatePasswordConfirmation('', password: 'abc123'),
+        'Enter your password again.',
+      );
+      expect(
+        validatePasswordConfirmation('', password: ''),
+        'Enter your password again.',
       );
     });
   });
@@ -297,7 +378,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(
           find.byType(TextFormField).first, 'player@example.com');
-      await tester.enterText(find.byType(TextFormField).last, 'abc');
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Password'), 'abc');
       await tester.tap(find.widgetWithText(FilledButton, 'Create account'));
       await tester.pumpAndSettle();
 
@@ -315,6 +397,120 @@ void main() {
       await tester.pumpAndSettle();
       expect(field().obscureText, isFalse);
       expect(find.byIcon(Icons.visibility_off), findsOneWidget);
+    });
+  });
+
+  group('confirm password on sign-up', () {
+    Future<_RecordingAuth> pumpSignUp(WidgetTester tester) async {
+      final _RecordingAuth auth = _RecordingAuth();
+      await tester.pumpWidget(
+        MaterialApp(theme: buildAppTheme(), home: LoginScreen(auth: auth)),
+      );
+      await tester.tap(find.text('New here? Create an account'));
+      await tester.pumpAndSettle();
+      return auth;
+    }
+
+    Finder confirmField() =>
+        find.widgetWithText(TextFormField, 'Confirm password');
+
+    testWidgets('the field exists on sign-up only', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(theme: buildAppTheme(), home: const LoginScreen()),
+      );
+      expect(confirmField(), findsNothing);
+
+      await tester.tap(find.text('New here? Create an account'));
+      await tester.pumpAndSettle();
+      expect(confirmField(), findsOneWidget);
+
+      await tester.scrollUntilVisible(
+        find.text('Already have an account? Sign in'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.text('Already have an account? Sign in'));
+      await tester.pumpAndSettle();
+      expect(confirmField(), findsNothing);
+    });
+
+    testWidgets('it is obscured, toggles on its own, and autofills as a new '
+        'password', (WidgetTester tester) async {
+      await pumpSignUp(tester);
+      EditableText confirm() => tester.widget<EditableText>(
+            find.descendant(
+              of: confirmField(),
+              matching: find.byType(EditableText),
+            ),
+          );
+      EditableText password() => tester.widget<EditableText>(
+            find.descendant(
+              of: find.widgetWithText(TextFormField, 'Password'),
+              matching: find.byType(EditableText),
+            ),
+          );
+
+      expect(confirm().obscureText, isTrue);
+      expect(confirm().autofillHints, <String>[AutofillHints.newPassword]);
+
+      await tester.tap(
+        find.descendant(of: confirmField(), matching: find.byType(IconButton)),
+      );
+      await tester.pumpAndSettle();
+      expect(confirm().obscureText, isFalse);
+      // Its own toggle: revealing the confirmation leaves the password hidden.
+      expect(password().obscureText, isTrue);
+    });
+
+    testWidgets('a mismatch is an inline error and signUp is never called', (
+      WidgetTester tester,
+    ) async {
+      final _RecordingAuth auth = await pumpSignUp(tester);
+      await tester.enterText(
+          find.byType(TextFormField).first, 'player@example.com');
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Password'), 'abc123');
+      await tester.enterText(confirmField(), 'abc124');
+      await tester.tap(find.widgetWithText(FilledButton, 'Create account'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('The passwords do not match.'), findsOneWidget);
+      expect(auth.signUps, isEmpty);
+    });
+
+    testWidgets('an empty confirmation also blocks the submit', (
+      WidgetTester tester,
+    ) async {
+      final _RecordingAuth auth = await pumpSignUp(tester);
+      await tester.enterText(
+          find.byType(TextFormField).first, 'player@example.com');
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Password'), 'abc123');
+      await tester.tap(find.widgetWithText(FilledButton, 'Create account'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Enter your password again.'), findsOneWidget);
+      expect(auth.signUps, isEmpty);
+    });
+
+    testWidgets('matching passwords go through to signUp', (
+      WidgetTester tester,
+    ) async {
+      final _RecordingAuth auth = await pumpSignUp(tester);
+      await tester.enterText(
+          find.byType(TextFormField).first, 'player@example.com');
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Password'), 'abc123');
+      await tester.enterText(confirmField(), 'abc123');
+      await tester.tap(find.widgetWithText(FilledButton, 'Create account'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('The passwords do not match.'), findsNothing);
+      expect(auth.signUps, <String>['player@example.com']);
+      expect(auth.lastPassword, 'abc123');
+      expect(find.textContaining('Account created.'), findsOneWidget);
     });
   });
 }
