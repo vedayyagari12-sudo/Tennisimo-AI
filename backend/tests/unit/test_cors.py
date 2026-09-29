@@ -136,7 +136,7 @@ def test_methods_and_headers_are_restricted_not_wildcards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     options = _cors_options(monkeypatch, ALLOWED_ORIGIN)
-    assert options["allow_methods"] == ["GET", "POST"] == list(CORS_ALLOWED_METHODS)
+    assert options["allow_methods"] == ["GET", "POST", "DELETE"] == list(CORS_ALLOWED_METHODS)
     assert options["allow_headers"] == ["Authorization", "Content-Type"] == list(
         CORS_ALLOWED_HEADERS
     )

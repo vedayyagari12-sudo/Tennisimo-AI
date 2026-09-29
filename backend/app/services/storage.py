@@ -3,7 +3,8 @@
 DEPENDENCY DECISION, recorded per DATABASE_SETUP.md Part 5.2 item 3: this module
 uses **httpx directly and not `supabase-py`**. The backend makes exactly three
 Storage calls -- create a signed upload URL, HEAD an object, stream an object to
-disk -- all plain HTTPS. The SDK's value here is convenience; its cost is a
+disk -- all plain HTTPS. (Account deletion later added list + bulk delete; the
+same reasoning holds.) The SDK's value here is convenience; its cost is a
 dependency tree sitting over the single most security-sensitive credential in
 the system (the service-role key). `supabase-py` is also not installed in this
 environment, so adopting it would have meant a new dependency for three requests.
@@ -24,6 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import Request
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.api.errors import ApiError
 from app.config import Settings
@@ -35,6 +37,26 @@ logger = logging.getLogger("tennisform.storage")
 #: a 50 MB bytes object alongside a loaded MediaPipe graph is the most likely
 #: OOM in this system.
 DOWNLOAD_CHUNK_BYTES: Final[int] = 1024 * 1024
+
+#: Account deletion: page size for `POST /object/list/{bucket}` and batch size
+#: for `DELETE /object/{bucket}`. Storage caps a bulk delete at 1000 names per
+#: request (`MAX_OBJECTS_PER_REQUEST` in supabase/storage `src/storage/limits.ts`)
+#: and a list at 1500; 100 is the official clients' default list page and sits
+#: well under both.
+STORAGE_BATCH_SIZE: Final[int] = 100
+
+
+class StorageListEntry(BaseModel):
+    """One element of the `POST /object/list/{bucket}` response.
+
+    `name` is RELATIVE to the listed prefix. A sub-folder comes back as an entry
+    with `id: null` rather than as its contents -- the listing is one level deep.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +88,8 @@ class StorageClient(Protocol):
     async def head_object(self, storage_path: str) -> ObjectHead: ...
 
     async def download_to_path(self, storage_path: str, destination: Path) -> int: ...
+
+    async def delete_folder(self, folder_path: str) -> int: ...
 
 
 def split_bucket_path(storage_path: str) -> tuple[str, str]:
@@ -163,6 +187,102 @@ class SupabaseStorageClient:
             logger.warning("storage download failed: %s", type(exc).__name__)
             raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
         return written
+
+    async def delete_folder(self, folder_path: str) -> int:
+        """Account deletion: remove EVERY object under ``folder_path``; return the count.
+
+        ``folder_path`` is ``"<bucket>/<user_id>"``. Supabase Storage has no
+        delete-by-prefix call, so this is list-then-delete, per the Storage REST
+        contract (supabase/storage `routes/object/listObjects.ts` and
+        `deleteObjects.ts`; same shape as the official `storage3` client's
+        `list()` / `remove()`):
+
+        * ``POST /object/list/{bucket}`` body ``{prefix, limit, offset, sortBy}``
+          -> one level of entries, names relative to the prefix, sub-folders as
+          ``id: null``.
+        * ``DELETE /object/{bucket}`` body ``{"prefixes": [full keys]}``. Despite
+          the field name these are EXACT object names, not prefixes. At most
+          1000 per request, and ``minItems: 1`` -- an empty list is a 400, so an
+          empty folder sends no delete at all.
+
+        The whole listing is collected BEFORE anything is deleted, so offset
+        pagination never skips entries shifted by a delete.
+
+        Idempotent: an already-empty folder lists ``[]`` and returns 0; a name
+        that vanished between list and delete is simply absent from Storage's
+        response, not an error.
+        """
+        bucket, folder = split_bucket_path(folder_path.rstrip("/"))
+        if not bucket or not folder:
+            # An empty folder here would list the ENTIRE bucket -- every user's
+            # videos. Refuse outright rather than trust the caller.
+            raise ValueError("delete_folder needs '<bucket>/<folder>', got an empty part")
+
+        keys = await self._list_keys_recursive(bucket, folder)
+        own_prefix = f"{folder}/"
+        for key in keys:
+            if not key.startswith(own_prefix):  # pragma: no cover - defensive
+                logger.error("storage listing returned a key outside the requested folder")
+                raise ApiError(ErrorCode.INTERNAL_ERROR)
+
+        for start in range(0, len(keys), STORAGE_BATCH_SIZE):
+            batch = keys[start : start + STORAGE_BATCH_SIZE]
+            try:
+                response = await self._client.request(
+                    "DELETE",
+                    f"{self._base}/object/{bucket}",
+                    headers=self._headers,
+                    json={"prefixes": batch},
+                )
+            except httpx.HTTPError as exc:
+                logger.warning("storage bulk delete failed: %s", type(exc).__name__)
+                raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
+            if response.status_code >= 400:
+                logger.warning("storage bulk delete returned %s", response.status_code)
+                raise ApiError(ErrorCode.STORAGE_UNAVAILABLE)
+        return len(keys)
+
+    async def _list_keys_recursive(self, bucket: str, folder: str) -> list[str]:
+        """Full object keys under ``folder``, descending into sub-folders."""
+        keys: list[str] = []
+        offset = 0
+        while True:
+            entries = await self._list_page(bucket, folder, offset)
+            for entry in entries:
+                full = f"{folder}/{entry.name}"
+                if entry.id is None:
+                    keys.extend(await self._list_keys_recursive(bucket, full))
+                else:
+                    keys.append(full)
+            if len(entries) < STORAGE_BATCH_SIZE:
+                return keys
+            offset += len(entries)
+
+    async def _list_page(self, bucket: str, folder: str, offset: int) -> list[StorageListEntry]:
+        body: dict[str, object] = {
+            "prefix": folder,
+            "limit": STORAGE_BATCH_SIZE,
+            "offset": offset,
+            "sortBy": {"column": "name", "order": "asc"},
+        }
+        try:
+            response = await self._client.post(
+                f"{self._base}/object/list/{bucket}", headers=self._headers, json=body
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("storage list failed: %s", type(exc).__name__)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
+        if response.status_code >= 400:
+            logger.warning("storage list returned %s", response.status_code)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE)
+        try:
+            raw = response.json()
+            if not isinstance(raw, list):
+                raise TypeError("list body is not an array")
+            return [StorageListEntry.model_validate(item) for item in raw]
+        except (ValueError, TypeError, ValidationError) as exc:
+            logger.warning("storage list body was not understood")
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
 
 
 def get_storage_client(request: Request) -> StorageClient:

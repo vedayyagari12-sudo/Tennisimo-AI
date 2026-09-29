@@ -7,6 +7,7 @@ fake injected through ``app.dependency_overrides``:
 * ``get_storage_client``  -> ``FakeStorageClient``   (no Supabase Storage)
 * ``get_repository``      -> ``FakeRepository``      (no PostgREST)
 * ``get_orchestrator``    -> ``FakeOrchestrator``    (no executor thread)
+* ``get_auth_admin_client`` -> ``FakeAuthAdminClient`` (no GoTrue Admin API)
 
 Only the verifier's *construction* is real at startup; ``PyJWKClient`` performs
 no I/O until a key is requested, and the fake means it never is.
@@ -31,6 +32,7 @@ from app.config import get_settings
 from app.main import create_app
 from app.models.enums import ErrorCode, JobStatus
 from app.models.requests import CreateAnalysisRequest
+from app.services.auth_admin import get_auth_admin_client
 from app.services.orchestrator import get_orchestrator
 from app.services.repository import (
     AnalysisListRow,
@@ -86,6 +88,11 @@ class FakeStorageClient:
         self.signed_error: Exception | None = None
         self.signed_calls: list[str] = []
         self.head_calls: list[str] = []
+        # Account deletion: full "<bucket>/<uid>/<name>" keys held in Storage.
+        self.objects: set[str] = set()
+        self.delete_folder_calls: list[str] = []
+        self.delete_folder_error: Exception | None = None
+        self.events: list[str] = []
 
     async def create_signed_upload_url(self, storage_path: str) -> SignedUpload:
         self.signed_calls.append(storage_path)
@@ -107,6 +114,15 @@ class FakeStorageClient:
         destination.write_bytes(b"")
         return 0
 
+    async def delete_folder(self, folder_path: str) -> int:
+        self.events.append("storage")
+        self.delete_folder_calls.append(folder_path)
+        if self.delete_folder_error is not None:
+            raise self.delete_folder_error
+        doomed = {key for key in self.objects if key.startswith(f"{folder_path}/")}
+        self.objects -= doomed
+        return len(doomed)
+
 
 class FakeRepository:
     """In-memory stand-in for the Part 1 schema."""
@@ -117,6 +133,18 @@ class FakeRepository:
         self.analyses: list[tuple[UUID, AnalysisListRow]] = []  # (user_id, row)
         self.failures: list[tuple[UUID, ErrorCode, str, str]] = []
         self.list_error: Exception | None = None
+        self.delete_rows_calls: list[UUID] = []
+        self.events: list[str] = []
+
+    # -- account deletion ------------------------------------------------
+    async def delete_user_rows(self, user_id: UUID) -> None:
+        self.events.append("rows")
+        self.delete_rows_calls.append(user_id)
+        doomed = {row.id for owner, row in self.analyses if owner == user_id}
+        self.analyses = [(owner, row) for owner, row in self.analyses if owner != user_id]
+        for analysis_id in doomed:
+            self.payloads.pop(analysis_id, None)
+        self.jobs = {jid: job for jid, job in self.jobs.items() if job.user_id != user_id}
 
     # -- jobs ------------------------------------------------------------
     async def create_job(self, job: JobRow) -> None:
@@ -230,6 +258,23 @@ class FakeRepository:
         return row
 
 
+class FakeAuthAdminClient:
+    """In-memory Auth users. Deleting an absent user is a no-op, like GoTrue's 404."""
+
+    def __init__(self) -> None:
+        self.users: set[UUID] = {USER_ID, OTHER_USER_ID}
+        self.delete_calls: list[UUID] = []
+        self.delete_error: Exception | None = None
+        self.events: list[str] = []
+
+    async def delete_user(self, user_id: UUID) -> None:
+        self.events.append("auth")
+        self.delete_calls.append(user_id)
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.users.discard(user_id)
+
+
 class FakeOrchestrator:
     """No executor, no thread. Records submissions; depth is settable."""
 
@@ -280,11 +325,17 @@ def fake_orchestrator() -> FakeOrchestrator:
 
 
 @pytest.fixture()
+def fake_auth_admin() -> FakeAuthAdminClient:
+    return FakeAuthAdminClient()
+
+
+@pytest.fixture()
 def client(
     monkeypatch: pytest.MonkeyPatch,
     fake_storage: FakeStorageClient,
     fake_repository: FakeRepository,
     fake_orchestrator: FakeOrchestrator,
+    fake_auth_admin: FakeAuthAdminClient,
 ):
     for key, value in FAKE_ENV.items():
         monkeypatch.setenv(key, value)
@@ -296,6 +347,7 @@ def client(
     app.dependency_overrides[get_storage_client] = lambda: fake_storage
     app.dependency_overrides[get_repository] = lambda: fake_repository
     app.dependency_overrides[get_orchestrator] = lambda: fake_orchestrator
+    app.dependency_overrides[get_auth_admin_client] = lambda: fake_auth_admin
 
     # raise_server_exceptions=False so the registered Exception handler runs and
     # its 500 envelope can be asserted, instead of the exception being re-raised
@@ -312,6 +364,7 @@ __all__ = [
     "OTHER_USER_ID",
     "USER_ID",
     "VALID_TOKEN",
+    "FakeAuthAdminClient",
     "FakeOrchestrator",
     "FakeRepository",
     "FakeStorageClient",

@@ -921,6 +921,131 @@ null**, not stripped — the client reads `queue_position` and
 the same to it, but an explicit null documents the contract. What it must
 **never** do is grow a `feedback` or `scorecard` key. See Part 4.4.
 
+### 3.7 `DELETE /v1/account` — permanent account deletion
+
+Deletes the **caller's** account and every piece of their data. The user is
+always `jwt.sub`; there is no request body and no way to name another user.
+
+| | |
+|---|---|
+| Auth | `Authorization: Bearer <supabase_jwt>` (the standard Stage 2 dependency) |
+| Request body | none |
+| Success | `204 No Content`, empty body |
+| `401 auth_invalid_token` | missing / invalid / expired token — nothing is deleted |
+| `503 storage_unavailable` (`retryable: true`) | Storage list or delete failed |
+| `500 internal_error` (`retryable: true`) | PostgREST or GoTrue Admin call failed |
+
+Errors use the flat envelope of Part 3.0. No new `ErrorCode` was added.
+
+**Order, and why it matters** (`backend/app/api/routes_account.py`):
+
+1. **Storage.** Every object under `swing-videos/{user_id}/`. Supabase Storage
+   has no delete-by-prefix call, so this is list-then-delete:
+   `POST /storage/v1/object/list/swing-videos` with
+   `{"prefix": "<user_id>", "limit": 100, "offset": n, "sortBy": {...}}` (paged;
+   names come back relative to the prefix; a sub-folder is an entry with
+   `id: null` and is descended into), then
+   `DELETE /storage/v1/object/swing-videos` with
+   `{"prefixes": ["<user_id>/<name>", ...]}` in batches of 100. Despite the
+   field name, `prefixes` are **exact object names**. Storage caps it at 1000
+   per request and rejects an empty list (`minItems: 1`), so an empty folder
+   sends no delete. The folder is built from the verified token subject only,
+   and an empty folder component is refused outright (it would list the whole
+   bucket).
+2. **Rows.** `DELETE /rest/v1/analyses?user_id=eq.<id>`, then
+   `DELETE /rest/v1/analysis_jobs?user_id=eq.<id>`. Explicit, even though the
+   documented `user_id` FKs cascade — see "FK status" below. `analyses` first,
+   because `analyses.id` references `analysis_jobs.id`; child-first is correct
+   whether or not that FK cascades.
+3. **Auth user, LAST.** `DELETE /auth/v1/admin/users/<id>` with body
+   `{"should_soft_delete": false}`. That is a **hard delete**: GoTrue's
+   `adminUserDelete` runs `tx.Destroy(user)` unless `should_soft_delete` is
+   true, in which case it only sets `deleted_at`. `false` is also the server
+   default; it is sent explicitly anyway. A hard delete means a later sign-up
+   with the same email is a new account with a fresh confirmation email.
+   Auth goes last because while the auth user exists the person can still
+   sign in and retry; deleting it first would strand any data a later step
+   failed to remove.
+
+All three calls use the service-role key (`apikey` + `Authorization: Bearer`),
+like the rest of the backend.
+
+**Retry safety.** Every step is idempotent: an empty folder lists `[]` and sends
+no delete; a name already gone is simply missing from Storage's delete
+response; a filtered PostgREST `DELETE` matching zero rows is `204`; GoTrue's
+`404 user_not_found` is treated as done. So after a failure at any step, the
+client simply retries the whole request. The access token is still valid after
+the auth user is gone (ES256 verification is offline), so a retry after full
+success returns `204` too.
+
+**Residual risks, stated rather than hidden:**
+
+- *In-flight analysis.* If a job for this user is running when the account is
+  deleted, its Stage 18 `persist_success` can land after step 2. With a
+  cascading `user_id` FK, a row written between steps 2 and 3 is removed by
+  step 3, and one written after step 3 is rejected. With a non-cascading FK, it
+  makes step 3 fail, and a retry clears it. With no FK, the row is orphaned.
+- *Still-valid access token.* Until it expires (Supabase default 1 h) the old
+  JWT still verifies, so `POST /v1/uploads/ticket` could still issue a signed
+  URL under the deleted user's prefix. Closing this needs a server-side session
+  check. It is not built.
+
+#### FK status for account deletion — verification pending, OPTIONAL cleanup
+
+This is the same gap Part 7.1 records ("`analyses_user_id_fkey` could not be
+confirmed") and query 0d in §7.5 partly covers. It is **not a dependency of
+`DELETE /v1/account`**, which deletes the rows itself. It matters only for
+schema correctness, and in one direction for the endpoint: if a `user_id` FK
+exists **without** a cascade, GoTrue's delete fails while rows remain. Step 2
+runs first so no rows remain.
+
+The backend cannot check this itself. It reaches Postgres only through
+PostgREST, which exposes only `public` / `graphql_public` and not the catalog
+(Part 7.1). To check, run this **read-only** query in the Supabase SQL editor:
+
+```sql
+-- READ-ONLY. ON DELETE behaviour of every FK on the two tables.
+SELECT con.conrelid::regclass            AS table_name,
+       con.conname                       AS constraint_name,
+       pg_get_constraintdef(con.oid)     AS definition,
+       CASE con.confdeltype
+            WHEN 'c' THEN 'CASCADE'  WHEN 'a' THEN 'NO ACTION'
+            WHEN 'r' THEN 'RESTRICT' WHEN 'n' THEN 'SET NULL'
+            WHEN 'd' THEN 'SET DEFAULT' END AS on_delete
+FROM pg_constraint con
+WHERE con.contype = 'f'
+  AND con.conrelid IN ('public.analyses'::regclass, 'public.analysis_jobs'::regclass)
+ORDER BY 1, 2;
+```
+
+The expected output is three rows, all `CASCADE`:
+`analyses_id_fkey` (→ `analysis_jobs(id)`), `analyses_user_id_fkey` and
+`analysis_jobs_user_id_fkey` (→ `auth.users(id)`).
+
+**OPTIONAL fix. Run it only if a `user_id` FK is missing or is not
+`CASCADE`.** If the live constraint has a different name, put that name in
+the `DROP` line. Otherwise `IF EXISTS` does nothing and you end up with two
+FKs. First make sure there are no orphans, or the `ADD` will fail:
+
+```sql
+-- Orphan check: both counts must be 0 before the ALTERs below.
+SELECT (SELECT count(*) FROM public.analyses a
+         WHERE NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = a.user_id)) AS orphan_analyses,
+       (SELECT count(*) FROM public.analysis_jobs j
+         WHERE NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = j.user_id)) AS orphan_jobs;
+
+BEGIN;
+ALTER TABLE public.analyses
+    DROP CONSTRAINT IF EXISTS analyses_user_id_fkey,
+    ADD  CONSTRAINT analyses_user_id_fkey
+         FOREIGN KEY (user_id) REFERENCES auth.users (id) ON DELETE CASCADE;
+ALTER TABLE public.analysis_jobs
+    DROP CONSTRAINT IF EXISTS analysis_jobs_user_id_fkey,
+    ADD  CONSTRAINT analysis_jobs_user_id_fkey
+         FOREIGN KEY (user_id) REFERENCES auth.users (id) ON DELETE CASCADE;
+COMMIT;
+```
+
 ---
 
 ## Part 4 — Cross-check against `frontend/lib/services/api_client.dart`

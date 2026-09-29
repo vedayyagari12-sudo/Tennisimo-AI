@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from app.api import routes_analyses, routes_uploads
+from app.api import routes_account, routes_analyses, routes_uploads
 from app.api.auth import SupabaseJwtVerifier
 from app.api.errors import RequestIdMiddleware, register_exception_handlers
 from app.config import (
@@ -36,6 +36,7 @@ from app.config import (
     get_settings,
     parse_cors_origins,
 )
+from app.services.auth_admin import SupabaseAuthAdminClient
 from app.services.orchestrator import JobOrchestrator
 from app.services.repository import SupabaseRepository
 from app.services.storage import SupabaseStorageClient
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.token_verifier = SupabaseJwtVerifier(settings)
     app.state.storage_client = SupabaseStorageClient(settings, http_client)
     app.state.repository = SupabaseRepository(settings, http_client)
+    app.state.auth_admin_client = SupabaseAuthAdminClient(settings, http_client)
     app.state.orchestrator = JobOrchestrator(
         repository=app.state.repository,
         storage=app.state.storage_client,
@@ -157,6 +159,7 @@ def create_app() -> FastAPI:
     # 4. Routes.
     app.include_router(routes_uploads.router)
     app.include_router(routes_analyses.router)
+    app.include_router(routes_account.router)
 
     return app
 

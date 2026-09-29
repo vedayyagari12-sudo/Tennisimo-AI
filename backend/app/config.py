@@ -77,11 +77,11 @@ STORAGE_BUCKET_DEFAULT: Final[str] = "swing-videos"
 CORS_ALLOWED_ORIGINS_ENV: Final[str] = "CORS_ALLOWED_ORIGINS"
 
 #: Methods the API actually serves: ``GET`` (``/v1/analyses``,
-#: ``/v1/analyses/{id}``) and ``POST`` (``/v1/uploads/ticket``,
-#: ``/v1/analyses``). ``OPTIONS`` is answered by the CORS middleware itself and
-#: must not be listed. No route uses PUT/PATCH/DELETE, so a wildcard here would
-#: only advertise verbs that return 405.
-CORS_ALLOWED_METHODS: Final[tuple[str, ...]] = ("GET", "POST")
+#: ``/v1/analyses/{id}``), ``POST`` (``/v1/uploads/ticket``, ``/v1/analyses``)
+#: and ``DELETE`` (``/v1/account``). ``OPTIONS`` is answered by the CORS
+#: middleware itself and must not be listed. No route uses PUT/PATCH, so a
+#: wildcard here would only advertise verbs that return 405.
+CORS_ALLOWED_METHODS: Final[tuple[str, ...]] = ("GET", "POST", "DELETE")
 
 #: Request headers the client actually sends. ``Authorization`` carries the
 #: Supabase access token (Stage 2); ``Content-Type`` is needed because a JSON

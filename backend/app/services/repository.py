@@ -171,6 +171,8 @@ class Repository(Protocol):
         self, user_id: UUID, limit: int, cursor: tuple[datetime, UUID] | None
     ) -> list[AnalysisListRow]: ...
 
+    async def delete_user_rows(self, user_id: UUID) -> None: ...
+
 
 # ---------------------------------------------------------------------------
 # PostgREST implementation
@@ -336,6 +338,30 @@ class SupabaseRepository:
             query += f"&or=(created_at.lt.{stamp},and(created_at.eq.{stamp},id.lt.{row_id}))"
         response = await self._request("GET", query)
         return [AnalysisListRow.model_validate(row) for row in response.json()]
+
+    async def delete_user_rows(self, user_id: UUID) -> None:
+        """Account deletion: every `analyses` then every `analysis_jobs` row of one user.
+
+        Explicit on purpose. The `user_id -> auth.users ON DELETE CASCADE` FKs
+        are documented but NOT confirmed live (DATABASE_SETUP.md Part 7), so
+        correctness must not rest on them. `analyses` goes first because
+        `analyses.id` references `analysis_jobs.id`: deleting the parent first
+        would either cascade (harmless) or, without a cascade, violate the FK.
+        Child-first is safe under both.
+
+        Idempotent: a filtered PostgREST DELETE that matches zero rows is a
+        204, not an error, so a retry after partial success is clean.
+        """
+        await self._request(
+            "DELETE",
+            f"/analyses?user_id=eq.{user_id}",
+            headers={"Prefer": "return=minimal"},
+        )
+        await self._request(
+            "DELETE",
+            f"/analysis_jobs?user_id=eq.{user_id}",
+            headers={"Prefer": "return=minimal"},
+        )
 
 
 def _content_range_total(response: httpx.Response) -> int:
