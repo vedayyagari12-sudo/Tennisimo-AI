@@ -41,7 +41,7 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         tools:node="remove" />
     <application
-        android:label="Tennisimo AI"
+        android:label="Tennisimo"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -11,7 +11,7 @@
 /// flutter test        --dart-define=BRAND=school
 /// ```
 ///
-/// Only the palette changes. The product is named "Tennisimo AI" in both
+/// Only the palette changes. The product is named "Tennisimo" in both
 /// flavors, and nothing else about the build differs.
 library;
 

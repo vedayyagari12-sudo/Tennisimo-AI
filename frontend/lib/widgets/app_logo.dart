@@ -1,4 +1,4 @@
-/// The Tennisimo AI brand mark, drawn in code.
+/// The Tennisimo brand mark, drawn in code.
 ///
 /// This is the same drawing as the launcher icon: identical geometry, so the
 /// home-screen icon and the in-app mark are one mark, not two that drift.

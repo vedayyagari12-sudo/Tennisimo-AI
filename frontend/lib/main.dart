@@ -94,7 +94,7 @@ class TennisimoApp extends StatelessWidget {
     required Duration themeAnimationDuration,
   }) {
     return MaterialApp(
-      title: 'Tennisimo AI',
+      title: 'Tennisimo',
       theme: config.theme,
       darkTheme: config.darkTheme,
       themeMode: config.themeMode,

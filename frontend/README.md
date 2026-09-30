@@ -1,4 +1,4 @@
-# Tennisimo AI
+# Tennisimo
 
 A new Flutter project.
 

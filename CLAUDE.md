@@ -1,4 +1,4 @@
-# Project: Tennisimo AI
+# Project: Tennisimo
 
 ## What this app does
 Analyzes a user's tennis swing from a phone video. Extracts pose keypoints,
