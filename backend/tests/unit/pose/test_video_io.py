@@ -164,3 +164,53 @@ def test_non_video_file_raises_rather_than_returning_an_empty_stream(
     junk.write_bytes(b"not a video, not even close")
     with pytest.raises(VideoDecodeError):
         probe_clip(junk)
+
+
+# --------------------------------------------------------------------------- #
+# Speed changes must not change pixels
+# --------------------------------------------------------------------------- #
+
+def test_a_frame_nearest_two_targets_is_reused_as_an_independent_copy(clip: Path) -> None:
+    """25 fps source, 30 Hz targets: some decoded frame is nearest two targets.
+
+    Its conversion is reused for the second target. The reuse must be
+    pixel-identical AND must not share the first yield's buffer, so a consumer
+    holding one array can never see it change through the other.
+    """
+    frames = list(open_pose_stream(clip).frames)
+    pairs = [(a, b) for (pa, a), (pb, b) in zip(frames, frames[1:]) if pa == pb]
+    assert pairs, "a 25 fps clip sampled at 30 Hz must reuse at least one frame"
+    for first, second in pairs:
+        assert np.array_equal(first, second)
+        assert not np.shares_memory(first, second)
+
+
+def test_threaded_sampling_matches_a_single_threaded_reference(clip: Path) -> None:
+    """Frame-threaded decode and conversion reuse change speed, never pixels.
+
+    The reference decodes every frame with the decoder's default threading and
+    converts each one independently; every sampled frame must match the
+    reference frame at its PTS exactly.
+    """
+    import av
+
+    from app.pose.video_io import POSE_LONG_EDGE_PX, _to_pose_rgb
+
+    probe = probe_clip(clip)
+    reference: dict[float, np.ndarray] = {}
+    container = av.open(str(clip))
+    try:
+        stream = container.streams.video[0]
+        time_base = float(stream.time_base)
+        for frame in container.decode(stream):
+            if frame.pts is not None:
+                reference[float(frame.pts) * time_base] = _to_pose_rgb(
+                    frame, probe.rotation_deg, POSE_LONG_EDGE_PX
+                )
+    finally:
+        container.close()
+
+    sampled = list(open_pose_stream(clip).frames)
+    assert sampled, "the window produced no frames"
+    for pts, rgb in sampled:
+        assert np.array_equal(rgb, reference[pts]), f"pixels differ at pts={pts}"

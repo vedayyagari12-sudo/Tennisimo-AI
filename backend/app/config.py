@@ -217,6 +217,9 @@ class Settings:
         self.motion_scan_long_edge_px: int = _int(source, "MOTION_SCAN_LONG_EDGE_PX", 160)
         self.job_queue_max_depth: int = _int(source, "JOB_QUEUE_MAX_DEPTH", 4)
         self.job_heartbeat_stale_s: int = _int(source, "JOB_HEARTBEAT_STALE_S", 180)
+        # Import the pipeline (MediaPipe, PyAV, OpenCV: ~6-12 s) in the
+        # background at startup instead of on the first job's critical path.
+        self.warm_pipeline_on_startup: bool = _bool(source, "WARM_PIPELINE_ON_STARTUP", True)
 
         # --- v2: ball speed -------------------------------------------------
         self.ball_detection_enabled: bool = _bool(source, "BALL_DETECTION_ENABLED", True)

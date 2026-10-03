@@ -14,8 +14,11 @@ router is included.** Retrofitting an error envelope means auditing every
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
+import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -42,6 +45,29 @@ from app.services.repository import SupabaseRepository
 from app.services.storage import SupabaseStorageClient
 
 logger = logging.getLogger("tennisform")
+
+
+def _warm_pipeline() -> None:
+    """Import the analysis pipeline so the first job does not pay for it.
+
+    `default_job_runner` imports `app.services.pipeline` lazily, which pulls in
+    MediaPipe, PyAV and OpenCV: 6-12 s of import on a fast desktop, more on a
+    2 vCPU instance. Lazily, that cost landed on the FIRST job after every cold
+    start -- after the user had already submitted. Running the same import on a
+    background thread at startup moves it off that path: by the time a clip is
+    uploaded and submitted it is usually done. If a job does arrive first, its
+    own import simply waits on Python's import lock; nothing is imported twice.
+
+    Best-effort by design. A failure here is logged and otherwise ignored: the
+    job path still performs (and reports) the same import itself.
+    """
+    started = time.monotonic()
+    try:
+        importlib.import_module("app.services.pipeline")
+    except Exception:  # noqa: BLE001 - warm-up must never take the server down
+        logger.exception("pipeline warm-up failed; the first job will import it")
+        return
+    logger.info("pipeline warm-up done in %.1fs", time.monotonic() - started)
 
 
 @asynccontextmanager
@@ -71,6 +97,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings=settings,
         loop=asyncio.get_running_loop(),
     )
+    if settings.warm_pipeline_on_startup:
+        threading.Thread(target=_warm_pipeline, name="pipeline-warmup", daemon=True).start()
     logger.info("tennisform api started")
     try:
         yield

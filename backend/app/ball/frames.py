@@ -146,6 +146,10 @@ def load_measurement_window_bgr(
     container = av.open(str(path))
     try:
         stream = container.streams.video[0]
+        # Frame-threaded decode, matching the pose stream (app/pose/video_io.py).
+        # Bit-identical output; it only lets the decoder use more than one core,
+        # which matters here because this pass runs under a wall-clock deadline.
+        stream.thread_type = "AUTO"
         time_base = float(stream.time_base) if stream.time_base else 0.0
         if time_base <= 0.0:
             raise av.FFmpegError(0, "stream has no time base")

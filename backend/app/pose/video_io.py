@@ -694,6 +694,12 @@ def _sample_rgb_frames(
     container = av.open(str(path))
     try:
         stream = container.streams.video[0]
+        # Frame-threaded decode, as the dense motion scan already does. This is
+        # the decode every analysis pays, and single-threaded it was the largest
+        # single cost of Stage 5 (7.8 s -> 1.2 s for a 350-frame 1080p clip on a
+        # 12-core host). Output is bit-identical: threading changes when frames
+        # are decoded, never what they decode to.
+        stream.thread_type = "AUTO"
         time_base = float(stream.time_base) if stream.time_base else 0.0
         if time_base <= 0.0:
             raise VideoDecodeError(ErrorCode.DECODE_FAILED, "stream has no time base")
@@ -712,6 +718,16 @@ def _sample_rgb_frames(
 
         index = 0
         previous: tuple[float, np.ndarray] | None = None
+        # The last frame converted, keyed by its PTS. A source slower than the
+        # 30 Hz target grid (25 fps is common) is nearest-neighbour sampled, so
+        # one decoded frame can be the nearest to two consecutive targets. It
+        # was converted (full-res RGB + resize, the dominant per-frame cost)
+        # once per target; now it is converted once and copied for each reuse.
+        # The first yield shares its buffer with this cache, which is safe only
+        # because the consumer (extract_keypoints) treats frames as read-only --
+        # it wraps them in mp.Image and writes nothing back. A consumer that
+        # mutates frames in place must not be added without revisiting this.
+        converted: tuple[float, np.ndarray] | None = None
         for frame in container.decode(stream):
             if index >= len(targets):
                 break
@@ -728,7 +744,12 @@ def _sample_rgb_frames(
                 ):
                     chosen = previous
                 counts.sampled += 1
-                yield chosen[0], _to_pose_rgb(chosen[1], probe.rotation_deg, long_edge_px)
+                if converted is not None and converted[0] == chosen[0]:
+                    rgb = converted[1].copy()
+                else:
+                    rgb = _to_pose_rgb(chosen[1], probe.rotation_deg, long_edge_px)
+                    converted = (chosen[0], rgb)
+                yield chosen[0], rgb
                 index += 1
             previous = current
 
