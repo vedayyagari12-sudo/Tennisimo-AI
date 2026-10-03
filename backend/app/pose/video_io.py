@@ -267,6 +267,11 @@ def probe_clip(path: Path) -> ClipProbe:
 
         duration_s = _stream_duration_s(stream, container)
         if duration_s <= 0.0:
+            # No duration in the headers. This is not a corrupt file: it is what
+            # a browser's MediaRecorder writes (Android Chrome WebM), because it
+            # streams the file and cannot go back to patch the header.
+            duration_s = _packet_scan_duration_s(path, stream.index)
+        if duration_s <= 0.0:
             raise VideoDecodeError(ErrorCode.DECODE_FAILED, "clip has no measurable duration")
         if duration_s < MIN_CLIP_S:
             raise VideoDecodeError(
@@ -311,6 +316,45 @@ def _stream_duration_s(
     if container.duration is not None:
         return float(container.duration) / float(av.time_base)
     return 0.0
+
+
+def _packet_scan_duration_s(path: Path, stream_index: int) -> float:
+    """Seconds, measured from the video packets' timestamps. 0.0 if unmeasurable.
+
+    The fallback for a file whose headers carry no duration -- chiefly a WebM
+    recorded live in a browser (MediaRecorder streams the file, so the muxer
+    cannot back-patch Duration or Cues). It DEMUXES only: packets are read and
+    never decoded, so it costs milliseconds for a 15 s clip, not a decode pass.
+
+    The length is last PTS minus first PTS plus one frame interval, because the
+    last packet's own duration is usually absent in these files. The frame
+    interval is the median PTS step, which is robust to the odd short gap.
+    """
+    try:
+        container = av.open(str(path))
+    except (av.FFmpegError, OSError):
+        return 0.0
+    try:
+        stream = container.streams.video[stream_index]
+        time_base = float(stream.time_base) if stream.time_base else 0.0
+        if time_base <= 0.0:
+            return 0.0
+        stamps = sorted(
+            packet.pts
+            for packet in container.demux(stream)
+            if packet.pts is not None
+        )
+    except av.FFmpegError:
+        return 0.0
+    finally:
+        container.close()
+    if len(stamps) < 2:
+        return 0.0
+    steps = sorted(b - a for a, b in zip(stamps, stamps[1:]) if b > a)
+    if not steps:
+        return 0.0
+    frame_interval = steps[len(steps) // 2]
+    return float(stamps[-1] - stamps[0] + frame_interval) * time_base
 
 
 # --------------------------------------------------------------------------- #
