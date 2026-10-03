@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../services/haptics.dart';
+import '../services/last_seen.dart';
 import '../theme/app_theme.dart';
 import 'dashboard_screen.dart';
 import 'history_screen.dart';
@@ -16,13 +17,17 @@ import 'record_screen.dart';
 /// embedding a live preview in a persistent tab would hold the camera while
 /// they browsed their history.
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key});
+  const HomeShell({super.key, this.lastSeenRecorder});
+
+  /// Test seam only; the app passes nothing and gets a real
+  /// [LastSeenRecorder].
+  final LastSeenRecorder? lastSeenRecorder;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   static const int _dashboardTab = 0;
   static const int _recordTab = 1;
   static const int _historyTab = 2;
@@ -32,6 +37,32 @@ class _HomeShellState extends State<HomeShell> {
   /// Lets the Record action tell the dashboard a new analysis may exist.
   final GlobalKey<DashboardScreenState> _dashboardKey =
       GlobalKey<DashboardScreenState>();
+
+  late final LastSeenRecorder _lastSeen;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastSeen = widget.lastSeenRecorder ?? LastSeenRecorder();
+    WidgetsBinding.instance.addObserver(this);
+    // The shell is only built for a signed-in user, so this is an app open:
+    // a cold start with a restored session, or a fresh sign-in.
+    // Fire-and-forget: the recorder never throws and is never awaited.
+    unawaited(_lastSeen.record());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_lastSeen.recordIfDue());
+    }
+  }
 
   Future<void> _onDestinationSelected(int index) async {
     if (index != _recordTab) {

@@ -1996,3 +1996,96 @@ statements, is what prevents incident 4.
 Until then the honest statement is: **Part 1 documents the intended schema, and
 §7.1 documents the actual one. Where they disagree, §7.1 is what your INSERT
 will hit.**
+
+## Part 8 — Last-opened tracking (`public.user_activity`)
+
+**Why.** The owner wants to see, per user, when they last opened the app (both
+builds; same code). `auth.users.last_sign_in_at`
+may lag: sessions persist, so a returning user may not sign in again each time
+they open the app, and that column would not move.
+
+**How.** One table, written ONLY through a `SECURITY DEFINER` function that
+stamps the caller's row with the **server clock**. The client never sends a
+timestamp (a client-supplied time is forgeable) and has no direct read or write
+access to the table. The app calls the function as an RPC
+(`touch_last_seen`, param `p_platform`, one of `web` / `android` / `ios` /
+`other`) when the signed-in shell first appears and on each resume, at most
+once per 10 minutes (`frontend/lib/services/last_seen.dart`). The call is
+fire-and-forget: until this SQL has been run the RPC fails, and the app ignores
+the failure silently.
+
+### 8.1 SQL — run once in the Supabase SQL editor
+
+```sql
+-- 1. Table. One row per user. Deleted automatically with the account.
+create table if not exists public.user_activity (
+  user_id        uuid primary key references auth.users (id) on delete cascade,
+  last_opened_at timestamptz not null default now(),
+  platform       text
+);
+
+-- 2. Lock it down. RLS on with NO policies, plus revoked table privileges:
+--    clients can neither read nor write this table directly.
+alter table public.user_activity enable row level security;
+revoke all on public.user_activity from anon, authenticated;
+
+-- 3. The only way in: stamp the CALLER's row using the SERVER clock.
+create or replace function public.touch_last_seen(p_platform text default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+
+  insert into public.user_activity as a (user_id, last_opened_at, platform)
+  values (auth.uid(), now(), left(p_platform, 32))
+  on conflict (user_id) do update
+    set last_opened_at = now(),
+        platform       = coalesce(excluded.platform, a.platform);
+end;
+$$;
+
+revoke all on function public.touch_last_seen(text) from public, anon;
+grant execute on function public.touch_last_seen(text) to authenticated;
+```
+
+### 8.2 Rollback
+
+```sql
+drop function if exists public.touch_last_seen(text);
+drop table if exists public.user_activity;
+```
+
+### 8.3 Reading it
+
+The Table Editor shows `public.user_activity` with only the raw user UUID. To
+see emails, run this in the SQL editor, which can read `auth.users`:
+
+```sql
+select u.email, a.last_opened_at, a.platform
+from public.user_activity a
+join auth.users u on u.id = a.user_id
+order by a.last_opened_at desc;
+```
+
+> **WARNING — do NOT create a view over `auth.users` in the `public` schema**
+> (for example to make the query above browsable in the Table Editor). Views
+> in `public` are exposed through the REST API and would leak users' emails.
+> Keep this as an ad-hoc query in the SQL editor.
+
+### 8.4 Account deletion
+
+Deleting an account removes its `user_activity` row through the
+`ON DELETE CASCADE` foreign key on `user_id`: `DELETE /v1/account` deletes the
+auth user last (see Part 3.7), and the cascade removes the row with it. No
+change to the endpoint is needed.
+
+### 8.5 Privacy
+
+This table holds personal data (when each user last opened the app, and on
+which platform) about users who may be minors, so it belongs in the privacy
+policy.
