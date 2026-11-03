@@ -17,8 +17,15 @@ import pytest
 
 from app.analysis.handedness import HINT_CONFIDENCE_FLOOR
 from app.analysis.metrics import (
+    HIP_LINE_FORESHORTENED,
+    HIP_LINE_MIN_LENGTH_TU,
+    HIP_LINE_TOO_FEW_FRAMES,
     METRIC_VIEW_SENSITIVE,
-    angular_range_deg,
+    SHOULDER_LINE_FORESHORTENED,
+    SHOULDER_LINE_MIN_LENGTH_TU,
+    SHOULDER_LINE_TOO_FEW_FRAMES,
+    axial_circular_mean_deg,
+    axial_net_turn_deg,
     balance_sway_tu,
     compute_swing_metrics,
     contact_height_ratio,
@@ -30,6 +37,7 @@ from app.analysis.metrics import (
     front_knee_side,
     head_stillness_tu,
     hip_rotation_deg,
+    hip_rotation_line,
     joint_angle_deg,
     knee_flexion_min_deg,
     line_angle_deg,
@@ -38,11 +46,13 @@ from app.analysis.metrics import (
     position_spread_tu,
     shoulder_hip_separation_deg,
     shoulder_turn_deg,
+    shoulder_turn_line,
     signed_angle_difference_deg,
     swing_path_fit,
     swing_span,
     vector_angle_deg,
     weight_transfer_tu,
+    wrap_axial_degrees,
     wrap_degrees,
     wrist_lag_deg,
     wrist_separation_at_contact_tu,
@@ -265,12 +275,33 @@ def test_joint_angle_of_degenerate_limb_is_none_not_zero() -> None:
     )
 
 
-def test_angular_range_unwraps_across_the_boundary() -> None:
-    assert angular_range_deg(np.array([179.0, -179.0])) == pytest.approx(2.0)
+def test_wrap_axial_degrees_maps_into_plus_minus_ninety() -> None:
+    assert float(wrap_axial_degrees(100.0)) == pytest.approx(-80.0)
+    assert float(wrap_axial_degrees(-100.0)) == pytest.approx(80.0)
+    assert float(wrap_axial_degrees(180.0)) == pytest.approx(0.0)
+    assert float(wrap_axial_degrees(45.0)) == pytest.approx(45.0)
 
 
-def test_angular_range_of_empty_is_none() -> None:
-    assert angular_range_deg(np.zeros((0,))) is None
+def test_axial_circular_mean_treats_opposite_directions_as_one_line() -> None:
+    # 10 deg and 190 deg are the same undirected line.
+    assert axial_circular_mean_deg(np.array([10.0, 190.0, 10.0])) == pytest.approx(10.0)
+    # Straddling the axial seam: 89 and -89 are 2 deg apart, mean is the seam.
+    mean = axial_circular_mean_deg(np.array([89.0, -89.0]))
+    assert mean is not None
+    assert abs(abs(mean) - 90.0) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_axial_net_turn_unwraps_across_the_boundary() -> None:
+    # Rewritten from the old angular_range_deg([179, -179]) == 2.0 test: the
+    # boundary crossing is still a 2 deg turn, now computed axially.
+    angles = np.array([179.0, 179.0, 179.0, -179.0, -179.0, -179.0])
+    assert axial_net_turn_deg(angles) == pytest.approx(2.0)
+
+
+def test_axial_net_turn_of_too_few_frames_is_none() -> None:
+    # Rewritten from the old "range of empty is None" test.
+    assert axial_net_turn_deg(np.zeros((0,))) is None
+    assert axial_net_turn_deg(np.zeros((4,))) is None
 
 
 def test_max_absolute_signed_preserves_the_sign() -> None:
@@ -528,17 +559,212 @@ def test_shoulder_hip_separation_keeps_the_sign_of_the_largest_twist() -> None:
     assert value == pytest.approx(-30.0)
 
 
-def test_shoulder_turn_is_the_angle_range_across_the_swing() -> None:
-    seq = build_sequence()
+# --- net axial turn: shoulder_turn_deg / hip_rotation_deg -------------------
+#
+# build_phases() puts the swing (takeback start -> follow-through end) at
+# frames 4..FRAME_COUNT-1. Every turn fixture drives the line inside that span.
+
+SWING_START = 4
+
+
+def with_line_angles(
+    seq: NormalizedSequence,
+    left: int,
+    right: int,
+    angles_deg: np.ndarray,
+    *,
+    first_frame: int = SWING_START,
+    length_tu: float | np.ndarray = 1.0,
+    centre: tuple[float, float] = (0.0, 1.0),
+) -> NormalizedSequence:
+    """Set the left->right line to ``angles_deg[i]`` at frame ``first_frame + i``."""
     points = np.array(seq.points, copy=True)
-    for frame, degrees in ((6, 0.0), (12, 40.0), (18, 10.0)):
-        angle = math.radians(degrees)
-        half = np.array([math.cos(angle), math.sin(angle)]) * 0.5
-        points[frame, LEFT_SHOULDER] = np.array([0.0, 1.0]) - half
-        points[frame, RIGHT_SHOULDER] = np.array([0.0, 1.0]) + half
-    seq = dataclasses.replace(seq, points=points)
-    # The remaining frames sit at 0 deg, so the range is 0 -> 40.
-    assert shoulder_turn_deg(seq, build_phases()) == pytest.approx(40.0)
+    angles = np.asarray(angles_deg, dtype=np.float64)
+    lengths = np.broadcast_to(np.asarray(length_tu, dtype=np.float64), angles.shape)
+    for offset, (degrees, length) in enumerate(zip(angles, lengths)):
+        frame = first_frame + offset
+        half = np.array([math.cos(math.radians(degrees)), math.sin(math.radians(degrees))])
+        half = half * float(length) / 2.0
+        points[frame, left] = np.asarray(centre) - half
+        points[frame, right] = np.asarray(centre) + half
+    return dataclasses.replace(seq, points=points)
+
+
+def swing_frames() -> int:
+    return FRAME_COUNT - SWING_START
+
+
+def steady_turn(start_deg: float, turn_deg: float, *, hold: int = 4) -> np.ndarray:
+    """Hold ``start_deg`` for ``hold`` frames, turn linearly, then hold the end.
+
+    The holds make the answer exact: the start is the mean of the first three
+    reliable frames, and the peak is a 3-frame median.
+    """
+    ramp = np.linspace(start_deg, start_deg + turn_deg, swing_frames() - 2 * hold)
+    return np.concatenate(
+        [np.full(hold, start_deg), ramp, np.full(hold, start_deg + turn_deg)]
+    )
+
+
+def test_steady_sixty_degree_shoulder_turn_reads_sixty() -> None:
+    seq = with_line_angles(
+        build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, steady_turn(0.0, 60.0)
+    )
+    assert shoulder_turn_deg(seq, build_phases()) == pytest.approx(60.0, abs=1e-6)
+
+
+def test_sixty_degree_turn_across_the_plus_minus_180_boundary_reads_sixty() -> None:
+    # 150 -> 210 deg: the raw atan2 angle jumps from +180 to -180 midway.
+    seq = with_line_angles(
+        build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, steady_turn(150.0, 60.0)
+    )
+    assert shoulder_turn_deg(seq, build_phases()) == pytest.approx(60.0, abs=1e-6)
+
+
+def test_hip_turn_measures_the_hip_line() -> None:
+    seq = with_line_angles(
+        build_sequence(), LEFT_HIP, RIGHT_HIP, steady_turn(0.0, 40.0), centre=(0.0, 0.0)
+    )
+    assert hip_rotation_deg(seq, build_phases()) == pytest.approx(40.0, abs=1e-6)
+    # The shoulder line was left static.
+    assert shoulder_turn_deg(seq, build_phases()) == pytest.approx(0.0)
+
+
+def test_uniform_jitter_stays_small_and_does_not_grow_with_series_length() -> None:
+    # +/-5 deg uniform jitter around a static line. The old max-min of an
+    # unwrapped series was 10 deg here; a staircase of noise could only grow.
+    # The bound for the new metric is 5 (jitter) + 5 (worst start error) = 10.
+    rng = np.random.default_rng(7)
+    short_count = 20
+    long_count = 10 * short_count
+    long_seq = build_sequence(frame_count=long_count + SWING_START)
+    long_phases = build_phases(follow_through=(16, long_count + SWING_START - 1))
+    jitter = rng.uniform(-5.0, 5.0, long_count)
+    short_value = shoulder_turn_deg(
+        with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, jitter[:short_count]),
+        build_phases(),
+    )
+    long_value = shoulder_turn_deg(
+        with_line_angles(long_seq, LEFT_SHOULDER, RIGHT_SHOULDER, jitter), long_phases
+    )
+    assert short_value is not None and long_value is not None
+    assert short_value <= 10.0
+    assert long_value <= 10.0
+
+
+def test_one_left_right_swap_frame_leaves_the_turn_unchanged() -> None:
+    angles = steady_turn(0.0, 60.0)
+    clean = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, angles)
+    swapped_angles = angles.copy()
+    swapped_angles[8] += 180.0  # left and right landmarks traded places
+    swapped = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, swapped_angles)
+    assert shoulder_turn_deg(swapped, build_phases()) == pytest.approx(
+        shoulder_turn_deg(clean, build_phases()), abs=1e-6
+    )
+
+
+def test_three_alternating_swaps_leave_the_turn_unchanged() -> None:
+    angles = steady_turn(0.0, 60.0)
+    clean = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, angles)
+    swapped_angles = angles.copy()
+    swapped_angles[[5, 7, 9]] += 180.0
+    swapped = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, swapped_angles)
+    assert shoulder_turn_deg(swapped, build_phases()) == pytest.approx(
+        shoulder_turn_deg(clean, build_phases()), abs=1e-6
+    )
+
+
+def test_a_staircase_of_flips_never_exceeds_ninety() -> None:
+    # Each frame adds +170 deg: unwrapped, the old metric read ~3230 deg.
+    angles = np.arange(swing_frames(), dtype=np.float64) * 170.0
+    seq = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, angles)
+    value = shoulder_turn_deg(seq, build_phases())
+    assert value is not None
+    assert 0.0 <= value <= 90.0
+
+
+def test_foreshortened_frames_never_set_the_start_or_the_peak() -> None:
+    angles = np.zeros(swing_frames())
+    lengths = np.ones(swing_frames())
+    # Foreshortened frames at the start and mid-swing carry wild angles.
+    angles[[0, 1, 2]] = 80.0
+    angles[[10, 11, 12]] = -75.0
+    lengths[[0, 1, 2, 10, 11, 12]] = SHOULDER_LINE_MIN_LENGTH_TU * 0.5
+    seq = with_line_angles(
+        build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, angles, length_tu=lengths
+    )
+    value, flag = shoulder_turn_line(seq, build_phases())
+    assert value == pytest.approx(0.0)
+    assert flag is None
+
+
+def test_a_single_spike_frame_cannot_set_the_peak_even_at_the_window_edge() -> None:
+    angles = np.zeros(swing_frames())
+    angles[-1] = 60.0  # last frame of the window
+    angles[9] = 70.0   # mid-window
+    seq = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, angles)
+    assert shoulder_turn_deg(seq, build_phases()) == pytest.approx(0.0)
+
+
+def test_fewer_than_five_reliable_frames_is_none_with_the_foreshortened_flag() -> None:
+    lengths = np.full(swing_frames(), SHOULDER_LINE_MIN_LENGTH_TU * 0.5)
+    lengths[:4] = 1.0  # only four reliable frames
+    seq = with_line_angles(
+        build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, np.zeros(swing_frames()),
+        length_tu=lengths,
+    )
+    assert shoulder_turn_line(seq, build_phases()) == (None, SHOULDER_LINE_FORESHORTENED)
+    metrics, warnings = compute_swing_metrics(seq, RIGHT_HANDED, build_contact(), build_phases())
+    assert metrics.shoulder_turn_deg is None
+    assert [w for w in warnings if w.startswith(SHOULDER_LINE_FORESHORTENED)]
+
+
+def test_foreshortened_hip_line_raises_the_hip_flag() -> None:
+    seq = with_line_angles(
+        build_sequence(), LEFT_HIP, RIGHT_HIP, np.zeros(swing_frames()),
+        length_tu=HIP_LINE_MIN_LENGTH_TU * 0.5, centre=(0.0, 0.0),
+    )
+    assert hip_rotation_line(seq, build_phases()) == (None, HIP_LINE_FORESHORTENED)
+    metrics, warnings = compute_swing_metrics(seq, RIGHT_HANDED, build_contact(), build_phases())
+    assert metrics.hip_rotation_deg is None
+    assert metrics.shoulder_turn_deg is not None
+    assert [w for w in warnings if w.startswith(HIP_LINE_FORESHORTENED)]
+    assert not [w for w in warnings if w.startswith(SHOULDER_LINE_FORESHORTENED)]
+
+
+def test_line_thresholds_are_separate_per_line() -> None:
+    # 0.09 TU passes the hip threshold (0.08) but fails the shoulder one (0.10).
+    seq = with_line_angles(
+        build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, np.zeros(swing_frames()),
+        length_tu=0.09,
+    )
+    seq = with_line_angles(
+        seq, LEFT_HIP, RIGHT_HIP, np.zeros(swing_frames()), length_tu=0.09, centre=(0.0, 0.0)
+    )
+    assert shoulder_turn_line(seq, build_phases()) == (None, SHOULDER_LINE_FORESHORTENED)
+    assert hip_rotation_line(seq, build_phases()) == (pytest.approx(0.0), None)
+
+
+def test_too_few_visible_frames_raises_the_too_few_frames_flag() -> None:
+    visibility = np.array(build_sequence().visibility, copy=True)
+    visibility[SWING_START + 4 :, LEFT_HIP] = 0.1  # only 4 visible swing frames
+    seq = dataclasses.replace(build_sequence(), visibility=visibility)
+    assert hip_rotation_line(seq, build_phases()) == (None, HIP_LINE_TOO_FEW_FRAMES)
+
+
+def test_turn_without_phases_is_none_and_unflagged() -> None:
+    assert shoulder_turn_line(build_sequence(), None) == (None, None)
+    assert hip_rotation_line(build_sequence(), None) == (None, None)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_turn_is_always_within_zero_to_ninety(seed: int) -> None:
+    rng = np.random.default_rng(seed)
+    angles = rng.uniform(-720.0, 720.0, swing_frames())
+    seq = with_line_angles(build_sequence(), LEFT_SHOULDER, RIGHT_SHOULDER, angles)
+    value = shoulder_turn_deg(seq, build_phases())
+    assert value is not None
+    assert 0.0 <= value <= 90.0
 
 
 def test_hip_rotation_of_a_static_body_is_a_measured_zero() -> None:

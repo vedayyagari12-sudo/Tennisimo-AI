@@ -1603,8 +1603,8 @@ Each metric carries a `view_sensitive: bool`. This flag is the load-bearing miti
 | Metric | Unit | View-sensitive | Definition |
 |---|---|---|---|
 | `shoulder_hip_separation_deg` | deg | **No** | Max signed angle between shoulder line and hip line during takeback ("X-factor"). Both lines share a projection, so the difference is largely projection-stable. |
-| `shoulder_turn_deg` | deg | **Yes** | Shoulder-line angle range relative to image x-axis. |
-| `hip_rotation_deg` | deg | **Yes** | Hip-line angle range across the swing. |
+| `shoulder_turn_deg` | deg | **Yes** | **Net axial turn** of the shoulder line across the swing (takeback start → follow-through end), **range 0–90**. Since v4. The line is undirected, so angle differences wrap to ±90 (immune to left/right landmark swaps). A frame is reliable only if both shoulders pass the visibility test AND the line is ≥ 0.10 TU long (not foreshortened). Start = axial circular mean of the first 3 reliable frames; result = peak of the 3-frame median (interior windows only) of \|wrapped deviation from start\|. Fewer than 5 reliable frames → `None` plus a warning starting `shoulder_line_foreshortened` (some visible frame failed the length test) or `shoulder_line_too_few_frames`. **Cannot exceed 90**, so it cannot reach the top of the 80–110 / 70–110 bands. v3 was max − min of an unwrapped series and read up to 491.8 deg on real footage. |
+| `hip_rotation_deg` | deg | **Yes** | Same definition on the hip line, **range 0–90**, length threshold ≥ 0.08 TU (the hip line is naturally ~half the shoulder line's length), flags `hip_line_foreshortened` / `hip_line_too_few_frames`. Since v4. |
 | `elbow_angle_at_contact_deg` | deg | **Yes** | Shoulder–elbow–wrist angle, racket arm, at contact. |
 | `wrist_lag_deg` | deg | **Yes** | Angle between forearm vector and hand-velocity vector at contact − 3 frames. Proxy only — the racket head is not observable. |
 | `contact_height_ratio` | ratio | **No** | Wrist y at contact mapped to 0 = mid-hip, 1 = mid-shoulder. |

@@ -73,6 +73,31 @@ MIN_FIT_POINTS: Final[int] = 3
 # noise, and noise dressed as a number is worse than None.
 MIN_VECTOR_NORM: Final[float] = 1e-9
 
+# shoulder_turn_deg / hip_rotation_deg (net axial turn; PIPELINE.md Stage 13).
+# A body line seen end-on is foreshortened: its 2D length collapses and its
+# 2D angle becomes landmark noise (a real v3 clip read 491.8 deg from that).
+# Visibility stays ~1.00 on such frames, so only the LENGTH can catch it.
+# Thresholds are ABSOLUTE torso units, one per line, read off the corpus: the
+# frame-to-frame axial angle step stops containing >45 deg jumps at 0.10 TU
+# for the shoulder line and 0.08 TU for the hip line (the shoulder line is
+# naturally ~2x longer: median 0.49 vs 0.27 TU). Absolute rather than relative
+# to the clip, because a clip that is end-on throughout has a small p90 of its
+# own and a relative cut would accept it.
+SHOULDER_LINE_MIN_LENGTH_TU: Final[float] = 0.10
+HIP_LINE_MIN_LENGTH_TU: Final[float] = 0.08
+# Fewer reliable frames than this -> None plus a flag.
+MIN_RELIABLE_TURN_FRAMES: Final[int] = 5
+# The start orientation is the axial mean of this many first reliable frames.
+TURN_START_FRAMES: Final[int] = 3
+# Flags carried in compute_swing_metrics' warnings (each warning STARTS with
+# its flag). "_foreshortened": at least one visible frame was rejected for
+# length and that left too few; "_too_few_frames": too few even before the
+# length test.
+SHOULDER_LINE_FORESHORTENED: Final[str] = "shoulder_line_foreshortened"
+HIP_LINE_FORESHORTENED: Final[str] = "hip_line_foreshortened"
+SHOULDER_LINE_TOO_FEW_FRAMES: Final[str] = "shoulder_line_too_few_frames"
+HIP_LINE_TOO_FEW_FRAMES: Final[str] = "hip_line_too_few_frames"
+
 # Each metric's `view_sensitive` flag, from the Stage 13 table's third column.
 # It is not a field of SwingMetrics -- the schema at PIPELINE.md line 1809 puts
 # `view_sensitive: bool` on Stage 15's MetricScore -- so Stage 13 exports it as
@@ -170,17 +195,63 @@ def joint_angle_deg(
     return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
 
 
-def angular_range_deg(angles: np.ndarray) -> float | None:
-    """max - min of a sequence of angles in degrees, unwrapped first.
+def wrap_axial_degrees(angle: np.ndarray | float) -> np.ndarray:
+    """Wrap AXIAL angle differences into [-90, 90).
 
-    Unwrapping matters: a shoulder line crossing the +/-180 boundary otherwise
-    reports a ~360 deg turn from a few degrees of real rotation.
+    An undirected line at ``a`` and at ``a + 180`` is the same line, so a
+    difference between two line orientations is only defined modulo 180.
+    """
+    return np.asarray((np.asarray(angle, dtype=np.float64) + 90.0) % 180.0 - 90.0)
+
+
+def axial_circular_mean_deg(angles: np.ndarray) -> float | None:
+    """Circular mean of undirected line orientations, in [-90, 90).
+
+    Doubling maps the 180-periodic orientation onto the 360-periodic circle,
+    where the ordinary circular mean is defined; halving maps it back. None if
+    empty, non-finite, or the orientations cancel out (no mean direction).
     """
     data = np.asarray(angles, dtype=np.float64).reshape(-1)
     if data.shape[0] == 0 or not np.all(np.isfinite(data)):
         return None
-    unwrapped = np.degrees(np.unwrap(np.radians(data)))
-    return float(np.max(unwrapped) - np.min(unwrapped))
+    doubled = np.radians(2.0 * data)
+    sine = float(np.mean(np.sin(doubled)))
+    cosine = float(np.mean(np.cos(doubled)))
+    if float(np.hypot(sine, cosine)) < MIN_VECTOR_NORM:
+        return None
+    return float(wrap_axial_degrees(np.degrees(np.arctan2(sine, cosine)) / 2.0))
+
+
+def axial_net_turn_deg(angles: np.ndarray) -> float | None:
+    """Net AXIAL turn of a body line, in [0, 90], from its reliable-frame angles.
+
+    ``angles`` are line orientations in degrees, in time order, ALREADY
+    restricted to reliable frames. The start orientation is the axial circular
+    mean of the first ``TURN_START_FRAMES``; each frame's deviation is its
+    axial difference from that start, wrapped to +/-90. The magnitude is then
+    smoothed by a 3-frame median over INTERIOR windows only (no edge padding),
+    so no single frame -- including the first or last -- can set the peak.
+    The result is the peak smoothed magnitude.
+
+    Axial means immune to left/right landmark swaps (a swap is a 180 deg
+    directed jump, a 0 deg axial one). It also means the result CANNOT exceed
+    90 deg: a real turn of 100 deg reads as 80.
+
+    Smoothing |deviation| rather than the signed deviation is deliberate: near
+    +/-90 the sign is arbitrary (89 and -89 are 2 deg apart), so a signed median
+    there could pick the wrong neighbour; the magnitude has no such seam.
+    """
+    data = np.asarray(angles, dtype=np.float64).reshape(-1)
+    if data.shape[0] < MIN_RELIABLE_TURN_FRAMES or not np.all(np.isfinite(data)):
+        return None
+    start = axial_circular_mean_deg(data[:TURN_START_FRAMES])
+    if start is None:
+        return None
+    magnitude = np.abs(wrap_axial_degrees(data - start))
+    smoothed = np.median(
+        np.stack([magnitude[:-2], magnitude[1:-1], magnitude[2:]]), axis=0
+    )
+    return float(np.clip(np.max(smoothed), 0.0, 90.0))
 
 
 def max_absolute_signed(values: np.ndarray) -> float | None:
@@ -378,39 +449,97 @@ def shoulder_hip_separation_deg(
     return max_absolute_signed(np.asarray(separations, dtype=np.float64))
 
 
-def _line_angle_range(
+def line_net_turn(
     seq: NormalizedSequence,
     phases: SwingPhases | None,
     left_index: int,
     right_index: int,
-) -> float | None:
-    landmarks = (left_index, right_index)
-    frames = visible_frames_in(seq, swing_span(phases), landmarks)
+    *,
+    min_length_tu: float,
+    foreshortened_flag: str,
+    too_few_flag: str,
+) -> tuple[float | None, str | None]:
+    """Net axial turn of the ``left -> right`` line across the swing, plus a flag.
+
+    Returns ``(value, flag)``. A frame is RELIABLE only if both landmarks pass
+    the visibility test AND the line is at least ``min_length_tu`` long (not
+    foreshortened). No swing window -> ``(None, None)``, as before. A window
+    with fewer than ``MIN_RELIABLE_TURN_FRAMES`` reliable frames ->
+    ``(None, flag)``: ``foreshortened_flag`` if the length test rejected any
+    visible frame, else ``too_few_flag``. ``flag`` is a bare name; the caller
+    words the warning.
+    """
+    span = swing_span(phases)
+    if span is None:
+        return None, None
+    frames = frame_window(seq, span[0], span[1])
     if frames.shape[0] == 0:
-        return None
+        return None, None
     points = np.asarray(seq.points, dtype=np.float64)
-    angles: list[float] = []
-    for frame in frames:
-        angle = line_angle_deg(points[frame, left_index], points[frame, right_index])
-        if angle is not None:
-            angles.append(angle)
-    if not angles:
-        return None
-    return angular_range_deg(np.asarray(angles, dtype=np.float64))
+    visible = visible_mask(seq, (left_index, right_index))[frames]
+    vectors = points[frames, right_index] - points[frames, left_index]
+    lengths = np.hypot(vectors[:, 0], vectors[:, 1])
+    finite = np.isfinite(lengths)
+    long_enough = finite & (np.where(finite, lengths, 0.0) >= float(min_length_tu))
+    reliable = visible & long_enough
+    if int(np.count_nonzero(reliable)) < MIN_RELIABLE_TURN_FRAMES:
+        rejected_for_length = bool(np.any(visible & finite & ~long_enough))
+        return None, foreshortened_flag if rejected_for_length else too_few_flag
+    angles = np.degrees(np.arctan2(vectors[reliable, 1], vectors[reliable, 0]))
+    return axial_net_turn_deg(angles), None
+
+
+def shoulder_turn_line(
+    seq: NormalizedSequence, phases: SwingPhases | None
+) -> tuple[float | None, str | None]:
+    """``shoulder_turn_deg`` with its flag. See :func:`line_net_turn`."""
+    return line_net_turn(
+        seq,
+        phases,
+        LEFT_SHOULDER,
+        RIGHT_SHOULDER,
+        min_length_tu=SHOULDER_LINE_MIN_LENGTH_TU,
+        foreshortened_flag=SHOULDER_LINE_FORESHORTENED,
+        too_few_flag=SHOULDER_LINE_TOO_FEW_FRAMES,
+    )
+
+
+def hip_rotation_line(
+    seq: NormalizedSequence, phases: SwingPhases | None
+) -> tuple[float | None, str | None]:
+    """``hip_rotation_deg`` with its flag. See :func:`line_net_turn`."""
+    return line_net_turn(
+        seq,
+        phases,
+        LEFT_HIP,
+        RIGHT_HIP,
+        min_length_tu=HIP_LINE_MIN_LENGTH_TU,
+        foreshortened_flag=HIP_LINE_FORESHORTENED,
+        too_few_flag=HIP_LINE_TOO_FEW_FRAMES,
+    )
 
 
 def shoulder_turn_deg(seq: NormalizedSequence, phases: SwingPhases | None) -> float | None:
-    """Shoulder-line angle range relative to the x-axis, across the swing.
+    """Net axial shoulder-line turn across the swing, in [0, 90].
 
     The Stage 13 table fixes no window for this one; it is matched to
     ``hip_rotation_deg``'s "across the swing" so the two stay comparable.
     """
-    return _line_angle_range(seq, phases, LEFT_SHOULDER, RIGHT_SHOULDER)
+    return shoulder_turn_line(seq, phases)[0]
 
 
 def hip_rotation_deg(seq: NormalizedSequence, phases: SwingPhases | None) -> float | None:
-    """Hip-line angle range across the swing."""
-    return _line_angle_range(seq, phases, LEFT_HIP, RIGHT_HIP)
+    """Net axial hip-line turn across the swing, in [0, 90]."""
+    return hip_rotation_line(seq, phases)[0]
+
+
+def turn_flag_warning(metric_name: str, flag: str) -> str:
+    """The warning text for a turn-metric flag. Always STARTS with the flag."""
+    return (
+        f"{flag}: {metric_name} unavailable, fewer than {MIN_RELIABLE_TURN_FRAMES} "
+        "reliable frames in the swing (a frame needs both landmarks visible and the "
+        "body line not foreshortened)"
+    )
 
 
 def elbow_angle_at_contact_deg(
@@ -692,10 +821,18 @@ def compute_swing_metrics(
         hand = handedness.handedness
         contact_frame = int(contact.frame_index)
         fit = swing_path_fit(seq, hand, contact_frame)
+        shoulder_turn, shoulder_flag = shoulder_turn_line(seq, phases)
+        hip_rotation, hip_flag = hip_rotation_line(seq, phases)
+        for metric_name, flag in (
+            ("shoulder_turn_deg", shoulder_flag),
+            ("hip_rotation_deg", hip_flag),
+        ):
+            if flag is not None:
+                warnings.append(turn_flag_warning(metric_name, flag))
         metrics = SwingMetrics(
             shoulder_hip_separation_deg=shoulder_hip_separation_deg(seq, phases),
-            shoulder_turn_deg=shoulder_turn_deg(seq, phases),
-            hip_rotation_deg=hip_rotation_deg(seq, phases),
+            shoulder_turn_deg=shoulder_turn,
+            hip_rotation_deg=hip_rotation,
             elbow_angle_at_contact_deg=elbow_angle_at_contact_deg(seq, hand, contact_frame),
             wrist_lag_deg=wrist_lag_deg(seq, hand, contact_frame),
             contact_height_ratio=contact_height_ratio(seq, hand, contact_frame),

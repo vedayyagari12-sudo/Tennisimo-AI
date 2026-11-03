@@ -121,7 +121,14 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: v3: ``swing_path_angle_deg`` is folded onto the swing's own direction of
 #: travel, so a leftward-travelling swing no longer reads ~180 deg off. v2 rows
 #: with a leftward swing carry the old value and must not be trended against v3.
-PIPELINE_VERSION: Final[str] = "v3"
+#:
+#: v4: ``shoulder_turn_deg`` and ``hip_rotation_deg`` are the NET AXIAL turn
+#: (0-90 deg) over reliable frames, replacing v3's max - min of an unwrapped
+#: series (which read up to 491.8 deg on real footage). A frame whose body line
+#: is foreshortened (shoulder < 0.10 TU, hip < 0.08 TU) is unreliable; fewer
+#: than 5 reliable frames gives None plus a ``*_line_foreshortened`` /
+#: ``*_line_too_few_frames`` warning. v3 rows must not be trended against v4.
+PIPELINE_VERSION: Final[str] = "v4"
 
 
 class StageTimer:
