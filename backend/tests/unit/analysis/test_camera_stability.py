@@ -87,6 +87,28 @@ def test_bump_with_wobble_starts_at_the_knock() -> None:
     assert assess(t, shifts).bumped_at_s == 10.0
 
 
+def test_wander_that_rests_late_is_not_a_bump() -> None:
+    """A hand wandering for 6 s (about the real clip's rate, scaled to 1920)
+    that then holds still is moving, not knocked."""
+    t = times(12.0)
+    shifts = np.column_stack([np.minimum(t, 6.0) * 6.0, np.sin(2.0 * t) * 8.0])
+    shifts[t >= 6.0] = (36.0, 0.0)
+    result = assess(t, shifts)
+    assert result.bumped_at_s is None
+    assert result.verdict is StabilityVerdict.MOVING
+
+
+def test_settle_may_follow_a_second_of_wobble_but_not_more() -> None:
+    t = times(15.0)
+    prompt = np.zeros((len(t), 2))
+    prompt[t >= 5.0] = (8.0, 0.0)
+    prompt[(t >= 5.0) & (t <= 5.5)] = (16.0, 6.0)  # wobble, rest from 6.0
+    slow = prompt.copy()
+    slow[(t >= 5.0) & (t <= 6.5)] = np.array([(16.0, 6.0), (4.0, -6.0), (14.0, 5.0), (5.0, -5.0)])
+    assert assess(t, prompt).bumped_at_s == 5.0
+    assert assess(t, slow).bumped_at_s is None
+
+
 def test_bump_needs_one_second() -> None:
     """Three samples at 2 Hz span 1 s; two span 0.5 s and are not a bump."""
     t = times(10.0)
@@ -172,6 +194,17 @@ def test_too_few_samples_is_unknown(n: int) -> None:
     result = assess_camera_stability(np.zeros(n), np.zeros((n, 2)), counts(n), LONG_EDGE)
     assert result.verdict is StabilityVerdict.UNKNOWN
     assert result.samples == n
+
+
+def test_bump_right_after_the_reference_is_unknown_not_stable() -> None:
+    """Only the reference (zero by construction) precedes it: nothing judged."""
+    t = times(10.0)
+    shifts = np.zeros((len(t), 2))
+    shifts[1:] = (8.0, 0.0)
+    assert assess(t, shifts) == CameraStability(StabilityVerdict.UNKNOWN, None, None, None, len(t))
+    shifts[1] = 0.0  # one real sample before the bump: judged
+    later = assess(t, shifts)
+    assert later.verdict is StabilityVerdict.STABLE and later.bumped_at_s == 1.0
 
 
 def test_failed_samples_are_left_out() -> None:

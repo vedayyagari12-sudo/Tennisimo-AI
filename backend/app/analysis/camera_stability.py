@@ -17,14 +17,19 @@ Decision taken here (not in the brief): a bump must SETTLE. Read literally,
 the bump rule also fires on a continuous pan (it crosses 0.2 % within a second
 or two and stays above it), which would leave only a near-zero pre-bump p95 and
 call a panning camera "stable, bumped at 0.5 s". A tripod knock ends at a new
-fixed position; a pan does not. So an excursion counts as a bump only if it
-also contains a 1 s window whose samples lie within ``BUMP_SETTLE_FRACTION`` of
-their own median shift. ``bumped_at_s`` is then the start of that excursion,
-which satisfies the brief's definition. An unsettled excursion stays in the
-p95, so a pan is ``moving``.
+fixed position, promptly; a pan or a wandering hand does not. So an excursion
+counts as a bump only if a 1 s window starting within ``BUMP_SETTLE_WITHIN_S``
+of the excursion's start has every sample within ``BUMP_SETTLE_FRACTION`` of
+the window's median shift. ``bumped_at_s`` is then the start of that excursion,
+which satisfies the brief's definition. Any other excursion stays in the p95,
+so a pan is ``moving``. (The "promptly" part was added after a real handheld
+clip wandered 4-18 px for 6.5 s, then held still for 1 s, and read as "stable,
+bumped at 0.52 s".)
 
 Fewer than ``MIN_SAMPLES`` finite samples is ``unknown``: one sample is its own
-reference, so its shift is zero by construction and proves nothing.
+reference, so its shift is zero by construction and proves nothing. For the
+same reason a bump at the second sample, which leaves only the reference
+before it, is ``unknown`` rather than a "stable" judged on nothing.
 """
 
 from __future__ import annotations
@@ -51,6 +56,9 @@ BUMP_FRACTION: Final[float] = 0.002
 BUMP_MIN_DURATION_S: Final[float] = 1.0
 #: Settled means every sample of a 1 s window within this of the window median.
 BUMP_SETTLE_FRACTION: Final[float] = 0.001
+#: A knock comes to rest promptly: the settled window must start this soon
+#: after the excursion does (a second of wobble is allowed).
+BUMP_SETTLE_WITHIN_S: Final[float] = 1.0
 MIN_MEDIAN_FEATURES: Final[float] = 30.0
 MIN_SAMPLES: Final[int] = 2
 P95_PERCENT: Final[float] = 95.0
@@ -72,8 +80,12 @@ class CameraStability:
 def _settled_window(
     times: Float64Array, shifts: Float64Array, start: int, stop: int, tolerance_px: float
 ) -> bool:
-    """True when some window of >= 1 s inside samples [start, stop) is steady."""
+    """True when a window of >= 1 s inside samples [start, stop), starting
+    within ``BUMP_SETTLE_WITHIN_S`` of ``start``, is steady."""
+    latest_first_s = times[start] + BUMP_SETTLE_WITHIN_S + _TIME_TOLERANCE_S
     for first in range(start, stop):
+        if times[first] > latest_first_s:
+            return False
         last = first
         while last + 1 < stop and times[last + 1] - times[first] <= BUMP_MIN_DURATION_S + _TIME_TOLERANCE_S:
             last += 1
@@ -146,6 +158,8 @@ def assess_camera_stability(
     times, shifts = times[order], shifts[order]
 
     bump = _bump_index(times, shifts, long_edge_px)
+    if bump is not None and bump < MIN_SAMPLES:
+        return _unknown(samples)  # nothing before the bump but the reference
     bumped_at_s = None if bump is None else float(times[bump])
     pre = shifts if bump is None else shifts[:bump]
     magnitude = np.linalg.norm(pre, axis=1)
