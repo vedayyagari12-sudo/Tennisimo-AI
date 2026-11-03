@@ -537,6 +537,12 @@ The Flutter client sends `storage_path`, `handedness_hint`, `camera_view_hint`,
 field is optional and advisory (real timing comes from PTS) so its absence is
 correct, not a gap.
 
+`label_hint` is the user's chosen shot type. The client OMITS the key when the
+user chose nothing; absent, `null` and `"unknown"` are treated identically (no
+declaration). When it is present it is the PRIMARY shot type: it selects the
+rubric, is stored as `analyses.shot_type`, and comes back in the response's
+`shot_type` object as below (PIPELINE.md Stage 14.1).
+
 Synchronous validation, in order, each failing before anything is downloaded:
 
 1. **Ownership.** `storage_path` must start with `swing-videos/{jwt.sub}/`.
@@ -659,6 +665,43 @@ The full `AnalysisResponse` (PIPELINE.md §2.4), returned verbatim from
 `"complete"` or `"partial"` — and it carries the `scorecard` and `feedback`
 blocks. See the invariant in Part 4.4, which is the single most important rule
 on this endpoint.
+
+Its `shot_type` object, for a request that declared `"label_hint": "serve"`
+where the technique classifier read the swing as a forehand:
+
+```json
+"shot_type": {
+  "shot_type": "serve",
+  "confidence": null,
+  "class_scores": { "forehand_topspin": 0.47, "forehand_slice": 0.0, "backhand_one_handed": 0.08,
+                    "backhand_two_handed": 0.0, "serve": 0.31, "volley": 0.14 },
+  "evidence": ["contact height ratio 0.80 <= 1.30 threshold -> not a serve", "..."],
+  "rule_version": "shot_rules_v1",
+  "source": "user_declared",
+  "inferred_shot_type": "forehand_topspin",
+  "inferred_confidence": 0.47,
+  "mismatch": true,
+  "shot_specific_scoring": false
+}
+```
+
+- `shot_type` is the PRIMARY type. `confidence` is `null` whenever
+  `source == "user_declared"`: a user's choice has no measured confidence.
+- `inferred_shot_type` / `inferred_confidence` are the classifier's own opinion
+  (both `null` when `source == "inferred"`); `class_scores` and `evidence` are
+  the classifier's output in both cases.
+- `mismatch` is `true` only for a declaration contradicted by a concrete
+  (non-`unknown`) classifier result on contact confidence >= 0.35. It adds one
+  plain-language entry to `warnings` and does **not** make the analysis
+  `partial`.
+- `shot_specific_scoring` is `false` when the primary type is scored on the
+  generic bands (serve, volley, both backhands, unknown) and `true` for the two
+  forehands.
+- All five keys after `rule_version` are new and optional: a payload stored
+  before them has none of them, and they read as `source = "inferred"`,
+  `inferred_* = null`, `mismatch = false`, `shot_specific_scoring = null`
+  ("not recorded"). The poll route returns stored payloads verbatim and does not
+  backfill them.
 
 **Errors:** `401 auth_invalid_token`, `404 analysis_not_found`,
 `500 internal_error`.

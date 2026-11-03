@@ -156,6 +156,12 @@ def build_feedback_input(
         rubric_version=RUBRIC_VERSION,
         shot_type=shot_type.shot_type.value,
         shot_type_confidence=shot_type.confidence,
+        shot_type_source=shot_type.source.value,
+        inferred_shot_type=(
+            shot_type.inferred_shot_type.value
+            if shot_type.inferred_shot_type is not None
+            else None
+        ),
         shot_type_evidence=list(shot_type.evidence),
         handedness=handedness,
         contact_confidence=contact_confidence,

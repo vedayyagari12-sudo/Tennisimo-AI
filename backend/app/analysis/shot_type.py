@@ -6,7 +6,8 @@ no network. Never raises: an ambiguous swing is ``ShotType.UNKNOWN``
 
 NO BALL INPUT, STRUCTURALLY
 ---------------------------
-CLAUDE.md: "Shot type is INFERRED FROM TECHNIQUE, not from the ball." There is
+CLAUDE.md: the shot type is declared by the user or inferred from technique,
+and "It is never taken from the ball." There is
 no ``BallTrack`` parameter and no ball argument of any kind, and this module
 imports nothing from ``app.ball``. The ABSENCE OF THE PARAMETER IS THE
 ENFORCEMENT (PIPELINE.md:982); the orchestration additionally runs this stage
@@ -64,7 +65,14 @@ from app.analysis.normalize import (
     landmark_visible,
     path_length,
 )
-from app.models.enums import Handedness, HandednessSource, ShotType, SwingPhaseName
+from app.analysis.rubric import UNBANDED_SHOT_TYPES
+from app.models.enums import (
+    Handedness,
+    HandednessSource,
+    ShotType,
+    ShotTypeSource,
+    SwingPhaseName,
+)
 from app.models.internal import NormalizedSequence
 from app.models.responses import (
     ContactDetection,
@@ -391,6 +399,63 @@ def infer_shot_type(
             evidence=evidence,
             rule_version=RULE_VERSION,
         )
+
+
+def resolve_shot_type(
+    declared: ShotType | None,
+    inferred: ShotTypeInference,
+    contact_confidence: float,
+    *,
+    min_contact_confidence: float,
+) -> ShotTypeInference:
+    """Combine the user's declaration with the classifier into the PRIMARY shot type.
+
+    PURE. ``inferred`` is :func:`infer_shot_type`'s result and is not mutated.
+
+    * No declaration (``None`` or ``ShotType.UNKNOWN`` -- "I don't know" is not a
+      declaration) -> the classifier's result unchanged, ``source="inferred"``.
+    * A declaration -> it becomes ``shot_type`` with ``source="user_declared"``
+      and ``confidence=None`` (a user's choice has no measured confidence and
+      none is invented). The classifier's opinion moves to ``inferred_*``;
+      ``class_scores`` and ``evidence`` stay the classifier's own output.
+
+    ``mismatch`` is True ONLY for a declaration that a concrete (non-unknown)
+    classifier result contradicts on a contact read of at least
+    ``min_contact_confidence``. On weak contact the classifier can be confidently
+    wrong (an unseen wrist once produced a bogus volley), so it is not allowed
+    to contradict the user there.
+
+    ``shot_specific_scoring`` is whether the PRIMARY type has bands of its own
+    (``rubric.UNBANDED_SHOT_TYPES`` is the list of those that do not).
+    """
+    if declared is None or declared is ShotType.UNKNOWN:
+        return ShotTypeInference.model_validate(
+            {
+                **inferred.model_dump(),
+                "source": ShotTypeSource.INFERRED,
+                "inferred_shot_type": None,
+                "inferred_confidence": None,
+                "mismatch": False,
+                "shot_specific_scoring": inferred.shot_type not in UNBANDED_SHOT_TYPES,
+            }
+        )
+    mismatch = (
+        inferred.shot_type is not ShotType.UNKNOWN
+        and inferred.shot_type is not declared
+        and float(contact_confidence) >= float(min_contact_confidence)
+    )
+    return ShotTypeInference.model_validate(
+        {
+            **inferred.model_dump(),
+            "shot_type": declared,
+            "confidence": None,
+            "source": ShotTypeSource.USER_DECLARED,
+            "inferred_shot_type": inferred.shot_type,
+            "inferred_confidence": inferred.confidence,
+            "mismatch": mismatch,
+            "shot_specific_scoring": declared not in UNBANDED_SHOT_TYPES,
+        }
+    )
 
 
 def _rule_serve(

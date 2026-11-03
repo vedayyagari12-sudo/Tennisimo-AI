@@ -70,7 +70,14 @@ class FeedbackInput(BaseModel):
     rubric_version: str = "rubric_v1"
 
     shot_type: str
-    shot_type_confidence: float = Field(ge=0.0, le=1.0)
+    #: None when the shot type was declared by the user: no confidence is invented.
+    shot_type_confidence: float | None = Field(ge=0.0, le=1.0)
+    #: "user_declared" or "inferred" (``enums.ShotTypeSource``).
+    shot_type_source: str = "inferred"
+    #: The classifier's own opinion when the shot type was declared, else None.
+    inferred_shot_type: str | None = None
+    #: The CLASSIFIER's rationale. With a declared shot type it may argue for a
+    #: different type, so the payload builder labels it as a cross-check.
     shot_type_evidence: list[str] = Field(default_factory=list)
     handedness: str = "unknown"
 

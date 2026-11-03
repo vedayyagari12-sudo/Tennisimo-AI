@@ -27,6 +27,7 @@ from app.models.enums import (
     MetricVerdict,
     ScoreCategory,
     ShotType,
+    ShotTypeSource,
     SwingPhaseName,
 )
 
@@ -268,13 +269,66 @@ class VideoMeta(BaseModel):
 
 
 class ShotTypeInference(BaseModel):
-    """Stage 14 output. Inferred from TECHNIQUE, never from the ball."""
+    """Stage 14 output. Never taken from the ball.
+
+    ``shot_type`` is the PRIMARY shot type: the user's declaration when there is
+    one (``source == "user_declared"``), otherwise the technique classifier's
+    result (``source == "inferred"``). With a declaration the classifier still
+    runs as a cross-check; its opinion is ``inferred_shot_type`` /
+    ``inferred_confidence`` and ``class_scores`` / ``evidence`` are ITS output.
+
+    Every key below ``rule_version`` is optional with a default, so a payload
+    stored before they existed still validates and reads as ``inferred``.
+    """
 
     shot_type: ShotType
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float | None = Field(
+        ge=0.0,
+        le=1.0,
+        description="The classifier's confidence in shot_type. None when the shot type was "
+        "declared by the user: a user's choice has no measured confidence, and none is invented.",
+    )
     class_scores: dict[str, float] = Field(description="Per-class scores, sum to 1.0.")
     evidence: list[str] = Field(description="Deterministic Python-generated rationale strings.")
     rule_version: str = Field(default="shot_rules_v1")
+    source: ShotTypeSource = Field(
+        default=ShotTypeSource.INFERRED,
+        description="'user_declared' when shot_type is the request's label_hint; 'inferred' "
+        "when it came from the technique classifier.",
+    )
+    inferred_shot_type: ShotType | None = Field(
+        default=None,
+        description="The classifier's own opinion when the shot type was declared. None when "
+        "source is 'inferred' (shot_type already IS the classifier's opinion).",
+    )
+    inferred_confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="The classifier's confidence in inferred_shot_type. None when source is "
+        "'inferred'.",
+    )
+    mismatch: bool = Field(
+        default=False,
+        description="True only when a declaration exists, the classifier reached a concrete "
+        "(non-unknown) type that differs from it, and contact confidence cleared the pipeline's "
+        "MIN_CONTACT_CONFIDENCE.",
+    )
+    shot_specific_scoring: bool | None = Field(
+        default=None,
+        description="True when the primary shot type has scoring bands of its own; False when it "
+        "is scored on the generic bands. None on payloads stored before this key existed (not "
+        "recorded), never a guess.",
+    )
+
+    @model_validator(mode="after")
+    def _declared_type_has_no_confidence(self) -> ShotTypeInference:
+        if self.source is ShotTypeSource.USER_DECLARED and self.confidence is not None:
+            raise ValueError(
+                "confidence must be None for a user-declared shot type; the classifier's "
+                "confidence belongs in inferred_confidence"
+            )
+        return self
 
 
 class MetricScore(BaseModel):

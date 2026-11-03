@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 import shutil
 import threading
@@ -35,6 +36,7 @@ import numpy as np
 import pytest
 
 from app.analysis.normalize import normalize_sequence
+from app.analysis.scoring import build_scorecard
 from app.config import Settings
 from app.models.enums import (
     AnalysisStatus,
@@ -43,6 +45,8 @@ from app.models.enums import (
     FeedbackSource,
     Handedness,
     JobStatus,
+    ShotType,
+    ShotTypeSource,
 )
 from app.models.internal import PoseSequence
 from app.models.requests import CreateAnalysisRequest
@@ -192,6 +196,7 @@ def make_context(
     settings: Settings,
     *,
     calibration: Any | None = None,
+    label_hint: ShotType | None = None,
 ) -> JobContext:
     """A JobContext whose ``run_async`` runs the coroutine on a throwaway loop."""
     job_id = uuid4()
@@ -199,6 +204,7 @@ def make_context(
         storage_path=f"swing-videos/{job_id}/clip.mp4",
         handedness_hint=CLIP_HANDEDNESS,
         ball_speed_calibration=calibration,
+        label_hint=label_hint,
     )
     return JobContext(
         job_id=job_id,
@@ -233,6 +239,148 @@ def completed_run() -> Iterator[dict[str, Any]]:
         "response": AnalysisResponse.model_validate(repository.rows[0].payload),
         "context": context,
     }
+
+
+@dataclass
+class SpyAccumulator(pipeline_module.Accumulator):
+    """Records which path each warning took: ``warn`` (a note) or ``degrade``."""
+
+    noted: list[str] = field(default_factory=list)
+    degraded: list[str] = field(default_factory=list)
+
+    def warn(self, message: str) -> None:
+        self.noted.append(message)
+        super().warn(message)
+
+    def degrade(self, message: str) -> None:
+        self.degraded.append(message)
+        super().degrade(message)
+
+
+def _declared_run(label_hint: ShotType) -> dict[str, Any]:
+    repository = RecordingRepository()
+    client = ReplayGeminiClient()
+    spies: list[SpyAccumulator] = []
+
+    def make_spy() -> SpyAccumulator:
+        spies.append(SpyAccumulator())
+        return spies[-1]
+
+    original = pipeline_module.Accumulator
+    pipeline_module.Accumulator = make_spy  # type: ignore[assignment,misc]
+    try:
+        context = make_context(
+            repository, ClipStorage(), Settings(env=RUN_ENV), label_hint=label_hint
+        )
+        run_analysis_job(context, gemini_client=client)
+    finally:
+        pipeline_module.Accumulator = original  # type: ignore[misc]
+    assert repository.rows and len(spies) == 1
+    return {
+        "row": repository.rows[0],
+        "response": AnalysisResponse.model_validate(repository.rows[0].payload),
+        "client": client,
+        "spy": spies[0],
+    }
+
+
+@pytest.fixture(scope="module")
+def declared_runs() -> dict[ShotType, dict[str, Any]]:
+    """The same clip, declared two ways. Under ``RUN_ENV`` the classifier reads
+    this SERVE as ``forehand_topspin`` on a contact read of ~0.53, so declaring
+    ``serve`` -- the truth -- is a real-data mismatch, and declaring
+    ``forehand_topspin`` agrees with the classifier."""
+    return {
+        label: _declared_run(label)
+        for label in (ShotType.SERVE, ShotType.FOREHAND_TOPSPIN)
+    }
+
+
+def test_no_declaration_is_marked_inferred(completed_run: dict[str, Any]) -> None:
+    shot_type = completed_run["response"].shot_type
+    row: AnalysisRow = completed_run["row"]
+
+    assert shot_type.source is ShotTypeSource.INFERRED
+    assert shot_type.confidence is not None
+    assert shot_type.inferred_shot_type is None
+    assert shot_type.inferred_confidence is None
+    assert shot_type.mismatch is False
+    assert row.shot_type is shot_type.shot_type
+    assert pipeline_module.SHOT_TYPE_MISMATCH_NOTE not in completed_run["response"].warnings
+
+
+def test_a_contradicting_declaration_is_primary_and_flags_a_mismatch(
+    completed_run: dict[str, Any], declared_runs: dict[ShotType, dict[str, Any]]
+) -> None:
+    baseline = completed_run["response"].shot_type
+    assert baseline.shot_type is ShotType.FOREHAND_TOPSPIN, (
+        "precondition: this test relies on the classifier misreading this serve; "
+        f"it now says {baseline.shot_type}, so pick a new contradicting declaration"
+    )
+    run = declared_runs[ShotType.SERVE]
+    response: AnalysisResponse = run["response"]
+    shot_type = response.shot_type
+
+    assert response.contact.confidence >= pipeline_module.MIN_CONTACT_CONFIDENCE
+    assert shot_type.shot_type is ShotType.SERVE
+    assert shot_type.source is ShotTypeSource.USER_DECLARED
+    assert shot_type.confidence is None
+    assert shot_type.inferred_shot_type is baseline.shot_type
+    assert shot_type.inferred_confidence == pytest.approx(baseline.confidence)
+    assert shot_type.mismatch is True
+    assert shot_type.shot_specific_scoring is False
+    # Persisted as the PRIMARY type.
+    assert run["row"].shot_type is ShotType.SERVE
+    # Scored on the PRIMARY type's rubric.
+    assert response.scorecard == build_scorecard(response.metrics, ShotType.SERVE)
+    # Exactly one plain note.
+    assert response.warnings.count(pipeline_module.SHOT_TYPE_MISMATCH_NOTE) == 1
+
+
+def test_the_mismatch_note_does_not_make_the_job_partial(
+    declared_runs: dict[ShotType, dict[str, Any]],
+) -> None:
+    """Every corpus clip is ``partial`` for OTHER reasons, so the status alone
+    cannot show this. The spy shows the note went through ``warn`` and never
+    through ``degrade``, the only path that sets ``partial`` from a warning."""
+    spy: SpyAccumulator = declared_runs[ShotType.SERVE]["spy"]
+
+    assert pipeline_module.SHOT_TYPE_MISMATCH_NOTE in spy.noted
+    assert pipeline_module.SHOT_TYPE_MISMATCH_NOTE not in spy.degraded
+
+
+def test_an_agreeing_declaration_has_no_mismatch_and_keeps_the_same_score(
+    completed_run: dict[str, Any], declared_runs: dict[ShotType, dict[str, Any]]
+) -> None:
+    baseline: AnalysisResponse = completed_run["response"]
+    response: AnalysisResponse = declared_runs[ShotType.FOREHAND_TOPSPIN]["response"]
+
+    assert response.shot_type.shot_type is ShotType.FOREHAND_TOPSPIN
+    assert response.shot_type.source is ShotTypeSource.USER_DECLARED
+    assert response.shot_type.confidence is None
+    assert response.shot_type.mismatch is False
+    assert response.shot_type.shot_specific_scoring is True
+    assert pipeline_module.SHOT_TYPE_MISMATCH_NOTE not in response.warnings
+    # Same primary type, same rubric, same score as the undeclared run.
+    assert response.scorecard.overall_score == pytest.approx(
+        baseline.scorecard.overall_score
+    )
+
+
+def test_gemini_sees_the_declared_type_and_a_labelled_cross_check(
+    declared_runs: dict[ShotType, dict[str, Any]],
+) -> None:
+    client: ReplayGeminiClient = declared_runs[ShotType.SERVE]["client"]
+    assert len(client.calls) == 1, "contact ~0.53 clears the 0.45 Gemini gate"
+    prompt = client.calls[0]
+    payload = json.loads(prompt[prompt.index("{") :])
+
+    assert payload["shot_type"] == "serve"
+    assert payload["shot_type_source"] == "user_declared"
+    assert payload["shot_type_confidence"] is None
+    assert payload["inferred_shot_type"] == "forehand_topspin"
+    assert payload["shot_type_evidence"] == []
+    assert payload["classifier_cross_check_evidence"]
 
 
 def test_stock_settings_now_reach_an_analysis() -> None:

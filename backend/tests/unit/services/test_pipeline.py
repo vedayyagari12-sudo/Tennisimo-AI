@@ -33,9 +33,15 @@ from app.models.requests import CreateAnalysisRequest
 from app.models.responses import ContactDetection, HandednessResult, PoseQuality, VideoMeta
 from app.services.orchestrator import JobContext, JobFailure
 from app.services.repository import AnalysisRow
+from app.analysis.shot_type import RULE_VERSION, resolve_shot_type
+from app.models.enums import ShotTypeSource
+from app.models.responses import ShotTypeInference
 from app.services.pipeline import (
+    MIN_CONTACT_CONFIDENCE,
+    SHOT_TYPE_MISMATCH_NOTE,
     TRUNCATION_MARGIN_FRAMES,
     Accumulator,
+    record_shot_type,
     StageTimer,
     ball_speed_stage,
     contact_at_window_edge,
@@ -487,3 +493,69 @@ def test_heartbeat_and_run_async_are_the_only_async_seam() -> None:
     assert seen == ["ran on a loop"]
     assert context.heartbeat() is None
     assert isinstance(datetime.now(), datetime)
+
+
+def _classified(shot_type: ShotType, confidence: float = 0.7) -> ShotTypeInference:
+    return ShotTypeInference(
+        shot_type=shot_type,
+        confidence=confidence,
+        class_scores={},
+        evidence=[],
+        rule_version=RULE_VERSION,
+    )
+
+
+def _resolved(declared: ShotType | None, classifier: ShotType) -> ShotTypeInference:
+    return resolve_shot_type(
+        declared,
+        _classified(classifier),
+        0.9,
+        min_contact_confidence=MIN_CONTACT_CONFIDENCE,
+    )
+
+
+def test_a_mismatch_adds_one_note_and_does_not_make_the_analysis_partial() -> None:
+    shot_type = _resolved(ShotType.SERVE, ShotType.FOREHAND_TOPSPIN)
+    assert shot_type.mismatch is True
+
+    accumulator = Accumulator()
+    record_shot_type(accumulator, shot_type)
+
+    assert accumulator.warnings == [SHOT_TYPE_MISMATCH_NOTE]
+    assert accumulator.partial is False
+    assert accumulator.low_confidence == []
+
+
+def test_the_mismatch_note_is_plain_language_with_no_numbers() -> None:
+    assert not any(character.isdigit() for character in SHOT_TYPE_MISMATCH_NOTE)
+    assert "_" not in SHOT_TYPE_MISMATCH_NOTE  # no wire strings like forehand_topspin
+
+
+def test_an_unknown_primary_still_makes_the_analysis_partial() -> None:
+    shot_type = _resolved(None, ShotType.UNKNOWN)
+    accumulator = Accumulator()
+    record_shot_type(accumulator, shot_type)
+
+    assert accumulator.partial is True
+    assert accumulator.warnings == ["shot type could not be determined from technique"]
+
+
+def test_a_declaration_the_classifier_could_not_confirm_is_not_partial() -> None:
+    shot_type = _resolved(ShotType.SERVE, ShotType.UNKNOWN)
+    assert shot_type.source is ShotTypeSource.USER_DECLARED
+    accumulator = Accumulator()
+    record_shot_type(accumulator, shot_type)
+
+    assert accumulator.partial is False
+    assert accumulator.warnings == []
+
+
+def test_agreement_and_no_declaration_add_nothing() -> None:
+    for shot_type in (
+        _resolved(ShotType.SERVE, ShotType.SERVE),
+        _resolved(None, ShotType.SERVE),
+    ):
+        accumulator = Accumulator()
+        record_shot_type(accumulator, shot_type)
+        assert accumulator.warnings == []
+        assert accumulator.partial is False

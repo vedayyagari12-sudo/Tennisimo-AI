@@ -134,6 +134,13 @@ class ShotType(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ShotTypeSource(StrEnum):
+    """Where ``ShotTypeInference.shot_type`` (the PRIMARY shot type) came from."""
+
+    USER_DECLARED = "user_declared"  # the request's label_hint
+    INFERRED = "inferred"  # the Stage 14 technique classifier
+
+
 class ScoreCategory(StrEnum):
     PREPARATION = "preparation"
     CONTACT = "contact"

@@ -46,7 +46,7 @@ from app.analysis.normalize import normalize_sequence
 from app.analysis.phases import segment_swing_phases
 from app.analysis.rubric import RUBRIC_VERSION
 from app.analysis.scoring import build_scorecard
-from app.analysis.shot_type import infer_shot_type
+from app.analysis.shot_type import infer_shot_type, resolve_shot_type
 from app.analysis.speed import compute_ball_speed
 from app.api.errors import ApiError
 from app.ball.frames import run_ball_detection
@@ -73,6 +73,7 @@ from app.models.responses import (
     Improvement,
     NumericGuardReport,
     PoseQuality,
+    ShotTypeInference,
     StageTimings,
     SwingPhases,
     VideoMeta,
@@ -132,7 +133,20 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: ``off_hand_path_length_tu`` as None (not 0.0) for a wrist never observed
 #: across one frame-to-frame step, so an unseen wrist no longer reads as the
 #: shortest path and a false "volley 1.00" (v3 serve 4902143 -> unknown).
+#: Also v4 (no second bump): the request's ``label_hint``, when present and not
+#: ``unknown``, is the PRIMARY shot type and selects the rubric, so a declared
+#: forehand is scored on the forehand bands (declared serve/volley/backhand
+#: still score on the generic ones). The classifier runs as a cross-check.
 PIPELINE_VERSION: Final[str] = "v4"
+
+#: The one plain-language warning added when the user's declared shot type and
+#: a confident technique reading disagree. A NOTE, not a downgrade: it never
+#: makes an analysis ``partial`` (see ``record_shot_type``).
+SHOT_TYPE_MISMATCH_NOTE: Final[str] = (
+    "You picked this shot type, but the swing looked a bit like a different "
+    "shot to our analysis. We used your choice. If it was a different shot, "
+    "pick that one next time."
+)
 
 
 class StageTimer:
@@ -200,6 +214,22 @@ class Accumulator:
         """Record a warning that ALSO downgrades the analysis to ``partial``."""
         self.warnings.append(message)
         self.partial = True
+
+
+def record_shot_type(accumulator: Accumulator, shot_type: ShotTypeInference) -> None:
+    """Stage 14's contribution to warnings and status, from the RESOLVED shot type.
+
+    * An ``unknown`` PRIMARY type still downgrades to ``partial`` (unchanged).
+      A declared type is never ``unknown``, so a declaration that the
+      classifier could not confirm does not downgrade the analysis.
+    * A mismatch adds :data:`SHOT_TYPE_MISMATCH_NOTE` through ``warn``, never
+      ``degrade``: the user's declaration was honoured, nothing is less
+      trustworthy, so the status must not change because of it.
+    """
+    if shot_type.shot_type is ShotType.UNKNOWN:
+        accumulator.degrade("shot type could not be determined from technique")
+    if shot_type.mismatch:
+        accumulator.warn(SHOT_TYPE_MISMATCH_NOTE)
 
 
 def unavailable_speed(reason: BallSpeedUnavailableReason) -> BallSpeedResult:
@@ -489,10 +519,17 @@ def run_analysis_job(
             if metric_warnings:
                 accumulator.partial = True
 
-            shot_type = infer_shot_type(metrics, seq, handedness, contact, phases)
-            if shot_type.shot_type is ShotType.UNKNOWN:
-                accumulator.degrade("shot type could not be determined from technique")
+            # The user's declaration, when there is one, is the PRIMARY type;
+            # the classifier still runs and is kept as the cross-check.
+            shot_type = resolve_shot_type(
+                context.request.label_hint,
+                infer_shot_type(metrics, seq, handedness, contact, phases),
+                contact.confidence,
+                min_contact_confidence=MIN_CONTACT_CONFIDENCE,
+            )
+            record_shot_type(accumulator, shot_type)
 
+            # Rubric selection follows the PRIMARY type.
             scorecard = build_scorecard(metrics, shot_type.shot_type)
             scored_categories = sum(
                 1 for c in scorecard.categories if c.score_0_100 is not None
@@ -605,12 +642,14 @@ __all__ = [
     "PIPELINE_VERSION",
     "CONTACT_FAILING_FLAGS",
     "SEQUENCE_UNUSABLE",
+    "SHOT_TYPE_MISMATCH_NOTE",
     "TRUNCATION_MARGIN_FRAMES",
     "Accumulator",
     "ball_speed_stage",
     "DecodeMeter",
     "StageTimer",
     "contact_at_window_edge",
+    "record_shot_type",
     "run_analysis_job",
     "stage_timings",
     "to_wire_feedback",

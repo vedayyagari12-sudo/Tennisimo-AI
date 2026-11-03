@@ -30,6 +30,7 @@ from app.models.enums import (
     BallSpeedConfidence,
     BallSpeedUnavailableReason,
     FeedbackSource,
+    ShotTypeSource,
 )
 from app.models.feedback import (
     CoachingFeedback,
@@ -131,6 +132,18 @@ UNIT_GLOSSARY: Final[dict[str, str]] = {
     ),
 }
 
+#: The ONE system-prompt sentence for a user-declared shot type. With
+#: ``shot_type_source == "user_declared"`` the classifier's rationale is moved
+#: out of ``shot_type_evidence`` into ``classifier_cross_check_evidence``, so a
+#: line arguing for a different type never reaches the model unlabelled.
+DECLARED_SHOT_TYPE_INSTRUCTION: Final[str] = (
+    'When shot_type_source is "user_declared", the user chose shot_type '
+    "themselves: coach it as that shot, and if inferred_shot_type names a "
+    "different shot (not unknown) you may gently mention that the "
+    "technique-based reading in classifier_cross_check_evidence looked "
+    "different, but never assert that reading as fact."
+)
+
 SYSTEM_INSTRUCTION: Final[str] = (
     "You are a text formatter for a tennis coaching app. You will receive "
     "measurements that have already been computed by a deterministic analysis "
@@ -143,7 +156,9 @@ SYSTEM_INSTRUCTION: Final[str] = (
     '"mph", and you must respect the `hedge` field. If `ball_speed.mph` is null, '
     "you must not mention ball speed, mph, km/h, or any speed at all. Never "
     "derive ball speed from hand speed or from any other value. Do not "
-    "contradict the provided shot_type. Do not add measurements that are not in "
+    "contradict the provided shot_type. "
+    f"{DECLARED_SHOT_TYPE_INSTRUCTION} "
+    "Do not add measurements that are not in "
     "the input. If a metric is null, say the measurement was unavailable for "
     "this clip."
 )
@@ -257,6 +272,7 @@ def round_payload_numbers(node: Any) -> Any:
 
 def build_feedback_payload(core: FeedbackInput) -> FeedbackPayload:
     """Render the text-only Gemini payload (PIPELINE.md Stage 16)."""
+    declared = core.shot_type_source == ShotTypeSource.USER_DECLARED.value
     metrics: list[dict[str, Any]] = [
         {
             "name": m.name,
@@ -274,8 +290,17 @@ def build_feedback_payload(core: FeedbackInput) -> FeedbackPayload:
         "pipeline_version": core.pipeline_version,
         "rubric_version": core.rubric_version,
         "shot_type": core.shot_type,
+        "shot_type_source": core.shot_type_source,
         "shot_type_confidence": core.shot_type_confidence,
-        "shot_type_evidence": list(core.shot_type_evidence),
+        "inferred_shot_type": core.inferred_shot_type,
+        # With a declared shot type the classifier's evidence may argue for a
+        # DIFFERENT type, so it is relabelled as the cross-check rather than
+        # presented as the rationale for shot_type. Nothing is dropped, and
+        # the numeric allowlist (numeric nodes only) is the same either way.
+        "shot_type_evidence": [] if declared else list(core.shot_type_evidence),
+        "classifier_cross_check_evidence": (
+            list(core.shot_type_evidence) if declared else []
+        ),
         "handedness": core.handedness,
         "contact_confidence": core.contact_confidence,
         "overall_score": core.overall_score,
@@ -799,6 +824,7 @@ __all__: Sequence[str] = (
     "read_finish_reason",
     "read_token_usage",
     "CONDITIONAL_MPH_SUBSTRING",
+    "DECLARED_SHOT_TYPE_INSTRUCTION",
     "GEMINI_API_KEY_ENV",
     "GUARD_FALLBACK_MESSAGE",
     "HEDGE_BY_CONFIDENCE",

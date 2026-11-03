@@ -219,8 +219,12 @@ class CreateAnalysisRequest(BaseModel):
     )
     label_hint: ShotType | None = Field(
         default=None,
-        description="Optional user-declared shot type. Recorded for eval ONLY; never overrides "
-        "technique inference and never enters the Gemini payload.",
+        description="Optional user-declared shot type. When present and not 'unknown' it is the "
+        "PRIMARY shot type: it selects the scoring rubric, is persisted as analyses.shot_type, and "
+        "reaches Gemini marked user-declared (shot_type.source = 'user_declared', confidence null). "
+        "The technique classifier still runs as a cross-check (shot_type.inferred_shot_type) and a "
+        "confident disagreement sets shot_type.mismatch and adds one warning without changing the "
+        "status. Absent, null and 'unknown' all mean no declaration: the classifier's result is used.",
     )
     ball_speed_calibration: BallSpeedCalibration | None = Field(
         default=None,
