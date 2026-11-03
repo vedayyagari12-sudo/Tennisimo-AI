@@ -8,9 +8,13 @@ are converted by the caller). The pixel gates (8 px, 12 px, RMS 2 / max 4, f
 multiplied by ``1280 / long_edge`` before it is compared. ``sigma_tap_px`` and
 the stored reprojection errors are in the frame's own pixels.
 
-Tap counts (3.2): fewer than 4 is rejected; 4 or 5 is shot map only, flagged
-``unverified_calibration`` (4 points fit exactly, so a zero reprojection error
-proves nothing); 6 or more allows line calls.
+Tap counts (3.2, amended by brief G21): fewer than 4 is rejected; 4 to 7 is
+shot map and zones only, flagged ``unverified_calibration``; 8 or more allows
+line calls. 4 points fit exactly, so a zero reprojection error proves nothing.
+With the recommended 6, OpenCV k1 = -0.25 lens distortion still passes the
+reprojection gates (RMS 1.94 / max 3.93 px at 1280-equivalent) while leaving
+up to 0.47 m of systematic ground error; with 8 or more taps the same
+distortion is rejected. The reprojection gate itself still runs from 6 taps.
 
 Gate order: frame shape, too few, duplicates, collinear, hull size, mirrored
 (these six are ``validate_taps``, except frame shape), then conditioning,
@@ -51,8 +55,10 @@ __all__ = [
 CALIBRATION_VERSION: Final[str] = "court_cal_v1"
 
 MIN_TAPS: Final[int] = 4
-#: Line calls need an over-determined fit (3.2).
-CALLS_MIN_TAPS: Final[int] = 6
+#: The reprojection gate needs an over-determined fit (3.4: N >= 6).
+REPROJECTION_GATE_MIN_TAPS: Final[int] = 6
+#: Line calls need enough taps that lens distortion cannot hide (brief G21).
+CALLS_MIN_TAPS: Final[int] = 8
 #: Long edge the pixel gates are expressed at.
 REFERENCE_LONG_EDGE_PX: Final[int] = 1280
 DUPLICATE_TAP_PX: Final[float] = 8.0
@@ -257,7 +263,7 @@ def calibrate_court(
     rms = float(np.sqrt(np.mean(errors**2)))
     worst = float(np.max(errors))
     to_1280 = _to_1280(frame_size)
-    if len(taps) >= CALLS_MIN_TAPS and (
+    if len(taps) >= REPROJECTION_GATE_MIN_TAPS and (
         rms * to_1280 > MAX_REPROJECTION_RMS_PX or worst * to_1280 > MAX_REPROJECTION_PX
     ):
         return _reject(CalibrationRejection.REPROJECTION_ERROR_HIGH)

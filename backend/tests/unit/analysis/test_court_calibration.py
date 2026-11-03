@@ -1,6 +1,6 @@
 """Build step 4: tap gating. One test per rejection reason, tap-count rules,
 noise-level RMS, and the lens-distortion case (brief: k1 = -0.25 rejected,
-k1 = 0 accepted)."""
+k1 = 0 accepted; brief G21: line calls need 8 or more taps)."""
 
 from __future__ import annotations
 
@@ -34,6 +34,12 @@ BASELINE_FOUR: tuple[CourtKeypoint, ...] = (
     CourtKeypoint.NEAR_RIGHT_SINGLES_CORNER,
     CourtKeypoint.NEAR_RIGHT_DOUBLES_CORNER,
 )
+#: The recommended six plus both near-side service corners.
+EIGHT_TAPS: tuple[CourtKeypoint, ...] = (
+    *RECOMMENDED_SIX,
+    CourtKeypoint.NEAR_LEFT_SERVICE_CORNER,
+    CourtKeypoint.NEAR_RIGHT_SERVICE_CORNER,
+)
 
 
 def make_taps(
@@ -61,8 +67,8 @@ def rejection_of(taps: Sequence[CourtTap], **kwargs: object) -> CalibrationRejec
     return calibrate_court(taps, FRAME, **kwargs).rejection  # type: ignore[arg-type]
 
 
-def test_clean_six_taps_are_accepted_with_calls() -> None:
-    verdict = calibrate_court(make_taps(RECOMMENDED_SIX), FRAME)
+def test_clean_eight_taps_are_accepted_with_calls() -> None:
+    verdict = calibrate_court(make_taps(EIGHT_TAPS), FRAME)
     assert verdict.rejection is None
     calibration = verdict.calibration
     assert calibration is not None
@@ -77,9 +83,10 @@ def test_clean_six_taps_are_accepted_with_calls() -> None:
     assert calibration.sigma_tap_px == 1.5
 
 
-@pytest.mark.parametrize("count", [4, 5])
-def test_four_or_five_taps_never_allow_calls(count: int) -> None:
-    verdict = calibrate_court(make_taps(RECOMMENDED_SIX[:count]), FRAME)
+@pytest.mark.parametrize("count", [4, 5, 6, 7])
+def test_four_to_seven_taps_never_allow_calls(count: int) -> None:
+    """Brief G21: under 8 taps is shot map and zones only."""
+    verdict = calibrate_court(make_taps(EIGHT_TAPS[:count]), FRAME)
     assert verdict.rejection is None
     assert verdict.calibration is not None
     assert verdict.calibration.calls_allowed is False
@@ -205,14 +212,6 @@ def test_six_noisy_taps_give_rms_close_to_noise() -> None:
     assert float(np.mean(squares)) == pytest.approx(expected, rel=0.15)
 
 
-#: The recommended six plus both near-side service corners.
-EIGHT_TAPS: tuple[CourtKeypoint, ...] = (
-    *RECOMMENDED_SIX,
-    CourtKeypoint.NEAR_LEFT_SERVICE_CORNER,
-    CourtKeypoint.NEAR_RIGHT_SERVICE_CORNER,
-)
-
-
 @pytest.mark.parametrize(
     "keypoints", [RECOMMENDED_SIX, EIGHT_TAPS, tuple(CourtKeypoint)], ids=["6", "8", "14"]
 )
@@ -230,21 +229,17 @@ def test_lens_distortion_k1_minus_quarter_is_rejected(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN GAP, measured: with only the recommended six taps (four singles "
-        "corners and both Ts) on the section 2.3 placement, k1 = -0.25 leaves a "
-        "geometric-fit residual of RMS 1.94 / max 3.93 px at 1280-equivalent, "
-        "just under the 2.0 / 4.0 gates, so it is ACCEPTED while carrying up to "
-        "0.47 m systematic ground error (near baseline centre) and 0.26 m at the "
-        "far T. The symmetric six-point layout absorbs most of the distortion. "
-        "Plain algebraic DLT rejected it only because its fit was ~2x worse than "
-        "optimal on every input. Not tuned away; for the owner/architect."
-    ),
-)
-def test_lens_distortion_k1_minus_quarter_is_rejected_with_six_taps() -> None:
-    assert rejection_of(make_taps(RECOMMENDED_SIX, k1=-0.25)) is (
+def test_lens_distortion_k1_minus_quarter_never_reaches_a_line_call() -> None:
+    """Brief G21. With the recommended six taps, k1 = -0.25 passes the
+    reprojection gates (RMS 1.94 / max 3.93 px at 1280-equivalent) while
+    leaving up to 0.47 m systematic ground error, so six taps must not allow
+    calls. With eight taps the same distortion is rejected outright."""
+    six = calibrate_court(make_taps(RECOMMENDED_SIX, k1=-0.25), FRAME)
+    assert six.rejection is None
+    assert six.calibration is not None
+    assert six.calibration.calls_allowed is False
+    assert UNVERIFIED_CALIBRATION_FLAG in six.calibration.flags
+    assert rejection_of(make_taps(EIGHT_TAPS, k1=-0.25)) is (
         CalibrationRejection.REPROJECTION_ERROR_HIGH
     )
 
