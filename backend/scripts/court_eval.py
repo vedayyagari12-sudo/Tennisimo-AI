@@ -58,9 +58,8 @@ from app.ball.flight_detector import (  # noqa: E402
     expected_diameter_fn,
     find_flight_candidates,
 )
-from app.ball.flight_frames import iter_track_frames  # noqa: E402
+from app.ball.flight_frames import iter_track_frames, probe_court_clip  # noqa: E402
 from app.models.court import CourtCalibrationRequest  # noqa: E402
-from app.pose.video_io import probe_clip  # noqa: E402
 
 OUTPUT_ROOT: Final[Path] = BACKEND_ROOT / "build" / "court_eval"
 #: Design 1.4: a candidate within 3 px of the label counts.
@@ -170,7 +169,7 @@ def run_candidates(
     video: Path, taps_json: Path | None, labels_jsonl: Path | None
 ) -> tuple[dict[str, Any], npt.NDArray[np.void], npt.NDArray[np.float64]]:
     started = time.monotonic()
-    probe = probe_clip(video)
+    probe = probe_court_clip(video)
     request = (
         CourtCalibrationRequest.model_validate_json(taps_json.read_text(encoding="utf-8"))
         if taps_json is not None

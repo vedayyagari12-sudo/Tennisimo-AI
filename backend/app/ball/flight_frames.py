@@ -16,6 +16,10 @@ in the pure-CV ``flight_detector`` / ``camera_motion`` and the pure
 * **TRACK_SPACE.** Display-matrix rotation applied, then downscaled (never
   upscaled) to ``TRACK_SPACE_LONG_EDGE_PX``. ``CAL_SPACE`` (1280) is the
   single-swing space and is untouched.
+* **Its own probe.** ``probe_clip`` refuses clips over 60 s, the single-swing
+  limit; a court session runs up to 10 minutes. ``probe_court_clip`` reads the
+  same facts with the same helpers and its own ``COURT_MAX_CLIP_S``, so
+  neither ``video_io`` nor ``frames.py`` changes.
 """
 
 from __future__ import annotations
@@ -29,15 +33,83 @@ import numpy as np
 import numpy.typing as npt
 
 from app.models.enums import ErrorCode
-from app.pose.video_io import ClipProbe, VideoDecodeError, apply_rotation, resize_to_long_edge
+from app.pose.video_io import (
+    MIN_CLIP_S,
+    ClipProbe,
+    VideoDecodeError,
+    _display_rotation,
+    _packet_scan_duration_s,
+    _stream_duration_s,
+    apply_rotation,
+    resize_to_long_edge,
+)
 
 __all__ = [
+    "COURT_MAX_CLIP_S",
     "TRACK_SPACE_LONG_EDGE_PX",
     "iter_track_frames",
+    "probe_court_clip",
 ]
 
 #: Design 2.3 / brief Constants: rotated native frames capped at this long edge.
 TRACK_SPACE_LONG_EDGE_PX: Final[int] = 1920
+#: Court sessions run up to 10 minutes (design 4.6: memory fits a 4 GiB Job).
+COURT_MAX_CLIP_S: Final[float] = 600.0
+
+
+def probe_court_clip(path: Path) -> ClipProbe:
+    """``probe_clip`` for the court path: the same duration, rate, rotation and
+    size, refused over ``COURT_MAX_CLIP_S`` instead of the 60 s single-swing
+    limit. The minimum stays ``MIN_CLIP_S``.
+
+    Raises:
+        VideoDecodeError: ``NO_VIDEO_STREAM``, ``UNSUPPORTED_CODEC``,
+            ``DECODE_FAILED``, ``VIDEO_TOO_SHORT`` or ``VIDEO_TOO_LONG``.
+    """
+    try:
+        container = av.open(str(path))
+    except (av.FFmpegError, OSError) as exc:
+        raise VideoDecodeError(ErrorCode.DECODE_FAILED, f"could not open: {exc}") from exc
+    try:
+        if not container.streams.video:
+            raise VideoDecodeError(ErrorCode.NO_VIDEO_STREAM, "no video stream")
+        stream = container.streams.video[0]
+        codec = stream.codec_context
+        if codec is None or codec.name is None:
+            raise VideoDecodeError(ErrorCode.UNSUPPORTED_CODEC, "no decodable codec")
+        duration_s = _stream_duration_s(stream, container)
+        if duration_s <= 0.0:
+            duration_s = _packet_scan_duration_s(path, stream.index)
+        if duration_s <= 0.0:
+            raise VideoDecodeError(ErrorCode.DECODE_FAILED, "clip has no measurable duration")
+        if duration_s < MIN_CLIP_S:
+            raise VideoDecodeError(ErrorCode.VIDEO_TOO_SHORT, f"{duration_s:.2f}s is under {MIN_CLIP_S}s")
+        if duration_s > COURT_MAX_CLIP_S:
+            raise VideoDecodeError(
+                ErrorCode.VIDEO_TOO_LONG, f"{duration_s:.2f}s is over {COURT_MAX_CLIP_S}s"
+            )
+        rate = stream.guessed_rate or stream.average_rate or stream.base_rate
+        source_fps = float(rate) if rate else 0.0
+        if source_fps <= 0.0:
+            raise VideoDecodeError(ErrorCode.DECODE_FAILED, "clip has no measurable frame rate")
+        rotation = _display_rotation(stream, container)
+        width, height = int(codec.width), int(codec.height)
+        if width <= 0 or height <= 0:
+            raise VideoDecodeError(ErrorCode.DECODE_FAILED, "clip has no frame dimensions")
+        if rotation in (90, 270):
+            width, height = height, width
+        return ClipProbe(
+            duration_s=duration_s,
+            source_fps=source_fps,
+            rotation_deg=rotation,
+            width_px=width,
+            height_px=height,
+            codec_name=str(codec.name),
+        )
+    except av.FFmpegError as exc:
+        raise VideoDecodeError(ErrorCode.DECODE_FAILED, str(exc)) from exc
+    finally:
+        container.close()
 
 
 def iter_track_frames(
