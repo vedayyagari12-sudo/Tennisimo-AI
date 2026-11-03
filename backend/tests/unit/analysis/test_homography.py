@@ -95,6 +95,21 @@ def test_condition_g1_good_taps_pass_and_near_collinear_fail() -> None:
     assert bad < 1e-3
 
 
+def test_dlt_residual_is_geometric_not_depth_weighted() -> None:
+    """For image noise sigma, the geometric optimum has E[sum |e|^2] =
+    sigma^2 (2N - 8). Plain algebraic DLT on a baseline view lands near 2x
+    that, because it weights each tap by its projective depth."""
+    court = keypoint_array(RECOMMENDED_SIX)
+    clean = CENTRED.project_ground(court)
+    rng = np.random.default_rng(SEED)
+    totals = []
+    for _ in range(1000):
+        noisy = clean + rng.normal(0.0, 1.0, clean.shape)
+        h_ci, _ = fit_homography_dlt(court, noisy)
+        totals.append(float(np.sum(reprojection_errors_px(h_ci, court, noisy) ** 2)))
+    assert float(np.mean(totals)) == pytest.approx(2 * 6 - 8, rel=0.08)
+
+
 def test_fit_rejects_too_few_points() -> None:
     court = keypoint_array(RECOMMENDED_SIX[:3])
     with pytest.raises(ValueError):

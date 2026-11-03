@@ -39,8 +39,13 @@ MIN_POINTS: Final[int] = 4
 COVARIANCE_STEP_PX: Final[float] = 1e-2
 #: Tennis ball radius, metres (ITF 6.54-6.86 cm diameter).
 BALL_RADIUS_M: Final[float] = 0.0335
+#: Depth-reweighting passes after the plain DLT (see ``fit_homography_dlt``).
+#: One pass converges to the geometric optimum on synthetic taps; two is margin.
+DLT_REWEIGHT_PASSES: Final[int] = 2
 #: Below this |h33| the matrix is scaled by its norm instead of by h33.
 _H33_EPSILON: Final[float] = 1e-12
+#: Floor on a point's projective depth when reweighting.
+_DEPTH_EPSILON: Final[float] = 1e-9
 
 
 def _as_points(points: npt.ArrayLike) -> Float64Array:
@@ -88,8 +93,10 @@ def apply_homography(h: Float64Array, points: Float64Array) -> Float64Array:
 def fit_homography_dlt(src: Float64Array, dst: Float64Array) -> tuple[Float64Array, float]:
     """Normalised DLT from ``src`` to ``dst``. Returns (H, condition).
 
-    ``condition = s[7] / s[0]`` of the normalised A (brief G1); small means the
-    tap geometry does not pin down a unique homography.
+    ``condition = s[7] / s[0]`` of the normalised, UNWEIGHTED A (brief G1);
+    small means the tap geometry does not pin down a unique homography. The
+    returned H then has ``DLT_REWEIGHT_PASSES`` depth-reweighting passes, so
+    its residual is geometric error in ``dst`` units.
 
     Raises:
         ValueError: on mismatched shapes or fewer than 4 points.
@@ -114,6 +121,17 @@ def fit_homography_dlt(src: Float64Array, dst: Float64Array) -> tuple[Float64Arr
     _, singular, vt = np.linalg.svd(a, full_matrices=True)
     h_normalised = vt[-1].reshape(3, 3)
     condition = float(singular[7] / singular[0])
+    # Algebraic DLT weights each point's residual by its projective depth w,
+    # so far-court taps are fitted almost exactly and the error is pushed onto
+    # near ones (geometric RMS about 2x optimal on a baseline view). Rows
+    # reweighted by 1/w make the algebraic error the geometric one in dst.
+    homogeneous_src = np.column_stack([s, np.ones(len(s))])
+    for _ in range(DLT_REWEIGHT_PASSES):
+        depth = np.abs(homogeneous_src @ h_normalised[2])
+        weights = 1.0 / np.maximum(depth, _DEPTH_EPSILON)
+        weights /= weights.mean()
+        _, _, vt = np.linalg.svd(a * np.repeat(weights, 2)[:, None], full_matrices=True)
+        h_normalised = vt[-1].reshape(3, 3)
     h = np.linalg.inv(t_dst) @ h_normalised @ t_src
     return _scaled(h), condition
 
