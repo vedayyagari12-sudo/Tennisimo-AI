@@ -141,6 +141,11 @@ All are `Final`. Tune them on T0/T1 only, then freeze.
 - **T2 render cost.** Render the static court once per scene at 4×, then composite only the ball's local patch per frame (8 sub-frames).
 - **Decision 1 assumption.** With no score config, "Your shots" means `hitter_end == "near"`. With a score config, the projection fills a new nullable wire field `hitter: "player_a"|"player_b"|null` on ShotLandingResponse.
 
+## 2b. Decisions after batches A-C
+
+- **G21. Line calls need at least 8 taps.** With the 6 recommended taps, OpenCV k1 = −0.25 lens distortion passes the reprojection gates (RMS 1.94 / max 3.93 px at 1280-equivalent) but leaves up to 0.47 m of systematic ground error. That would produce confident wrong calls. With 8 or 14 taps the same distortion is rejected. Decision: `calls_allowed` requires ≥ 8 accepted taps. 4-7 taps give the shot map and zones only; the wire `line_call` is null ("not measured"). The setup copy asks for 8 taps. The strict-xfail test in `test_court_calibration.py` becomes a passing test of this rule. Revisit only if real footage shows 8 taps are impractical.
+- **G22. Step 24 compares against the merge base, not `main`.** `main` moves independently (e.g. 9d6bef5 edits `pipeline.py` and `CLAUDE.md`). Use `git diff --stat $(git merge-base HEAD main) HEAD -- <unchanged list>`. The golden reflects the f985ff1 pipeline. If the branch is later rebased onto a newer main, recapture the golden first.
+
 ## 3. Build batches
 
 Run from `backend/` in PowerShell.
