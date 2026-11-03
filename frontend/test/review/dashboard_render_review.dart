@@ -32,6 +32,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tennisimo_ai/models/analysis_response.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
 import 'package:tennisimo_ai/screens/login_screen.dart';
 import 'package:tennisimo_ai/screens/results_screen.dart';
@@ -280,6 +281,37 @@ void _renders(String out) {
       await _growToFit(tester, screen, viewport.value);
       await _save(tester, '$out/results_serve_${viewport.key}_full.png', 1);
     });
+  }
+
+  // A declared serve the classifier read as a volley, on a shot with no
+  // bands of its own: the mismatch note and the notice, with and without a
+  // score on the general bands.
+  for (final MapEntry<String, AnalysisResponse Function()> declared
+      in <String, AnalysisResponse Function()>{
+        'generic_score': declaredServeMismatchGenericScore,
+        'no_score': declaredServeMismatchNoScore,
+      }.entries) {
+    for (final MapEntry<String, Size> viewport in _viewports.entries) {
+      testWidgets(
+          'render results screen for a declared serve, ${declared.key} '
+          '${viewport.key}', (WidgetTester tester) async {
+        addTearDown(tester.view.reset);
+        final ResultsScreen screen = ResultsScreen(analysis: declared.value());
+        await _pump(tester, screen, viewport.value);
+        expect(tester.takeException(), isNull);
+        await _save(
+          tester,
+          '$out/results_declared_serve_${declared.key}_${viewport.key}.png',
+          2,
+        );
+        await _growToFit(tester, screen, viewport.value);
+        await _save(
+          tester,
+          '$out/results_declared_serve_${declared.key}_${viewport.key}_full.png',
+          1,
+        );
+      });
+    }
   }
 
   testWidgets('render login screen', (WidgetTester tester) async {

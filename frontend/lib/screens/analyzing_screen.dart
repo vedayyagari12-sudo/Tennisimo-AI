@@ -51,7 +51,9 @@ class AnalyzingScreen extends StatefulWidget {
 
   final VideoClip clip;
   final Handedness handednessHint;
-  final ShotType labelHint;
+  /// The user's declared shot, or null when they left it for the swing to
+  /// decide. Null is passed through as-is: `createAnalysis` omits the key.
+  final ShotType? labelHint;
   final BallSpeedCalibration? calibration;
 
   @override

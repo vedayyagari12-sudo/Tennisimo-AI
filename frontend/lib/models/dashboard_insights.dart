@@ -190,7 +190,13 @@ class ShotTypeInsight {
     this.sessionDates = const <DateTime?>[],
     this.newestDetailLoaded = false,
     this.versions = const <String?>[],
+    this.latestShotSpecificScoring,
   });
+
+  /// The NEWEST session's own `shot_specific_scoring`, read from its already
+  /// fetched detail. Null when that detail is not loaded or did not say:
+  /// list items do not carry the key, and no extra request is made for it.
+  final bool? latestShotSpecificScoring;
 
   final ShotType shotType;
 
@@ -441,8 +447,14 @@ ShotTypeInsight _insightFor(
     for (final AnalysisResponse d in detailsNewestFirst)
       if (versionById[d.analysisId] == current) d,
   ];
+  final bool newestDetailLoaded = detailsNewestFirst.isNotEmpty &&
+      newestFirst.isNotEmpty &&
+      detailsNewestFirst.first.analysisId == newestFirst.first.analysisId;
   return ShotTypeInsight(
     shotType: shotType,
+    latestShotSpecificScoring: newestDetailLoaded
+        ? detailsNewestFirst.first.shotSpecificScoring
+        : null,
     scorePoints:
         oldestFirst.map((AnalysisSummary e) => e.overallScore).toList(),
     speedPoints: oldestFirst
@@ -456,9 +468,7 @@ ShotTypeInsight _insightFor(
         : coverageOf(detailsNewestFirst.first),
     sessionDates:
         oldestFirst.map((AnalysisSummary e) => e.createdAt).toList(),
-    newestDetailLoaded: detailsNewestFirst.isNotEmpty &&
-        newestFirst.isNotEmpty &&
-        detailsNewestFirst.first.analysisId == newestFirst.first.analysisId,
+    newestDetailLoaded: newestDetailLoaded,
     versions:
         oldestFirst.map((AnalysisSummary e) => e.pipelineVersion).toList(),
   );

@@ -343,11 +343,33 @@ Future<ApiResult<UploadTicket>> requestUploadTicket({
   }
 }
 
+/// PURE. The `POST /v1/analyses` body.
+///
+/// `label_hint` is the user's DECLARED shot type, and the server scores the
+/// clip as that shot. It is therefore sent only when the user actually chose
+/// one: a null [labelHint] OMITS the key, and the server works the shot out
+/// from the swing instead.
+Map<String, dynamic> createAnalysisBody({
+  required String storagePath,
+  required Handedness handednessHint,
+  required ShotType? labelHint,
+  CameraView cameraViewHint = CameraView.sideOn,
+  BallSpeedCalibration? calibration,
+}) =>
+    <String, dynamic>{
+      'storage_path': storagePath,
+      'handedness_hint': handednessHint.wire,
+      'camera_view_hint': cameraViewHint.wire,
+      if (labelHint != null) 'label_hint': labelHint.wire,
+      if (calibration != null)
+        'ball_speed_calibration': calibration.toJson(),
+    };
+
 /// Step 3: queue the analysis. The user identity comes from the JWT only.
 Future<ApiResult<CreateAnalysisResult>> createAnalysis({
   required String storagePath,
   required Handedness handednessHint,
-  required ShotType labelHint,
+  required ShotType? labelHint,
   CameraView cameraViewHint = CameraView.sideOn,
   BallSpeedCalibration? calibration,
 }) async {
@@ -360,14 +382,13 @@ Future<ApiResult<CreateAnalysisResult>> createAnalysis({
     final http.Response response = await http.post(
       Uri.parse('$baseUrl/v1/analyses'),
       headers: _authHeaders(token, json: true),
-      body: jsonEncode(<String, dynamic>{
-        'storage_path': storagePath,
-        'handedness_hint': handednessHint.wire,
-        'camera_view_hint': cameraViewHint.wire,
-        'label_hint': labelHint.wire,
-        if (calibration != null)
-          'ball_speed_calibration': calibration.toJson(),
-      }),
+      body: jsonEncode(createAnalysisBody(
+        storagePath: storagePath,
+        handednessHint: handednessHint,
+        labelHint: labelHint,
+        cameraViewHint: cameraViewHint,
+        calibration: calibration,
+      )),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return ApiResult<CreateAnalysisResult>.err(_failureFromResponse(response));

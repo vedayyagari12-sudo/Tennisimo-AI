@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/analysis_response.dart';
 import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
 import '../models/enums.dart';
@@ -245,7 +246,12 @@ class _ShotTypeSectionState extends State<ShotTypeSection> {
         const SizedBox(height: AppSpacing.lg),
         if (insight.hasNoScoreAtAll)
           Text(
-            ShotTypeSection.noOverallScoreMessage,
+            // The newest clip's own detail said this shot has no scoring
+            // bands of its own yet: that is the real reason, so say it.
+            insight.latestShotSpecificScoring == false &&
+                    insight.shotType != ShotType.unknown
+                ? kNoShotSpecificScoringMessage
+                : ShotTypeSection.noOverallScoreMessage,
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           )

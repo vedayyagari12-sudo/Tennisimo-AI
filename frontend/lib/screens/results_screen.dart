@@ -60,6 +60,10 @@ class ResultsScreen extends StatelessWidget {
             ],
             _ShotHeader(analysis: analysis),
             const SizedBox(height: 16),
+            if (analysis.shotTypeMismatch) ...<Widget>[
+              _MismatchNote(analysis: analysis),
+              const SizedBox(height: 16),
+            ],
             // The plain "do this" bullets lead: they are written for a
             // beginner, and they come from the rule table, so they are here
             // whether or not the AI feedback below arrived.
@@ -253,6 +257,56 @@ class _UnrecognizedStatusBanner extends StatelessWidget {
   }
 }
 
+/// The header's provenance line for a shot the user chose themselves. No
+/// confidence figure: the server reports none for a user's choice.
+const String kShotDeclaredLine = 'You selected this shot.';
+
+/// Added under [kNoShotSpecificScoringMessage] when an overall score was
+/// still produced — on the general bands every shot shares.
+const String kGenericScoreMessage =
+    'This score uses general measurements, not ones tuned for this shot.';
+
+/// PURE. The line under the shot name, or null when nothing honest can be
+/// said about where the shot type came from.
+///
+/// A declared shot says so and carries no confidence. An inferred one keeps
+/// the "detected" wording, with a percentage only when one was reported — a
+/// null is never printed as "null" or "0%". An unrecognised source claims
+/// neither.
+String? shotProvenanceLine(AnalysisResponse analysis) {
+  switch (analysis.shotTypeSource) {
+    case ShotTypeSource.userDeclared:
+      return kShotDeclaredLine;
+    case ShotTypeSource.unrecognized:
+      return null;
+    case ShotTypeSource.inferred:
+      final double? confidence = analysis.shotTypeConfidence;
+      return confidence == null
+          ? 'Detected from your technique.'
+          : 'Detected from your technique · '
+              '${(confidence * 100).round()}% confidence';
+  }
+}
+
+/// PURE. True when the "scoring isn't available yet" notice applies: the
+/// server said this shot has no bands of its own, and the shot is a real one.
+/// A missing key (null) is unknown, and shows nothing.
+bool showsNoShotSpecificScoring(AnalysisResponse analysis) =>
+    analysis.shotSpecificScoring == false &&
+    analysis.shotType != ShotType.unknown;
+
+/// PURE. The plain-language mismatch sentence. No numbers, no blame: the user
+/// chose one shot, the swing looked like another, and their choice stood.
+String mismatchMessage(AnalysisResponse analysis) {
+  final String chosen = analysis.shotType.label.toLowerCase();
+  final ShotType? seen = analysis.inferredShotType;
+  final String looked = seen == null || seen == ShotType.unknown
+      ? 'the swing looked like a different shot'
+      : 'the swing looked more like a ${seen.label.toLowerCase()}';
+  return 'You chose a $chosen, but $looked. It was scored as a $chosen, as '
+      'you asked.';
+}
+
 class _ShotHeader extends StatelessWidget {
   const _ShotHeader({required this.analysis});
 
@@ -261,42 +315,113 @@ class _ShotHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final double? confidence = analysis.shotTypeConfidence;
+    final String? provenance = shotProvenanceLine(analysis);
     final double? score = analysis.overallScore;
+    final bool noShotScoring = showsNoShotSpecificScoring(analysis);
 
     return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(analysis.shotType.label,
+                          style: theme.textTheme.headlineSmall),
+                      if (provenance != null) ...<Widget>[
+                        const SizedBox(height: 4),
+                        Text(provenance, style: theme.textTheme.bodySmall),
+                      ],
+                    ],
+                  ),
+                ),
+                if (score != null) ...<Widget>[
+                  const SizedBox(width: 12),
+                  Column(
+                    children: <Widget>[
+                      Text(score.round().toString(),
+                          style: theme.textTheme.headlineMedium),
+                      Text('overall', style: theme.textTheme.bodySmall),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+            // Said in words rather than left blank. An existing score is
+            // never hidden: when there is one, a second line says what it
+            // was measured against.
+            if (noShotScoring) ...<Widget>[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(Icons.info_outline,
+                      size: 18, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(kNoShotSpecificScoringMessage,
+                            style: theme.textTheme.bodyMedium),
+                        if (score != null) ...<Widget>[
+                          const SizedBox(height: 4),
+                          Text(
+                            kGenericScoreMessage,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The user chose one shot and the swing looked like another.
+///
+/// Information, not an error: the same calm container as [_PartialBanner],
+/// and never the error colour.
+class _MismatchNote extends StatelessWidget {
+  const _MismatchNote({required this.analysis});
+
+  final AnalysisResponse analysis;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Card(
+      color: theme.colorScheme.tertiaryContainer,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            Icon(Icons.info_outline,
+                color: theme.colorScheme.onTertiaryContainer),
+            const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(analysis.shotType.label,
-                      style: theme.textTheme.headlineSmall),
-                  const SizedBox(height: 4),
-                  Text(
-                    confidence == null
-                        ? 'Detected from your technique.'
-                        : 'Detected from your technique · '
-                            '${(confidence * 100).round()}% confidence',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ],
+              child: Text(
+                mismatchMessage(analysis),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onTertiaryContainer,
+                ),
               ),
             ),
-            if (score != null) ...<Widget>[
-              const SizedBox(width: 12),
-              Column(
-                children: <Widget>[
-                  Text(score.round().toString(),
-                      style: theme.textTheme.headlineMedium),
-                  Text('overall', style: theme.textTheme.bodySmall),
-                ],
-              ),
-            ],
           ],
         ),
       ),
@@ -497,12 +622,17 @@ class _CategoryRow extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             // An unmeasured category says so. It is never shown as 0, which
-            // would read as a score the user earned.
-            Text(
-              category.displayScore,
-              style: category.isMeasured
-                  ? theme.textTheme.titleSmall
-                  : theme.textTheme.bodySmall,
+            // would read as a score the user earned. Flexible, as in
+            // [_MetricRow], so "not measured" wraps instead of overflowing a
+            // narrow phone at large text.
+            Flexible(
+              child: Text(
+                category.displayScore,
+                textAlign: TextAlign.end,
+                style: category.isMeasured
+                    ? theme.textTheme.titleSmall
+                    : theme.textTheme.bodySmall,
+              ),
             ),
           ],
         ),

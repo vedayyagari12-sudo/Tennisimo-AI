@@ -151,6 +151,13 @@ const String kHandednessMissingMessage =
 String? analysisBlockedReason(Handedness? handedness) =>
     handedness == null ? kHandednessMissingMessage : null;
 
+/// The line under "Shot type". The choice is optional: choosing a shot means
+/// the clip is scored as that shot; leaving it lets the swing decide.
+const String kShotTypeChoiceHelp =
+    'Optional. Pick a shot and your swing will be scored as that shot. Leave '
+    'it unselected and the app will work out the shot from your swing. Tap a '
+    'selected shot again to clear it.';
+
 /// Camera capture screen: shot-type and handedness hints, framing guidance,
 /// optional court calibration, and a capped recording.
 ///
@@ -203,7 +210,13 @@ class _RecordScreenState extends State<RecordScreen> {
   /// produced it. Null when there is nothing to say.
   String? _pickError;
 
-  ShotType _shotType = ShotType.forehandTopspin;
+  /// The user's DECLARED shot type, sent as `label_hint`. NO DEFAULT, for the
+  /// same reason as [_handedness]: the server scores the clip as the declared
+  /// shot, so a pre-selected forehand would make every untouched serve a
+  /// "declared forehand". Null means the user left it to the swing, and the
+  /// key is omitted. Unlike handedness it does NOT gate recording.
+  ShotType? _shotType;
+
   /// NO DEFAULT, deliberately. A defaulted hint is indistinguishable from a
   /// confirmed one on the server, and it OVERRIDES Stage 8 detection whenever
   /// detection confidence is below its floor (14 of 16 corpus clips). A
@@ -506,8 +519,7 @@ class _RecordScreenState extends State<RecordScreen> {
             Text('Shot type', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
-              'A hint for the analysis. The shot is still inferred from your '
-              'technique.',
+              kShotTypeChoiceHelp,
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -518,9 +530,12 @@ class _RecordScreenState extends State<RecordScreen> {
                 return ChoiceChip(
                   label: Text(type.label),
                   selected: _shotType == type,
+                  // Tapping the selected chip again clears it — the chip
+                  // equivalent of the handedness control's empty selection.
                   onSelected: _intakeInFlight
                       ? null
-                      : (bool _) => setState(() => _shotType = type),
+                      : (bool selected) =>
+                          setState(() => _shotType = selected ? type : null),
                 );
               }).toList(),
             ),

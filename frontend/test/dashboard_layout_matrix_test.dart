@@ -189,6 +189,28 @@ void main() {
     () => ShotTypeSection(insight: _acrossVersions(), initiallyExpanded: true),
   );
 
+  // A declared serve with no overall score whose newest detail says serves
+  // have no bands of their own: the "isn't available yet" sentence.
+  forEveryViewport(
+    'an unbanded shot-type section with no score, expanded',
+    () => ShotTypeSection(
+      initiallyExpanded: true,
+      insight: ShotTypeInsight(
+        shotType: ShotType.backhandOneHanded,
+        scorePoints: const <double?>[null, null, null],
+        speedPoints: const <double?>[null, 72, 81],
+        categoryTrends: <CategoryTrend>[
+          _trend('preparation', 'Preparation', const <double?>[55, 60, 72]),
+          _trend('balance', 'Balance', const <double?>[71, null, 75]),
+        ],
+        detailsInspected: 3,
+        latestCoverage: const CoverageSummary(available: 5, total: 7),
+        newestDetailLoaded: true,
+        latestShotSpecificScoring: false,
+      ),
+    ),
+  );
+
   forEveryViewport(
     'the focus card',
     () => FocusCard(insight: _densest()),
@@ -447,48 +469,60 @@ void _resultsScreenTests() {
     }
   }
 
-  for (final bool expanded in <bool>[false, true]) {
-    final String state = expanded ? 'expanded' : 'collapsed';
-    for (final MapEntry<String, Size> viewport in kViewports.entries) {
-      for (final double scale in kTextScales) {
-        testWidgets(
-            'the results screen, measurements $state — '
-            '${viewport.key} @ ${scale}x', (WidgetTester tester) async {
-          tester.view.physicalSize = viewport.value;
-          tester.view.devicePixelRatio = 1.0;
-          addTearDown(tester.view.reset);
-          // The densest fixture swing: feedback with strengths and three
-          // improvements, ball speed, five categories, and null metrics.
-          final AnalysisResponse analysis =
-              forehandOnly().source.details['fh0']!;
+  // The densest fixture swing: feedback with strengths and three
+  // improvements, ball speed, five categories, and null metrics. Then a
+  // declared serve with the mismatch note and the no-bands notice, once with
+  // a score on the general bands (the notice's second line) and once without.
+  final Map<String, AnalysisResponse Function()> analyses =
+      <String, AnalysisResponse Function()>{
+    'forehand': () => forehandOnly().source.details['fh0']!,
+    'declared serve, mismatch, generic score':
+        declaredServeMismatchGenericScore,
+    'declared serve, mismatch, no score': declaredServeMismatchNoScore,
+  };
 
-          await tester.pumpWidget(MaterialApp(
-            theme: buildAppTheme(),
-            home: Builder(
-              builder: (BuildContext context) => MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(scale)),
-                child: ResultsScreen(analysis: analysis),
+  for (final MapEntry<String, AnalysisResponse Function()> fixture
+      in analyses.entries) {
+    for (final bool expanded in <bool>[false, true]) {
+      final String state = expanded ? 'expanded' : 'collapsed';
+      for (final MapEntry<String, Size> viewport in kViewports.entries) {
+        for (final double scale in kTextScales) {
+          testWidgets(
+              'the results screen (${fixture.key}), measurements $state — '
+              '${viewport.key} @ ${scale}x', (WidgetTester tester) async {
+            tester.view.physicalSize = viewport.value;
+            tester.view.devicePixelRatio = 1.0;
+            addTearDown(tester.view.reset);
+            final AnalysisResponse analysis = fixture.value();
+
+            await tester.pumpWidget(MaterialApp(
+              theme: buildAppTheme(),
+              home: Builder(
+                builder: (BuildContext context) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(scale)),
+                  child: ResultsScreen(analysis: analysis),
+                ),
               ),
-            ),
-          ));
-          await tester.pump();
-          expect(tester.takeException(), isNull);
-
-          if (expanded) {
-            final Finder toggle = find.text('See all measurements');
-            await tester.scrollUntilVisible(toggle, 300,
-                scrollable: find.byType(Scrollable).first);
-            await tester.ensureVisible(toggle);
-            await tester.pumpAndSettle();
-            await tester.tap(toggle);
-            await tester.pumpAndSettle();
+            ));
+            await tester.pump();
             expect(tester.takeException(), isNull);
-            expect(find.text('Shoulder turn'), findsOneWidget);
-          }
 
-          await scrollToEnd(tester);
-        });
+            if (expanded) {
+              final Finder toggle = find.text('See all measurements');
+              await tester.scrollUntilVisible(toggle, 300,
+                  scrollable: find.byType(Scrollable).first);
+              await tester.ensureVisible(toggle);
+              await tester.pumpAndSettle();
+              await tester.tap(toggle);
+              await tester.pumpAndSettle();
+              expect(tester.takeException(), isNull);
+              expect(find.text('Shoulder turn'), findsOneWidget);
+            }
+
+            await scrollToEnd(tester);
+          });
+        }
       }
     }
   }

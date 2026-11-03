@@ -409,13 +409,23 @@ AnalysisResponse fixtureAnalysis({
   List<MetricScore> metrics = const <MetricScore>[],
   CoachingFeedback? feedback,
   String pipelineVersion = '1.0.0',
+  ShotTypeSource source = ShotTypeSource.inferred,
+  ShotType? inferredShot,
+  bool mismatch = false,
+  bool? shotSpecificScoring,
 }) => AnalysisResponse(
   analysisId: id,
   createdAt: createdAt,
   status: AnalysisStatus.complete,
   pipelineVersion: pipelineVersion,
   shotType: shot,
-  shotTypeConfidence: 0.8,
+  // The server reports no classifier confidence for a user's own choice.
+  shotTypeConfidence: source == ShotTypeSource.userDeclared ? null : 0.8,
+  shotTypeSource: source,
+  inferredShotType: inferredShot,
+  inferredShotTypeConfidence: inferredShot == null ? null : 0.86,
+  shotTypeMismatch: mismatch,
+  shotSpecificScoring: shotSpecificScoring,
   overallScore: overall,
   categories: _categories(shot, categories),
   metrics: metrics,
@@ -441,6 +451,8 @@ _Session _session({
   List<MetricScore> metrics = const <MetricScore>[],
   CoachingFeedback? feedback,
   String? version,
+  ShotTypeSource source = ShotTypeSource.inferred,
+  bool? shotSpecificScoring,
 }) {
   final DateTime at = DateTime.now().subtract(age);
   // The list item carries the version exactly as the backend sends it (null
@@ -463,6 +475,8 @@ _Session _session({
       metrics: metrics,
       feedback: feedback,
       pipelineVersion: version ?? '1.0.0',
+      source: source,
+      shotSpecificScoring: shotSpecificScoring,
     ),
   );
 }
@@ -536,6 +550,8 @@ _Session _unbanded(
   int? mph,
   bool withMetrics = false,
   String? version,
+  ShotTypeSource source = ShotTypeSource.inferred,
+  bool? shotSpecificScoring,
 }) {
   final List<double> scored = <double?>[
     prep,
@@ -560,6 +576,8 @@ _Session _unbanded(
     },
     metrics: withMetrics ? serveMetrics() : const <MetricScore>[],
     version: version,
+    source: source,
+    shotSpecificScoring: shotSpecificScoring,
   );
 }
 
@@ -863,6 +881,86 @@ DashboardFixture mixedVersions() {
   );
 }
 
+/// The newest session is a serve the user DECLARED, with no overall score,
+/// and its detail says serves have no scoring bands of their own yet
+/// (`shot_specific_scoring: false`). The older serve predates the key.
+DashboardFixture declaredUnbandedServe() {
+  final List<_Session> fh = _forehands(
+    count: 2,
+    olderBy: const Duration(days: 1),
+  );
+  return DashboardFixture(
+    'declared_unbanded_serve',
+    _source(<_Session>[
+      _unbanded(
+        'dsv0',
+        const Duration(minutes: 20),
+        ShotType.serve,
+        prep: 70,
+        path: null,
+        balance: 61,
+        mph: 89,
+        withMetrics: true,
+        source: ShotTypeSource.userDeclared,
+        shotSpecificScoring: false,
+      ),
+      fh[0],
+      _unbanded(
+        'dsv1',
+        const Duration(days: 3),
+        ShotType.serve,
+        prep: 66,
+        path: null,
+        balance: 58,
+      ),
+      fh[1],
+    ]),
+  );
+}
+
+/// A serve the user declared, which the classifier read as a volley, on a
+/// shot type with no bands of its own — but with all three base categories
+/// measured, so an overall score WAS produced on the general bands.
+AnalysisResponse declaredServeMismatchGenericScore() => fixtureAnalysis(
+  id: 'dsm0',
+  createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
+  shot: ShotType.serve,
+  overall: 66,
+  categories: const <String, double?>{
+    'preparation': 72,
+    'contact': null,
+    'swing_path': 61,
+    'follow_through': null,
+    'balance': 65,
+  },
+  metrics: serveMetrics(),
+  source: ShotTypeSource.userDeclared,
+  inferredShot: ShotType.volley,
+  mismatch: true,
+  shotSpecificScoring: false,
+);
+
+/// The same declared, mismatched serve with too few categories measured for
+/// any overall score.
+AnalysisResponse declaredServeMismatchNoScore() => fixtureAnalysis(
+  id: 'dsm1',
+  createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
+  shot: ShotType.serve,
+  overall: null,
+  categories: const <String, double?>{
+    'preparation': 72,
+    'contact': null,
+    'swing_path': null,
+    'follow_through': null,
+    'balance': 65,
+  },
+  metrics: serveMetrics(),
+  source: ShotTypeSource.userDeclared,
+  inferredShot: ShotType.volley,
+  mismatch: true,
+  shotSpecificScoring: false,
+);
+
 List<DashboardFixture> allFixtures() => <DashboardFixture>[
   newUser(),
   forehandOnly(),
@@ -871,4 +969,5 @@ List<DashboardFixture> allFixtures() => <DashboardFixture>[
   partialDetailFailure(),
   wideShotMix(),
   mixedVersions(),
+  declaredUnbandedServe(),
 ];

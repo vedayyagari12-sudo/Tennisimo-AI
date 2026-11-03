@@ -4,6 +4,12 @@ import 'enums.dart';
 import 'json_utils.dart';
 import 'metric_score.dart';
 
+/// Shown wherever a shot type has no scoring bands of its own yet
+/// ([AnalysisResponse.shotSpecificScoring] is false): the results screen and
+/// the dashboard's shot-type section say the same sentence.
+const String kNoShotSpecificScoringMessage =
+    "Scoring for this shot isn't available yet.";
+
 /// One weighted scoring category. Mirrors
 /// `backend/app/models/responses.py::CategoryScore`.
 ///
@@ -96,16 +102,45 @@ class AnalysisResponse {
     required this.ballSpeed,
     required this.feedback,
     required this.warnings,
+    this.shotTypeSource = ShotTypeSource.inferred,
+    this.inferredShotType,
+    this.inferredShotTypeConfidence,
+    this.shotTypeMismatch = false,
+    this.shotSpecificScoring,
   });
 
   final String analysisId;
   final DateTime? createdAt;
   final AnalysisStatus status;
   final String pipelineVersion;
+
+  /// The shot this analysis was scored as: the user's choice when
+  /// [shotTypeSource] is [ShotTypeSource.userDeclared], else the classifier's.
   final ShotType shotType;
 
-  /// 0.0-1.0, or null when the server did not report one.
+  /// 0.0-1.0, or null when the server did not report one. Always null for a
+  /// user-declared shot: the server does not invent a classifier confidence
+  /// for a choice the user made.
   final double? shotTypeConfidence;
+
+  /// `shot_type.source`. A missing key reads as [ShotTypeSource.inferred].
+  final ShotTypeSource shotTypeSource;
+
+  /// `shot_type.inferred_shot_type`: the classifier's own opinion, kept as a
+  /// cross-check on a declared shot. Null when absent.
+  final ShotType? inferredShotType;
+
+  /// `shot_type.inferred_confidence`, 0.0-1.0, or null.
+  final double? inferredShotTypeConfidence;
+
+  /// `shot_type.mismatch`: the user declared a shot and the classifier
+  /// confidently saw another. A missing key reads as false.
+  final bool shotTypeMismatch;
+
+  /// `shot_type.shot_specific_scoring`. False means this shot type has no
+  /// scoring bands of its own yet. Null — a missing key — means unknown, and
+  /// no notice is shown for it.
+  final bool? shotSpecificScoring;
 
   /// 0-100, or null when no score could be produced.
   final double? overallScore;
@@ -153,6 +188,18 @@ class AnalysisResponse {
       shotTypeConfidence: shotTypeJson != null
           ? asDoubleOrNull(shotTypeJson, 'confidence')
           : asDoubleOrNull(json, 'shot_type_confidence'),
+      // The provenance keys exist only on the nested object. A bare-string
+      // `shot_type` is an old row, and every default below is the old meaning.
+      shotTypeSource: ShotTypeSource.fromJson(shotTypeJson?['source']),
+      inferredShotType: shotTypeJson?['inferred_shot_type'] == null
+          ? null
+          : ShotType.fromJson(shotTypeJson!['inferred_shot_type']),
+      inferredShotTypeConfidence:
+          asDoubleOrNull(shotTypeJson, 'inferred_confidence'),
+      shotTypeMismatch: asBool(shotTypeJson, 'mismatch'),
+      shotSpecificScoring: shotTypeJson?['shot_specific_scoring'] is bool
+          ? shotTypeJson!['shot_specific_scoring'] as bool
+          : null,
       overallScore: asDoubleOrNull(scorecard, 'overall_score') ??
           asDoubleOrNull(json, 'overall_score'),
       categories: categories,

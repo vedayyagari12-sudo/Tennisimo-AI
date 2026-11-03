@@ -237,6 +237,35 @@ enum ShotType implements WireEnum {
   ];
 }
 
+/// Where an analysis's shot type came from: the user's own choice on the
+/// record screen, or the classifier reading the technique.
+enum ShotTypeSource implements WireEnum {
+  userDeclared('user_declared'),
+  inferred('inferred'),
+
+  /// Client-side sentinel: the server sent a source this build does not know.
+  ///
+  /// NOT part of the backend contract, which is exactly
+  /// `{user_declared, inferred}`. Like [JobStatus.unrecognized], it can only be
+  /// produced locally by [fromJson], and its `__unrecognized__` wire string
+  /// cannot collide with a value the backend might add later. The results
+  /// screen claims neither "you selected" nor "detected" for it.
+  unrecognized('__unrecognized__');
+
+  const ShotTypeSource(this.wire);
+
+  @override
+  final String wire;
+
+  /// A MISSING key means [inferred]: every payload stored before the key
+  /// existed was classified from the technique, because a user's choice was
+  /// never anything more than a hint then. A present but unknown string is
+  /// [unrecognized], not [inferred].
+  static ShotTypeSource fromJson(Object? raw) => raw == null
+      ? ShotTypeSource.inferred
+      : parseWireEnum(values, raw, ShotTypeSource.unrecognized);
+}
+
 enum Handedness implements WireEnum {
   right('right'),
   left('left'),
