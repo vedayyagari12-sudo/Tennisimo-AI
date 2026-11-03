@@ -48,6 +48,37 @@ Decisions taken here (design 4.4 does not cover them):
 * ``stitch_tracklets`` takes ``frame_times_s`` and ``scale_px_per_m``: its
   own rule ("within max step x gap") needs the scale, and the gap's missing
   samples need frame times. The design 6.5 signature had neither.
+
+Scaling and clutter (added after real handheld clips gave 80-2500 candidates
+per frame; the first version's seeding was cubic in that count, and at 50
+random candidates per frame a clutter track that happened to point at the
+ball's first detection captured the whole flight, whose clutter head then made
+step 7 reject it):
+
+* Every gated neighbour search goes through a ``scipy.spatial.cKDTree`` per
+  frame, and seeding is vectorised. A seed keeps, per (a, b) pair, the best
+  valid c among its ``SEED_NEAREST_C`` nearest to the prediction (the first
+  version enumerated every c; greedy selection then differs only when that
+  best c is taken by a better seed).
+* ``MAX_CANDIDATES_PER_FRAME`` is a deterministic backstop: above it, a frame
+  keeps the candidates with the highest colour score, then contrast, then the
+  lowest record index.
+* Probation. A new seed, and a track's wide reacquire step, are on probation
+  until ``PROBATION_POINTS`` detections from that step (the minimum flight
+  length below 45 fps) fit one quadratic within ``SMOOTH_MAX_RMS_PX`` (step
+  7's own limit) with a physically possible acceleration. Failing that, or closing or reaching the end of the data
+  first, the probation detections are taken back (a seed dies; a wide step's
+  track closes at the point before it), and those still inside the seeding
+  window are offered to seeding again. Only verified pieces are stitched: a
+  chain of unverified 3-5 point pieces has no 0.25 s window with 5 points,
+  so step 7 could not reject it. A stitch whose joined flight fails step 7
+  is undone and its pieces are judged on their own: a stray clutter point
+  that a piece ends on is explained as a kink inside that piece but not once
+  the next piece is joined after it. Verified tracks extend first, then tracks on probation, then
+  seeding. A verified track's narrow step must also keep its last
+  ``PREDICTION_POINTS`` points plus the new one within that quadratic limit;
+  otherwise the step is refused, which sends a kink to the wide step and an
+  ended flight to coasting instead of into clutter.
 """
 
 from __future__ import annotations
@@ -59,6 +90,7 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial import cKDTree
 
 from app.ball.track import (
     GATE_SHRINK_FACTOR,
@@ -70,6 +102,7 @@ from app.ball.track import (
 __all__ = [
     "FLIGHT_CANDIDATE_DTYPE",
     "BallFlight",
+    "cap_candidates_per_frame",
     "link_flights",
     "stitch_tracklets",
 ]
@@ -120,6 +153,22 @@ SMOOTH_MIN_POINTS: Final[int] = 5
 #: The projected-parabola fit has 8 degrees of freedom; from 6 points it has
 #: 4 spare equations.
 PROJECTED_FIT_MIN_POINTS: Final[int] = 6
+#: Backstop per-frame candidate cap (ranked by colour score, then contrast).
+MAX_CANDIDATES_PER_FRAME: Final[int] = 256
+#: Seeding keeps the best valid c among this many nearest to the prediction.
+SEED_NEAREST_C: Final[int] = 4
+#: Detections from a seed or a wide step that must fit one quadratic (capped
+#: at the minimum flight length, so 4 below 45 fps).
+PROBATION_POINTS: Final[int] = 6
+#: Probation also bounds the fitted image acceleration (design 4.4 step 2's
+#: "acceleration under limit"): ACCEL_LIMIT_M_S2 x scale px/s^2, plus a noise
+#: floor of ACCEL_NOISE_PX_PER_FRAME2 per frame interval squared. 600 m/s^2 is
+#: 1.6x the largest seen on T0 truth (368 m/s^2 over 24k 6-frame windows, 60
+#: seeds of three scenarios): near the camera the ground scale under a ball
+#: under-reads its true scale, so gravity plus drag (114 m/s^2) is not enough.
+ACCEL_LIMIT_M_S2: Final[float] = 600.0
+#: 3 sigma of the fitted acceleration for 1 px noise at 30 fps (4 points).
+ACCEL_NOISE_PX_PER_FRAME2: Final[float] = 3.0
 _TIME_EPSILON_S: Final[float] = 1e-9
 
 
@@ -147,6 +196,11 @@ class _Track:
     wide_allowed: bool = True
     closed: bool = False
     history: list[tuple[float, float, float]] = field(default_factory=list)
+    #: Passed probation; extends before tracks that have not.
+    verified: bool = False
+    #: Index into ``detections`` where the current probation began.
+    probation_from: int = 0
+    killed: bool = False
 
 
 def _scale(scale_px_per_m: ScaleFn, x: float, y: float) -> float:
@@ -349,6 +403,37 @@ def stitch_tracklets(
     those earliest tracklets.
     """
     times = np.asarray(frame_times_s, dtype=np.float64)
+    return tuple(
+        _join(chain, tracklets, times)
+        for chain in _stitch_chains(tracklets, times, scale_px_per_m, max_gap_s=max_gap_s)
+    )
+
+
+def _join(chain: Sequence[int], tracklets: Sequence[BallFlight], times: Float64Array) -> BallFlight:
+    """One flight from a chain of tracklet indices (a single one is returned as is)."""
+    if len(chain) == 1:
+        return tracklets[chain[0]]
+    samples: dict[int, tuple[float, float, float]] = {}
+    for member in chain:
+        flight = tracklets[member]
+        for row, position in enumerate(_frame_positions(flight, times)):
+            if flight.detected[row]:
+                samples[int(position)] = (
+                    float(flight.xy_px[row, 0]),
+                    float(flight.xy_px[row, 1]),
+                    float(flight.minor_axis_px[row]),
+                )
+    return _flight_from_samples(tracklets[chain[0]].flight_id, times, min(samples), max(samples), samples)
+
+
+def _stitch_chains(
+    tracklets: Sequence[BallFlight],
+    times: Float64Array,
+    scale_px_per_m: ScaleFn,
+    *,
+    max_gap_s: float = STITCH_MAX_GAP_S,
+) -> list[list[int]]:
+    """``stitch_tracklets``' chains of tracklet indices, in order of their heads."""
     frame_dt = _median_dt(times)
     ends: list[tuple[float, Float64Array]] = []
     starts: list[tuple[float, Float64Array]] = []
@@ -360,15 +445,33 @@ def stitch_tracklets(
         ends.append((float(flight.times_s[found[-1]]), flight.xy_px[found[-1]]))
 
     options: list[tuple[float, float, int, int]] = []
+    start_times = np.array([t for t, _ in starts], dtype=np.float64)
+    start_points = np.array([xy for _, xy in starts], dtype=np.float64).reshape(-1, 2)
+    by_start = np.argsort(start_times, kind="stable")
+    sorted_starts = start_times[by_start]
     for a, (end_t, end_xy) in enumerate(ends):
-        for b, (start_t, start_xy) in enumerate(starts):
-            gap = start_t - end_t
-            if a == b or gap <= 0.0 or gap - frame_dt > max_gap_s + _TIME_EPSILON_S:
-                continue
-            distance = float(np.hypot(*(start_xy - end_xy)))
-            reach = V_MAX_M_PER_S * MAX_STEP_SAFETY * _scale(scale_px_per_m, *end_xy) * gap
-            if distance <= reach:
-                options.append((gap, distance, a, b))
+        # Only starts after this end and within the gap limit can join it.
+        low = int(np.searchsorted(sorted_starts, end_t, side="right"))
+        high = int(
+            np.searchsorted(sorted_starts, end_t + max_gap_s + frame_dt + _TIME_EPSILON_S, side="right")
+        )
+        later = by_start[low:high]
+        later = later[later != a]
+        if later.size == 0:
+            continue
+        gap = start_times[later] - end_t
+        valid = (gap > 0.0) & ~(gap - frame_dt > max_gap_s + _TIME_EPSILON_S)
+        later, gap = later[valid], gap[valid]
+        if later.size == 0:
+            continue
+        offset = start_points[later] - end_xy
+        distance = np.hypot(offset[:, 0], offset[:, 1])
+        reach = V_MAX_M_PER_S * MAX_STEP_SAFETY * _scale(scale_px_per_m, *end_xy) * gap
+        within = distance <= reach
+        options.extend(
+            (float(g), float(d), a, int(b))
+            for g, d, b in zip(gap[within], distance[within], later[within], strict=True)
+        )
     successor: dict[int, int] = {}
     predecessor: dict[int, int] = {}
     for _, _, a, b in sorted(options):
@@ -377,32 +480,35 @@ def stitch_tracklets(
         successor[a] = b
         predecessor[b] = a
 
-    stitched: list[BallFlight] = []
+    chains: list[list[int]] = []
     for head in range(len(tracklets)):
         if head in predecessor:
             continue
         chain = [head]
         while chain[-1] in successor:
             chain.append(successor[chain[-1]])
-        if len(chain) == 1:
-            stitched.append(tracklets[head])
-            continue
-        samples: dict[int, tuple[float, float, float]] = {}
-        for member in chain:
-            flight = tracklets[member]
-            for row, position in enumerate(_frame_positions(flight, times)):
-                if flight.detected[row]:
-                    samples[int(position)] = (
-                        float(flight.xy_px[row, 0]),
-                        float(flight.xy_px[row, 1]),
-                        float(flight.minor_axis_px[row]),
-                    )
-        stitched.append(
-            _flight_from_samples(
-                tracklets[head].flight_id, times, min(samples), max(samples), samples
+        chains.append(chain)
+    return chains
+
+
+def _accepted_flights(
+    chains: Sequence[Sequence[int]],
+    tracklets: Sequence[BallFlight],
+    times: Float64Array,
+    min_detections: int,
+) -> list[BallFlight]:
+    """Step 7 over stitched chains. A stitch that makes the joined flight fail
+    is undone: its pieces are judged on their own."""
+    accepted: list[BallFlight] = []
+    for chain in chains:
+        joined = _join(chain, tracklets, times)
+        if _accept(joined, min_detections):
+            accepted.append(joined)
+        elif len(chain) > 1:
+            accepted.extend(
+                tracklets[member] for member in chain if _accept(tracklets[member], min_detections)
             )
-        )
-    return tuple(stitched)
+    return accepted
 
 
 def _accept(flight: BallFlight, min_detections: int) -> bool:
@@ -413,6 +519,107 @@ def _accept(flight: BallFlight, min_detections: int) -> bool:
     if float(np.hypot(*(last - first))) < MIN_NET_DISPLACEMENT_PX:
         return False
     return _is_smooth(flight.times_s[found], flight.xy_px[found])
+
+
+def cap_candidates_per_frame(
+    candidates: npt.NDArray[np.void], *, cap: int = MAX_CANDIDATES_PER_FRAME
+) -> npt.NDArray[np.intp]:
+    """Record indices kept by the per-frame cap, ascending.
+
+    A frame with more than ``cap`` candidates keeps the ``cap`` with the
+    highest ``colour_score``, then the highest ``contrast``, then the lowest
+    record index. A NaN score ranks below every number. Deterministic.
+    """
+    if cap < 1:
+        raise ValueError("cap must be at least 1")
+    count = len(candidates)
+    if count == 0:
+        return np.zeros(0, dtype=np.intp)
+    frame_index = np.asarray(candidates["frame_index"], dtype=np.int64)
+    colour = np.nan_to_num(np.asarray(candidates["colour_score"], dtype=np.float64), nan=-np.inf)
+    contrast = np.nan_to_num(np.asarray(candidates["contrast"], dtype=np.float64), nan=-np.inf)
+    index = np.arange(count)
+    order = np.lexsort((index, -contrast, -colour, frame_index))
+    sorted_frames = frame_index[order]
+    first_of_frame = np.r_[0, np.flatnonzero(np.diff(sorted_frames)) + 1]
+    rank = index - np.repeat(first_of_frame, np.diff(np.r_[first_of_frame, count]))
+    return np.sort(order[rank < cap]).astype(np.intp)
+
+
+class _Candidates:
+    """Column arrays of the candidate records (record access is slow)."""
+
+    def __init__(self, candidates: npt.NDArray[np.void]) -> None:
+        self.x = np.asarray(candidates["x"], dtype=np.float64)
+        self.y = np.asarray(candidates["y"], dtype=np.float64)
+        self.minor = np.asarray(candidates["minor"], dtype=np.float64)
+        self.major = np.asarray(candidates["major"], dtype=np.float64)
+        self.orientation = np.asarray(candidates["orientation_deg"], dtype=np.float64)
+
+    def xy(self, index: int) -> tuple[float, float]:
+        return float(self.x[index]), float(self.y[index])
+
+    def points(self, indices: npt.NDArray[np.intp]) -> Float64Array:
+        return np.column_stack([self.x[indices], self.y[indices]])
+
+    def orientation_ok(
+        self, indices: npt.NDArray[np.intp], from_x: npt.ArrayLike, from_y: npt.ArrayLike
+    ) -> npt.NDArray[np.bool_]:
+        """Vectorised ``_orientation_ok``: a streak must lie within 25 degrees
+        of its step from (from_x, from_y); anything else passes."""
+        minor = self.minor[indices]
+        major = self.major[indices]
+        streak = (minor >= STREAK_MINOR_MIN_PX) & (major >= STREAK_ASPECT_MIN * minor)
+        dx = self.x[indices] - np.asarray(from_x, dtype=np.float64)
+        dy = self.y[indices] - np.asarray(from_y, dtype=np.float64)
+        step_deg = np.degrees(np.arctan2(dy, dx))
+        delta = np.abs((self.orientation[indices] - step_deg) % 180.0)
+        difference = np.minimum(delta, 180.0 - delta)
+        still = (dx == 0.0) & (dy == 0.0)
+        return np.asarray(~streak | still | (difference <= STREAK_ORIENTATION_TOLERANCE_DEG))
+
+
+class _FrameIndex:
+    """One frame's candidate indices and a KD tree over their points."""
+
+    def __init__(self, indices: Sequence[int], columns: _Candidates) -> None:
+        self.indices = np.asarray(sorted(indices), dtype=np.intp)
+        self.tree = cKDTree(columns.points(self.indices)) if self.indices.size else None
+
+    def within(self, centre: tuple[float, float], radius: float) -> npt.NDArray[np.intp]:
+        """Candidate indices within ``radius`` of ``centre``, ascending."""
+        if self.tree is None:
+            return np.zeros(0, dtype=np.intp)
+        hits = self.tree.query_ball_point(centre, radius)
+        return np.sort(self.indices[np.asarray(hits, dtype=np.intp)])
+
+
+def _quadratic_fits(points: Sequence[tuple[float, float, float]]) -> bool:
+    window = np.asarray(points, dtype=np.float64)
+    return _quadratic_rms(window[:, 0], window[:, 1:]) <= SMOOTH_MAX_RMS_PX
+
+
+def _physically_plausible(
+    points: Sequence[tuple[float, float, float]], scale_px_per_m: ScaleFn, frame_dt: float
+) -> bool:
+    """The fitted image acceleration of (t, x, y) points is one a ball can have."""
+    window = np.asarray(points, dtype=np.float64)
+    times = window[:, 0] - window[0, 0]
+    coefficients, *_ = np.linalg.lstsq(np.vander(times, 3), window[:, 1:], rcond=None)
+    acceleration = 2.0 * float(np.hypot(coefficients[0, 0], coefficients[0, 1]))
+    centre = window[:, 1:].mean(axis=0)
+    limit = ACCEL_LIMIT_M_S2 * _scale(scale_px_per_m, float(centre[0]), float(centre[1]))
+    if frame_dt > 0.0:
+        limit += ACCEL_NOISE_PX_PER_FRAME2 / frame_dt**2
+    return acceleration <= limit
+
+
+def _narrow_step_fits(track: _Track, now: float, xy: tuple[float, float]) -> bool:
+    """A verified track's narrow step keeps its recent path one quadratic."""
+    segment = track.history[track.model_start :]
+    if not track.verified or len(segment) < PREDICTION_POINTS:
+        return True
+    return _quadratic_fits([*segment[-PREDICTION_POINTS:], (now, *xy)])
 
 
 def link_flights(
@@ -427,7 +634,8 @@ def link_flights(
     ``frame_times_s[i]`` is the PTS of frame ``i``; each candidate's
     ``frame_index`` indexes it. ``scale_px_per_m(x, y)`` is pixels per metre
     for a ball seen at image point (x, y). Flights are numbered 0.. in order of
-    their first sample, then first position.
+    their first sample, then first position. Frames over
+    ``MAX_CANDIDATES_PER_FRAME`` are capped first (``cap_candidates_per_frame``).
 
     Raises:
         ValueError: wrong dtype, a frame index out of range, frame times not
@@ -442,88 +650,69 @@ def link_flights(
     if frame_index.size and (frame_index.min() < 0 or frame_index.max() >= times.size):
         raise ValueError("a candidate frame_index is outside frame_times_s")
     frame_dt = _median_dt(times)
-    order = np.lexsort((np.arange(len(candidates)), frame_index))
+    min_detections = MIN_DETECTIONS if frame_dt > 0.0 and 1.0 / frame_dt >= LOW_FPS_BELOW else (
+        MIN_DETECTIONS_LOW_FPS
+    )
+    probation_points = min(PROBATION_POINTS, min_detections)
+    columns = _Candidates(candidates)
+    kept = cap_candidates_per_frame(candidates)
     per_frame: dict[int, list[int]] = {}
-    for index in order:
+    for index in kept[np.argsort(frame_index[kept], kind="stable")]:
         per_frame.setdefault(int(frame_index[index]), []).append(int(index))
 
-    def xy_of(index: int) -> tuple[float, float]:
-        return float(candidates[index]["x"]), float(candidates[index]["y"])
-
     tracks: list[_Track] = []
+    active: list[_Track] = []
     unused: dict[int, list[int]] = {}
     for position in range(times.size):
         now = float(times[position])
-        here = per_frame.get(position, [])
+        here = _FrameIndex(per_frame.get(position, []), columns)
         taken: set[int] = set()
-        active = [t for t in tracks if not t.closed]
 
         # Coast limit: close tracks whose missing time now exceeds the gap.
         live: list[tuple[_Track, float, tuple[float, float], tuple[float, float]]] = []
         for track in active:
             last_t, last_x, last_y = track.history[-1]
             if now - last_t - frame_dt > max_gap_s + _TIME_EPSILON_S:
-                track.closed = True
+                if track.verified:
+                    track.closed = True
+                else:
+                    _revert_probation(track)  # unfinished: too old to reseed
                 continue
             max_step = _max_step_px(now - last_t, _scale(scale_px_per_m, last_x, last_y))
             live.append((track, max_step, _predict(track.history[track.model_start :], now), (last_x, last_y)))
 
-        # Extend: narrow gates, one-to-one by (distance, track id, candidate).
-        pairs: list[tuple[float, int, int]] = []
-        for track, max_step, predicted, last_xy in live:
-            gate = _gate_px(max_step)
-            for index in here:
-                x, y = xy_of(index)
-                distance = math.hypot(x - predicted[0], y - predicted[1])
-                if distance <= gate and _orientation_ok(candidates[index], last_xy):
-                    pairs.append((distance, track.track_id, index))
+        # Verified tracks first, then tracks on probation.
         assigned: set[int] = set()
-        by_id = {track.track_id: track for track, *_ in live}
-        for _, track_id, index in sorted(pairs):
-            if track_id in assigned or index in taken:
-                continue
-            track = by_id[track_id]
-            track.detections.append((position, index))
-            track.history.append((now, *xy_of(index)))
-            track.wide_allowed = True
-            assigned.add(track_id)
-            taken.add(index)
+        stepped: list[_Track] = []
+        for verified in (True, False):
+            tier = [entry for entry in live if entry[0].verified is verified]
+            stepped.extend(_extend_tier(tier, here, columns, now, position, taken, assigned))
 
-        # Reacquire: one wide step within the max step of the last point.
-        wide: list[tuple[float, int, int]] = []
-        for track, max_step, predicted, last_xy in live:
-            if track.track_id in assigned or not track.wide_allowed:
-                continue
-            for index in here:
-                if index in taken:
-                    continue
-                x, y = xy_of(index)
-                if math.hypot(x - last_xy[0], y - last_xy[1]) <= max_step and _orientation_ok(
-                    candidates[index], last_xy
-                ):
-                    wide.append((math.hypot(x - predicted[0], y - predicted[1]), track.track_id, index))
-        for _, track_id, index in sorted(wide):
-            if track_id in assigned or index in taken:
-                continue
-            track = by_id[track_id]
-            track.model_start = len(track.history) - 1
-            track.detections.append((position, index))
-            track.history.append((now, *xy_of(index)))
-            track.wide_allowed = False
-            assigned.add(track_id)
-            taken.add(index)
+        # Probation: judge, and give failed detections back to seeding.
+        released: list[tuple[int, int]] = []
+        for track in stepped:
+            if not track.verified and len(track.detections) - track.probation_from >= probation_points:
+                probation = track.history[track.probation_from :]
+                if _quadratic_fits(probation) and _physically_plausible(probation, scale_px_per_m, frame_dt):
+                    track.verified = True
+                else:
+                    released.extend(_revert_probation(track))
+        for frame, index in released:
+            if frame == position:
+                taken.discard(index)
+            elif frame >= position - 2 and frame in unused:
+                unused[frame] = sorted({*unused[frame], index})
 
         # Seed from unused candidates in three consecutive frames.
-        unused[position] = [i for i in here if i not in taken]
+        unused[position] = [int(i) for i in here.indices if int(i) not in taken]
         unused.pop(position - 3, None)
         if position >= 2:
-            tracks.extend(
-                _seed(candidates, unused, position, times, scale_px_per_m, len(tracks), xy_of)
-            )
+            tracks.extend(_seed(columns, unused, position, times, scale_px_per_m, len(tracks)))
+        active = [t for t in tracks if not t.closed and not t.killed]
+    for track in active:
+        if not track.verified:
+            _revert_probation(track)  # the data ended before the verdict
 
-    min_detections = MIN_DETECTIONS if frame_dt > 0.0 and 1.0 / frame_dt >= LOW_FPS_BELOW else (
-        MIN_DETECTIONS_LOW_FPS
-    )
     tracklets = [
         _flight_from_samples(
             track.track_id,
@@ -531,15 +720,17 @@ def link_flights(
             track.detections[0][0],
             track.detections[-1][0],
             {
-                position: (*xy_of(index), float(candidates[index]["minor"]))
+                position: (*columns.xy(index), float(columns.minor[index]))
                 for position, index in track.detections
             },
         )
         for track in tracks
+        if not track.killed
     ]
-    joined = stitch_tracklets(tracklets, times, scale_px_per_m)
-    kept = [flight for flight in joined if _accept(flight, min_detections)]
-    kept.sort(
+    accepted = _accepted_flights(
+        _stitch_chains(tracklets, times, scale_px_per_m), tracklets, times, min_detections
+    )
+    accepted.sort(
         key=lambda f: (
             float(f.times_s[0]),
             float(f.xy_px[np.flatnonzero(f.detected)[0], 0]),
@@ -555,53 +746,171 @@ def link_flights(
             minor_axis_px=f.minor_axis_px,
             confidence=f.confidence,
         )
-        for number, f in enumerate(kept)
+        for number, f in enumerate(accepted)
     )
 
 
+def _extend_tier(
+    tier: Sequence[tuple[_Track, float, tuple[float, float], tuple[float, float]]],
+    here: _FrameIndex,
+    columns: _Candidates,
+    now: float,
+    position: int,
+    taken: set[int],
+    assigned: set[int],
+) -> list[_Track]:
+    """Narrow steps, then wide reacquire steps, for one priority tier.
+    Returns the tracks that took a detection."""
+    by_id = {track.track_id: track for track, *_ in tier}
+    stepped: list[_Track] = []
+
+    def take(track: _Track, index: int) -> None:
+        track.detections.append((position, index))
+        track.history.append((now, *columns.xy(index)))
+        assigned.add(track.track_id)
+        taken.add(index)
+        stepped.append(track)
+
+    # Extend: narrow gates, one-to-one by (distance, track id, candidate).
+    pairs: list[tuple[float, int, int]] = []
+    for track, max_step, predicted, last_xy in tier:
+        gate = _gate_px(max_step)
+        found = here.within(predicted, gate)
+        if found.size == 0:
+            continue
+        distance = np.hypot(columns.x[found] - predicted[0], columns.y[found] - predicted[1])
+        ok = (distance <= gate) & columns.orientation_ok(found, last_xy[0], last_xy[1])
+        pairs.extend(
+            (float(d), track.track_id, int(i)) for d, i in zip(distance[ok], found[ok], strict=True)
+        )
+    for _, track_id, index in sorted(pairs):
+        if track_id in assigned or index in taken:
+            continue
+        track = by_id[track_id]
+        if not _narrow_step_fits(track, now, columns.xy(index)):
+            continue
+        take(track, index)
+        track.wide_allowed = True
+
+    # Reacquire: one wide step within the max step of the last point.
+    wide: list[tuple[float, int, int]] = []
+    for track, max_step, predicted, last_xy in tier:
+        if track.track_id in assigned or not track.wide_allowed:
+            continue
+        found = here.within(last_xy, max_step)
+        if found.size == 0:
+            continue
+        reach = np.hypot(columns.x[found] - last_xy[0], columns.y[found] - last_xy[1])
+        ok = (reach <= max_step) & columns.orientation_ok(found, last_xy[0], last_xy[1])
+        found = found[ok]
+        distance = np.hypot(columns.x[found] - predicted[0], columns.y[found] - predicted[1])
+        wide.extend(
+            (float(d), track.track_id, int(i))
+            for d, i in zip(distance, found, strict=True)
+            if int(i) not in taken
+        )
+    for _, track_id, index in sorted(wide):
+        if track_id in assigned or index in taken:
+            continue
+        track = by_id[track_id]
+        track.model_start = len(track.history) - 1
+        if track.verified:
+            track.verified = False
+            track.probation_from = len(track.detections)
+        take(track, index)
+        track.wide_allowed = False
+    return stepped
+
+
+def _revert_probation(track: _Track) -> list[tuple[int, int]]:
+    """Take back a failed probation's detections. A seed dies; a track whose
+    wide step failed closes at the point before it. Returns the detections."""
+    start = track.probation_from
+    released = track.detections[start:]
+    del track.detections[start:]
+    del track.history[start:]
+    if track.detections:
+        track.closed = True
+        track.verified = True
+        track.model_start = min(track.model_start, len(track.history) - 1)
+    else:
+        track.killed = True
+    return released
+
+
 def _seed(
-    candidates: npt.NDArray[np.void],
+    columns: _Candidates,
     unused: dict[int, list[int]],
     position: int,
     times: Float64Array,
     scale_px_per_m: ScaleFn,
     next_id: int,
-    xy_of: Callable[[int], tuple[float, float]],
 ) -> list[_Track]:
     """Triplets (a, b, c) over frames position-2..position, greedy by
-    (residual, a, b, c), each candidate used once. Consumed candidates are
-    removed from ``unused``."""
+    (residual, a, b, c), each candidate used once. Per (a, b) only the best
+    valid c among the ``SEED_NEAREST_C`` nearest to the prediction is
+    offered. Consumed candidates are removed from ``unused``."""
+    first = np.asarray(unused.get(position - 2, []), dtype=np.intp)
+    middle = np.asarray(unused.get(position - 1, []), dtype=np.intp)
+    last = np.asarray(unused.get(position, []), dtype=np.intp)
+    if first.size == 0 or middle.size == 0 or last.size == 0:
+        return []
     t0, t1, t2 = (float(times[position - k]) for k in (2, 1, 0))
+    scale = np.array([_scale(scale_px_per_m, *columns.xy(int(a))) for a in first])
+    step_ab = V_MAX_M_PER_S * (t1 - t0) * scale * MAX_STEP_SAFETY
+    step_bc = V_MAX_M_PER_S * (t2 - t1) * scale * MAX_STEP_SAFETY
+
+    # (a, b) pairs: b within the max step of a, streak along its step.
+    neighbours = cKDTree(columns.points(middle)).query_ball_point(columns.points(first), step_ab)
+    row = np.repeat(np.arange(first.size), [len(n) for n in neighbours])
+    if row.size == 0:
+        return []
+    a = first[row]
+    b = middle[np.concatenate([np.asarray(n, dtype=np.intp) for n in neighbours])]
+    ax, ay, bx, by = columns.x[a], columns.y[a], columns.x[b], columns.y[b]
+    ok = (np.hypot(bx - ax, by - ay) <= step_ab[row]) & columns.orientation_ok(b, ax, ay)
+    row, a, b = row[ok], a[ok], b[ok]
+    if row.size == 0:
+        return []
+    ax, ay, bx, by = columns.x[a], columns.y[a], columns.x[b], columns.y[b]
+    ratio = (t2 - t1) / (t1 - t0)
+    predicted = np.column_stack([bx + (bx - ax) * ratio, by + (by - ay) * ratio])
+
+    # Best valid c among the nearest to each prediction.
+    k = min(SEED_NEAREST_C, last.size)
+    _, nearest = cKDTree(columns.points(last)).query(predicted, k=k)
+    nearest = np.asarray(nearest, dtype=np.intp).reshape(len(predicted), k)
+    gate = np.maximum(MIN_GATE_PX, GATE_SHRINK_FACTOR * step_bc[row])
     options: list[tuple[float, int, int, int]] = []
-    for a in unused.get(position - 2, []):
-        ax, ay = xy_of(a)
-        scale = _scale(scale_px_per_m, ax, ay)
-        step_ab = _max_step_px(t1 - t0, scale)
-        step_bc = _max_step_px(t2 - t1, scale)
-        for b in unused.get(position - 1, []):
-            bx, by = xy_of(b)
-            if math.hypot(bx - ax, by - ay) > step_ab or not _orientation_ok(candidates[b], (ax, ay)):
-                continue
-            ratio = (t2 - t1) / (t1 - t0)
-            px, py = bx + (bx - ax) * ratio, by + (by - ay) * ratio
-            for c in unused.get(position, []):
-                cx, cy = xy_of(c)
-                if math.hypot(cx - bx, cy - by) > step_bc or not _orientation_ok(candidates[c], (bx, by)):
-                    continue
-                residual = math.hypot(cx - px, cy - py)
-                if residual <= _gate_px(step_bc):
-                    options.append((residual, a, b, c))
+    chosen = np.full(len(predicted), -1, dtype=np.intp)
+    residual = np.full(len(predicted), np.inf)
+    for column in range(k):
+        c = last[nearest[:, column]]
+        cx, cy = columns.x[c], columns.y[c]
+        distance = np.hypot(cx - predicted[:, 0], cy - predicted[:, 1])
+        valid = (
+            (chosen < 0)
+            & (np.hypot(cx - bx, cy - by) <= step_bc[row])
+            & columns.orientation_ok(c, bx, by)
+            & (distance <= gate)
+        )
+        chosen[valid] = c[valid]
+        residual[valid] = distance[valid]
+    found = chosen >= 0
+    options = sorted(
+        zip(residual[found].tolist(), a[found].tolist(), b[found].tolist(), chosen[found].tolist(), strict=True)
+    )
     seeded: list[_Track] = []
     used: set[int] = set()
-    for _, a, b, c in sorted(options):
-        if a in used or b in used or c in used:
+    for _, ia, ib, ic in options:
+        if ia in used or ib in used or ic in used:
             continue
-        used.update((a, b, c))
+        used.update((ia, ib, ic))
         track = _Track(
             track_id=next_id + len(seeded),
-            detections=[(position - 2, a), (position - 1, b), (position, c)],
+            detections=[(position - 2, ia), (position - 1, ib), (position, ic)],
         )
-        track.history = [(t0, *xy_of(a)), (t1, *xy_of(b)), (t2, *xy_of(c))]
+        track.history = [(t0, *columns.xy(ia)), (t1, *columns.xy(ib)), (t2, *columns.xy(ic))]
         seeded.append(track)
     for frame in (position - 2, position - 1, position):
         unused[frame] = [i for i in unused.get(frame, []) if i not in used]
