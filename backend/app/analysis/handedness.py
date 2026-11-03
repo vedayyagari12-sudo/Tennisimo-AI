@@ -63,6 +63,30 @@ def peak_radial_distance(
     return float(np.max(np.linalg.norm(data, axis=1)))
 
 
+def observed_path_length(
+    points: np.ndarray,
+    visibility: np.ndarray | None = None,
+    *,
+    threshold: float = VISIBILITY_THRESHOLD,
+) -> float | None:
+    """``path_length``, or None when not one step of it was observed.
+
+    ``path_length`` counts a step only when the landmark was visible at both
+    endpoints, so a wrist MediaPipe never saw comes back as 0.0 TU -- the
+    shortest path there is, which downstream reads as a perfect volley.
+    Nothing was measured, so the honest answer is None. Without a visibility
+    column every step counts and the value is returned as before.
+    """
+    data = np.asarray(points, dtype=np.float64)
+    if data.shape[0] < 2:
+        return None
+    if visibility is not None:
+        visible = landmark_visible(visibility, threshold=threshold)
+        if not bool(np.any(visible[1:] & visible[:-1])):
+            return None
+    return path_length(data, visibility, threshold=threshold)
+
+
 def visible_fraction(
     visibility: np.ndarray, *, threshold: float = VISIBILITY_THRESHOLD
 ) -> float:
@@ -170,13 +194,18 @@ def detect_handedness(
         handedness = hint
         source = HandednessSource.USER_HINT
 
+    # The comparison above keeps the 0.0 floats (an unseen wrist correctly
+    # loses it), but the REPORTED path of an unseen wrist is unmeasured: None,
+    # never a 0.0 that a consumer would read as "barely moved".
+    right_reported = observed_path_length(right, right_visibility)
+    left_reported = observed_path_length(left, left_visibility)
     racket_is_right = handedness == Handedness.RIGHT
     return HandednessResult(
         handedness=handedness,
         confidence=confidence,
         source=source,
-        racket_hand_path_length_tu=right_path if racket_is_right else left_path,
-        off_hand_path_length_tu=left_path if racket_is_right else right_path,
+        racket_hand_path_length_tu=right_reported if racket_is_right else left_reported,
+        off_hand_path_length_tu=left_reported if racket_is_right else right_reported,
         warnings=warnings,
     )
 

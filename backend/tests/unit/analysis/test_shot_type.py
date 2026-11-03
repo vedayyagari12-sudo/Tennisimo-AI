@@ -418,3 +418,34 @@ def test_phases_none_disables_volley_detection_rather_than_guessing() -> None:
 def test_slice_threshold_constant_is_the_documented_replacement_conjunct() -> None:
     """Pins the one entirely-new number in this module so a change is visible."""
     assert SLICE_FOLLOW_THROUGH_TU == 0.20
+
+
+# --- unseen racket wrist: never a volley -------------------------------------
+
+
+def _no_phase_inference(seq):
+    """Real Stage 8 -> 13 -> 14 with no phases: the whole-clip path fallback."""
+    from app.analysis.handedness import detect_handedness
+
+    handedness = detect_handedness(seq, hint=Handedness.RIGHT)
+    contact = build_contact(frame_index=5)
+    metrics, _ = compute_swing_metrics(seq, handedness, contact, None)
+    return infer_shot_type(metrics, seq, handedness, contact, None), handedness
+
+
+def test_an_unseen_racket_wrist_is_not_a_volley() -> None:
+    # Regression (corpus serve 4902143): Stage 8 used to report 0.0 TU for a
+    # wrist it never saw, and the whole-clip fallback read that as volley 1.00.
+    result, handedness = _no_phase_inference(hide(volley_sequence(), RIGHT_WRIST))
+    assert handedness.racket_hand_path_length_tu is None
+    assert result.shot_type != ShotType.VOLLEY
+    assert result.class_scores[ShotType.VOLLEY.value] == 0.0
+    assert any("not observed enough to measure a path" in text for text in result.evidence)
+
+
+def test_a_short_observed_whole_clip_path_still_counts_toward_a_volley() -> None:
+    result, handedness = _no_phase_inference(volley_sequence())
+    assert handedness.racket_hand_path_length_tu is not None
+    assert result.class_scores[ShotType.VOLLEY.value] > 0.0
+    assert any("measured over the WHOLE clip" in text for text in result.evidence)
+    assert any("threshold -> volley" in text for text in result.evidence)

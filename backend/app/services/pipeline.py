@@ -128,6 +128,10 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: is foreshortened (shoulder < 0.10 TU, hip < 0.08 TU) is unreliable; fewer
 #: than 5 reliable frames gives None plus a ``*_line_foreshortened`` /
 #: ``*_line_too_few_frames`` warning. v3 rows must not be trended against v4.
+#: Also v4: Stage 8 reports ``racket_hand_path_length_tu`` /
+#: ``off_hand_path_length_tu`` as None (not 0.0) for a wrist never observed
+#: across one frame-to-frame step, so an unseen wrist no longer reads as the
+#: shortest path and a false "volley 1.00" (v3 serve 4902143 -> unknown).
 PIPELINE_VERSION: Final[str] = "v4"
 
 

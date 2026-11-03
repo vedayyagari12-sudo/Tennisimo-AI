@@ -630,8 +630,11 @@ def _rule_volley(
                 "(no swing span available), so idle motion inflates it"
             )
     if path is None:
+        # Stage 8 reports None (not 0.0) for a wrist it never observed, so an
+        # unseen wrist lands here instead of reading as the shortest path.
         evidence.append(
-            "racket-hand path length unavailable; that volley term contributed nothing"
+            "racket-hand path length unavailable (racket wrist not observed "
+            "enough to measure a path); that volley term contributed nothing"
         )
     elif path < VOLLEY_PATH_LENGTH_TU:
         _add(scores, (ShotType.VOLLEY,), VOLLEY_PATH_WEIGHT)

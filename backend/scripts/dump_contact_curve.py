@@ -251,8 +251,8 @@ def main() -> int:
         "handedness               : "
         f"{handedness.handedness.value} confidence={handedness.confidence:.3f} "
         f"source={handedness.source.value} "
-        f"racket_path_tu={handedness.racket_hand_path_length_tu:.3f} "
-        f"off_hand_path_tu={handedness.off_hand_path_length_tu:.3f}"
+        f"racket_path_tu={'None' if handedness.racket_hand_path_length_tu is None else format(handedness.racket_hand_path_length_tu, '.3f')} "
+        f"off_hand_path_tu={'None' if handedness.off_hand_path_length_tu is None else format(handedness.off_hand_path_length_tu, '.3f')}"
     )
     if handedness.warnings:
         print(f"handedness warnings      : {handedness.warnings}")

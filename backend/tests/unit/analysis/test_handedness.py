@@ -11,6 +11,7 @@ from app.analysis.handedness import (
     HINT_CONFIDENCE_FLOOR,
     detect_handedness,
     normalized_margin,
+    observed_path_length,
     peak_radial_distance,
     racket_wrist_index,
     visible_fraction,
@@ -191,3 +192,30 @@ def test_an_unobservable_racket_wrist_cannot_win_confidently() -> None:
     assert result.confidence < HINT_CONFIDENCE_FLOOR
     assert result.handedness == Handedness.RIGHT
     assert result.source == HandednessSource.USER_HINT
+
+
+def test_observed_path_length_is_none_when_no_step_was_observed() -> None:
+    square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]])
+    assert observed_path_length(square, np.full(5, 0.9)) == pytest.approx(4.0)
+    # Visible frames that are never consecutive: path_length would say 0.0.
+    assert observed_path_length(square, np.array([0.9, 0.1, 0.9, 0.1, 0.9])) is None
+    assert observed_path_length(square, np.zeros(5)) is None
+    # No visibility channel: every step counts, as before.
+    assert observed_path_length(square) == pytest.approx(4.0)
+    assert observed_path_length(np.zeros((1, 2))) is None
+
+
+def test_a_held_still_but_observed_wrist_is_a_measured_zero() -> None:
+    still = np.zeros((5, 2))
+    assert observed_path_length(still, np.full(5, 0.9)) == 0.0
+
+
+def test_an_unseen_racket_wrist_reports_an_unmeasured_path_not_zero() -> None:
+    seq = swing(Handedness.RIGHT)
+    visibility = seq.visibility.copy()
+    visibility[:, RIGHT_WRIST] = 0.05
+    visibility[FRAME_COUNT // 2, RIGHT_WRIST] = 0.9  # one lone visible frame
+    result = detect_handedness(dataclasses.replace(seq, visibility=visibility), hint=Handedness.RIGHT)
+    assert result.handedness == Handedness.RIGHT
+    assert result.racket_hand_path_length_tu is None
+    assert result.off_hand_path_length_tu is not None
