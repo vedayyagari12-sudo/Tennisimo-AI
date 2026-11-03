@@ -34,7 +34,12 @@ BANNED_DOTTED = {
     "app.pose.video_io",
     "app.ball.frames",
     "app.ball.detector",
+    "app.ball.flight_detector",
+    "app.ball.flight_frames",
+    "app.ball.camera_motion",
+    "app.ball.court_lines",
 }
+APP_DIR = REPO_BACKEND / "app"
 
 
 def analysis_modules() -> list[Path]:
@@ -90,3 +95,35 @@ def test_importing_analysis_does_not_pull_in_mediapipe_or_cv2() -> None:
         check=True,
     )
     assert result.stdout.strip() == "False"
+
+
+def test_importing_every_analysis_module_pulls_no_cv2_av_mediapipe() -> None:
+    """Brief G5: the import line is built from ``analysis_modules()``, so a new
+    flat module is covered the moment it exists, including transitive imports."""
+    dotted = sorted(
+        "app.analysis" if path.stem == "__init__" else f"app.analysis.{path.stem}"
+        for path in analysis_modules()
+    )
+    code = (
+        f"import sys; import {', '.join(dotted)}; "
+        "print(sorted(m for m in ('mediapipe', 'cv2', 'av') if m in sys.modules))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(REPO_BACKEND),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "[]"
+
+
+def test_app_never_imports_tests() -> None:
+    """Design 11.1 no-leakage rule: test-only code (the synthetic court renderer
+    above all) must never be reachable from ``app``."""
+    offenders: list[str] = []
+    for path in sorted(APP_DIR.rglob("*.py")):
+        for name in imported_modules(path):
+            if name == "tests" or name.startswith("tests."):
+                offenders.append(f"{path.relative_to(REPO_BACKEND)} imports {name}")
+    assert not offenders, offenders
