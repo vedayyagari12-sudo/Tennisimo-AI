@@ -271,7 +271,8 @@ class VideoMeta(BaseModel):
     analysis_window_start_s: float
     analysis_window_end_s: float
     motion_scan_used: bool = Field(
-        description="True if the keyframe motion scan located the window (clips > 10 s)."
+        description="True if the keyframe motion scan located the window (clips longer than "
+        "the analysis window, 8 s by default)."
     )
 
 

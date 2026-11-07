@@ -33,6 +33,20 @@ def test_defaults_match_pipeline_section_3_4() -> None:
     assert settings.ball_speed_max_mph == 160
 
 
+def test_the_motion_scan_threshold_defaults_to_the_analysis_window() -> None:
+    """Any clip longer than the window is motion-scanned (was a fixed 10.0 s)."""
+    settings = Settings(env=FAKE_ENV)
+    assert settings.analysis_window_seconds == 8.0
+    assert settings.motion_scan_threshold_s == settings.analysis_window_seconds
+    # It follows the window when only the window is overridden...
+    moved = Settings(env={**FAKE_ENV, "ANALYSIS_WINDOW_SECONDS": "6.5"})
+    assert moved.motion_scan_threshold_s == 6.5
+    # ...and its own override still wins.
+    pinned = Settings(env={**FAKE_ENV, "MOTION_SCAN_THRESHOLD_S": "10.0"})
+    assert pinned.motion_scan_threshold_s == 10.0
+    assert pinned.analysis_window_seconds == 8.0
+
+
 @pytest.mark.parametrize("missing", sorted(FAKE_ENV))
 def test_a_missing_required_variable_names_itself(missing: str) -> None:
     env = {k: v for k, v in FAKE_ENV.items() if k != missing}

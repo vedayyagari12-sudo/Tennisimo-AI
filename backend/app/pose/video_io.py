@@ -72,8 +72,11 @@ MIN_CLIP_S: Final[float] = 2.0
 MAX_CLIP_S: Final[float] = 60.0
 
 #: Clips longer than this get the keyframe motion scan; shorter ones use the
-#: whole clip.
-MOTION_SCAN_THRESHOLD_S: Final[float] = 10.0
+#: whole clip. Equal to the analysis window: a clip the window cannot cover
+#: whole is scanned (it was 10.0, which left an 8-10 s clip analysed on its
+#: first 8 s only). ``open_pose_stream`` defaults to its own
+#: ``analysis_window_s``, so the two stay equal when the window is changed.
+MOTION_SCAN_THRESHOLD_S: Final[float] = ANALYSIS_WINDOW_S
 MOTION_SCAN_LONG_EDGE_PX: Final[int] = 160
 
 #: Hard bound on frames SAMPLED by the dense refinement pass (PIPELINE.md
@@ -166,6 +169,15 @@ def resize_to_long_edge(frame: np.ndarray, long_edge_px: int) -> np.ndarray:
     return np.ascontiguousarray(
         cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
     )
+
+
+def needs_motion_scan(duration_s: float, threshold_s: float) -> bool:
+    """True when Stage 5 must LOCATE the window: the clip is longer than ``threshold_s``.
+
+    With the default threshold (the analysis window) a clip at or under the
+    window is analysed whole; anything longer is motion-scanned.
+    """
+    return float(duration_s) > float(threshold_s)
 
 
 def analysis_window_bounds(
@@ -829,7 +841,7 @@ def open_pose_stream(
     analysis_window_s: float = ANALYSIS_WINDOW_S,
     analysis_fps: float = ANALYSIS_FPS,
     max_frames: int = MAX_ANALYSIS_FRAMES,
-    motion_scan_threshold_s: float = MOTION_SCAN_THRESHOLD_S,
+    motion_scan_threshold_s: float | None = None,
 ) -> PoseStream:
     """Stage 5 entry point. Probe, locate the window, return a frame generator.
 
@@ -844,7 +856,10 @@ def open_pose_stream(
     """
     probe = probe_clip(path)
 
-    motion_scan_used = probe.duration_s > motion_scan_threshold_s
+    motion_scan_used = needs_motion_scan(
+        probe.duration_s,
+        analysis_window_s if motion_scan_threshold_s is None else motion_scan_threshold_s,
+    )
     scan = motion_scan_centre_s(path, probe) if motion_scan_used else None
     if motion_scan_used and scan is None:
         # The scan was attempted and produced nothing usable. Say so rather than
@@ -904,6 +919,7 @@ __all__: Sequence[str] = (
     "dense_motion_centre_s",
     "keyframe_motion_profile",
     "motion_scan_centre_s",
+    "needs_motion_scan",
     "motion_scan_is_coarse",
     "open_pose_stream",
     "probe_clip",

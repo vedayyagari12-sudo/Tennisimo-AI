@@ -21,9 +21,12 @@ import pytest
 from app.models.enums import ErrorCode
 from app.pose.video_io import (
     ANALYSIS_FPS,
+    ANALYSIS_WINDOW_S,
+    MOTION_SCAN_THRESHOLD_S,
     VideoDecodeError,
     analysis_window_bounds,
     apply_rotation,
+    needs_motion_scan,
     open_pose_stream,
     probe_clip,
     resize_to_long_edge,
@@ -31,7 +34,7 @@ from app.pose.video_io import (
     scaled_size,
     target_times,
 )
-from tests.unit.seam_clips import BALL_RGB, dominant_ball_pixel, write_clip
+from tests.unit.seam_clips import BALL_RGB, dominant_ball_pixel, step_centre_at, write_clip
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +68,59 @@ def test_analysis_window_bounds_clamps_to_the_clip() -> None:
 
     start, end = analysis_window_bounds(3.0, None, window_s=8.0)
     assert (start, end) == (0.0, 3.0), "a clip shorter than the window is the window"
+
+
+def test_the_motion_scan_threshold_is_the_analysis_window() -> None:
+    assert MOTION_SCAN_THRESHOLD_S == ANALYSIS_WINDOW_S == 8.0
+
+
+@pytest.mark.parametrize(
+    ("duration_s", "scanned"),
+    [(7.9, False), (8.0, False), (8.1, True), (9.0, True), (10.0, True)],
+)
+def test_any_clip_longer_than_the_window_is_motion_scanned(
+    duration_s: float, scanned: bool
+) -> None:
+    assert needs_motion_scan(duration_s, MOTION_SCAN_THRESHOLD_S) is scanned
+
+
+@pytest.mark.parametrize(
+    ("frame_count", "scanned"),
+    # 25 fps: 7.88 s just under, 8.00 s at, 8.12 s just over the 8 s window.
+    [(197, False), (200, False), (203, True)],
+)
+def test_the_scan_boundary_on_real_encoded_clips(
+    tmp_path: Path, frame_count: int, scanned: bool
+) -> None:
+    path = write_clip(tmp_path / f"boundary_{frame_count}.mp4", frame_count=frame_count)
+    stream = open_pose_stream(path)
+    assert stream.motion_scan_used is scanned
+    assert stream.analysis_window_end_s - stream.analysis_window_start_s <= ANALYSIS_WINDOW_S + 1e-6
+    if not scanned:
+        assert stream.analysis_window_start_s == 0.0
+
+
+def test_a_nine_second_clip_is_windowed_on_its_late_motion(tmp_path: Path) -> None:
+    """The serve_01 shape: 9.0 s, the event in the last second.
+
+    Under the old 10 s threshold this clip was not scanned and its window was
+    [0, 8] -- the event fell outside it.
+    """
+    path = write_clip(
+        tmp_path / "late_event.mp4",
+        frame_count=225,
+        gop_size=5,
+        centre_fn=step_centre_at(
+            move_start_s=8.4, move_duration_s=0.3, fps=25, width=160, height=96
+        ),
+    )
+    stream = open_pose_stream(path)
+    assert stream.motion_scan_used is True
+    assert stream.analysis_window_start_s <= 8.4 <= stream.analysis_window_end_s
+    assert stream.analysis_window_end_s > 8.0
+    old = open_pose_stream(path, motion_scan_threshold_s=10.0)
+    assert old.motion_scan_used is False
+    assert (old.analysis_window_start_s, old.analysis_window_end_s) == (0.0, 8.0)
 
 
 def test_target_times_are_spaced_at_the_analysis_rate_and_capped() -> None:

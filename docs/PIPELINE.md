@@ -167,7 +167,8 @@ Decisions, all opinionated:
   - Why 30 and not 60: 60 fps doubles MediaPipe cost, which is ~70 % of our budget. Why not 24: contact is a ~4 ms event; at 30 fps we localize it to ±17 ms, which is inside the coaching-relevant resolution, and peak-hand-speed estimation degrades noticeably below 30.
 - **Downscale to longest side = 640 px** before inference. BlazePose resizes internally to 256×256; feeding 1080p burns CPU in the resize for zero accuracy gain.
 - **Cap: 240 sampled frames (8.0 s).**
-- **Analysis-window location for long clips (new in v2, forced by the 60 s intake cap).** For clips longer than 10 s we cannot afford to decode every frame just to find the swing. Instead we run a **keyframe-only motion scan**: PyAV with `stream.codec_context.skip_frame = "NONKEY"`, decoding only I-frames, downscaled to 160 px long edge, and take the mean absolute difference between consecutive keyframes. **That keyframe pass locates only a bucket, not an instant** — its resolution is the GOP interval, measured at 3.03–4.17 s across the whole 16-clip corpus rather than the 1–2 s originally assumed — so a bounded dense refinement (≤ 48 sampled frames) runs inside the winning bucket and the window is centred on the **midpoint of the highest-energy adjacent pair, never an interval endpoint** (§5.1). Measured after the fix: 0.060 s error against the one clip carrying a labelled strike, versus 2.56 s before. Cost 0.5–1.7 s (§1.20), versus ~14 s to decode a 60 s clip at full rate. Clips ≤ 10 s skip the scan and use the whole clip.
+- **Analysis-window location for long clips (new in v2, forced by the 60 s intake cap).** For clips longer than the analysis window (8 s; it was 10 s before v4) we cannot afford to decode every frame just to find the swing. Instead we run a **keyframe-only motion scan**: PyAV with `stream.codec_context.skip_frame = "NONKEY"`, decoding only I-frames, downscaled to 160 px long edge, and take the mean absolute difference between consecutive keyframes. **That keyframe pass locates only a bucket, not an instant** — its resolution is the GOP interval, measured at 3.03–4.17 s across the whole 16-clip corpus rather than the 1–2 s originally assumed — so a bounded dense refinement (≤ 48 sampled frames) runs inside the winning bucket and the window is centred on the **midpoint of the highest-energy adjacent pair, never an interval endpoint** (§5.1). Measured after the fix: 0.060 s error against the one clip carrying a labelled strike, versus 2.56 s before. Cost 0.5–1.7 s (§1.20), versus ~14 s to decode a 60 s clip at full rate. Clips at or under the window (≤ 8 s) skip the scan and use the whole clip.
+- **Clips at or under the window (v4: the scan threshold IS the window).** `MOTION_SCAN_THRESHOLD_S` (env `MOTION_SCAN_THRESHOLD_S`, still overridable) now defaults to the analysis window, `ANALYSIS_WINDOW_SECONDS` (8.0 s), instead of a fixed 10.0 s: `needs_motion_scan(duration, threshold)` is `duration > threshold`, so any clip the window cannot cover whole is scanned. With 10.0 an 8–10 s clip — most real uploads, since the app records up to 15 s — was not scanned and simply used its first 8 s: on `serve_01_baseline_4902773` (9.0 s) the window ended at 7.96 s, before the serve, and 1 s of the clip was never analysed; scanned, its window is [1.0, 9.0] and contains the serve. A window-PLACEMENT parameter, not a gate. Measured on the five corpus clips in the band (8.12–9.0 s), two runs: the scan costs 0.69–1.16 s (`motion_scan_ms` 685–1163); whole-job `total_ms` rose 0.3–2.2 s (run-to-run noise on clips whose Stage 5 did not change was up to 1.5 s). On the four 8.12–8.24 s clips the scanned window can move at most 0.24 s and stayed [0, 8]; on `serve_01` the job now analyses the serve (contact at the speed peak, frame 224, 3–5 frames after the visible strike).
 - **Streaming, never buffered.** 240 frames at 640×360×3 bytes is 166 MB held simultaneously. The generator yields one frame at a time; only landmarks are retained. This is a hard requirement, not an optimization.
 
 Budget: 2–4 s (plus 0.5–1.7 s motion scan for long clips).
@@ -187,7 +188,7 @@ The Stage 5 bullet above assumes "roughly one keyframe per 1–2 s, so 30–60 f
 
 On this clip the strike does survive inside the window, but only because the clip is barely longer than the window and the clamp at the clip end dragged the window start back to 2.08 s. That is luck, not margin. A 2.6 s error against a ±4 s half-window leaves 1.4 s of slack; any clip long enough that the clamp does not bite loses the swing outright, and a swing sitting *late* in its winning bucket rather than early misses in the other direction with the full GOP as the error term.
 
-**Why this is an algorithm change and not a threshold change.** There is no constant here to tune. `MOTION_SCAN_LONG_EDGE_PX` is fine and the > 10 s scan threshold is fine. Widening the analysis window to absorb the error is the only threshold-shaped option and it is unaffordable: Stage 6 is ~70 % of the job budget (§1.20) and scales linearly in sampled frames, so an 8 → 12 s window costs 4–7 s of MediaPipe time, and the 240-frame cap would force either a cap increase or a drop below the 30 fps that Stage 5 argues for on contact-resolution grounds. The defect is that the function's *output resolution* is the GOP and its *reported point* is an interval endpoint. Both are structural.
+**Why this is an algorithm change and not a threshold change.** There is no constant here to tune. `MOTION_SCAN_LONG_EDGE_PX` is fine. (The scan threshold was later found NOT fine and lowered from 10 s to the 8 s analysis window, §5 "Clips at or under the window" above: a window-placement change, not this defect's fix.) Widening the analysis window to absorb the error is the only threshold-shaped option and it is unaffordable: Stage 6 is ~70 % of the job budget (§1.20) and scales linearly in sampled frames, so an 8 → 12 s window costs 4–7 s of MediaPipe time, and the 240-frame cap would force either a cap increase or a drop below the 30 fps that Stage 5 argues for on contact-resolution grounds. The defect is that the function's *output resolution* is the GOP and its *reported point* is an interval endpoint. Both are structural.
 
 ##### 5.1.1 Proposed change
 
@@ -257,7 +258,7 @@ That does not weaken the case for the fix, for two reasons which are kept separa
 | Energy-weighted centroid over all buckets | A second mover — spectator, ball boy, passing player — in a different bucket drags the centroid arbitrarily. Argmax is robust; the problem is resolution, not selection. |
 | Decode every frame on every clip | ~14 s on a 60 s clip (§1.20 long-clip note). This is the cost the keyframe scan exists to avoid. |
 | Locate the window with a coarse pose pass | MediaPipe is the dominant cost. A pose pass to find the window costs more than the window saves, and it inverts the stage order. |
-| Raise the > 10 s scan threshold so more clips skip the scan | Clips ≤ 10 s already skip it. Raising it means analysing the first 8 s of a 15 s clip, which is a worse guess than a coarse scan, not a better one. |
+| Raise the scan threshold so more clips skip the scan | Since v4 only clips ≤ the 8 s window skip it (it was 10 s). Raising it means analysing the first 8 s of a longer clip, which is a worse guess than a coarse scan, not a better one — exactly what the old 10 s value did to 8–10 s clips. |
 
 ##### 5.1.5 Test strategy
 
@@ -1914,7 +1915,7 @@ Warm instance, 12 s source clip at 60 fps, 240 sampled pose frames, calibration 
 |---|---|---|
 | Model asset digest verification (startup, once per process — **not** per job) | ~0.1 s | ~0 MB (streamed hash) |
 | Storage download (streamed to a temp file) | 1–3 s | ~2 MB of Python heap — **plus up to 50 MiB of the temp file itself**, because Cloud Run's container filesystem is in-memory (§1.20.1) |
-| Motion scan (keyframe pass + bounded refinement) (clips > 10 s only) | 0.5–1.7 s | ~3 MB |
+| Motion scan (keyframe pass + bounded refinement) (clips longer than the 8 s window only; was > 10 s) | 0.5–1.7 s (0.7–1.2 s measured on 8–10 s clips) | ~3 MB |
 | Decode + rotate + sample @ 640 px | 2–4 s | ~5 MB (one frame at a time) |
 | `PoseLandmarker` construction (graph + 9 MB float16 bundle load) | ~0.35–0.5 s | included in the row below |
 | MediaPipe extraction (VIDEO mode, 240 frames) | **8–13 s** | **~90–130 MB — UNVERIFIED** (graph + TFLite arena) |
@@ -2715,7 +2716,7 @@ class VideoMeta(BaseModel):
     frames_sampled: int = Field(description="Frames actually fed to MediaPipe. Cap 240.")
     analysis_window_start_s: float
     analysis_window_end_s: float
-    motion_scan_used: bool = Field(description="True if the keyframe motion scan located the window (clips > 10 s).")
+    motion_scan_used: bool = Field(description="True if the keyframe motion scan located the window (clips longer than the analysis window, 8 s by default).")
 
 class PoseQuality(BaseModel):
     frames_with_pose: int
@@ -3515,7 +3516,7 @@ class Settings(BaseSettings):
     analysis_fps: float = 30.0                  # confirmed
     max_analysis_frames: int = 240
     target_long_edge_px: int = 640
-    motion_scan_threshold_s: float = 10.0       # clips longer than this get the keyframe scan
+    motion_scan_threshold_s: float = analysis_window_seconds  # clips longer than this get the keyframe scan (was 10.0)
     motion_scan_long_edge_px: int = 160
     job_queue_max_depth: int = 4
     job_heartbeat_stale_s: int = 180

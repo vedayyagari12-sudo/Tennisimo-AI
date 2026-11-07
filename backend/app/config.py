@@ -213,7 +213,14 @@ class Settings:
         self.analysis_fps: float = _float(source, "ANALYSIS_FPS", 30.0)
         self.max_analysis_frames: int = _int(source, "MAX_ANALYSIS_FRAMES", 240)
         self.target_long_edge_px: int = _int(source, "TARGET_LONG_EDGE_PX", 640)
-        self.motion_scan_threshold_s: float = _float(source, "MOTION_SCAN_THRESHOLD_S", 10.0)
+        # Clips LONGER than this get the Stage 5 motion scan. Defaults to the
+        # analysis window itself: any clip the window cannot cover whole is
+        # scanned, so its window is placed on the motion instead of on its first
+        # 8 s (a 10.0 default left 8-10 s clips -- most real uploads -- unscanned).
+        # A window-PLACEMENT parameter, not a gate.
+        self.motion_scan_threshold_s: float = _float(
+            source, "MOTION_SCAN_THRESHOLD_S", self.analysis_window_seconds
+        )
         self.motion_scan_long_edge_px: int = _int(source, "MOTION_SCAN_LONG_EDGE_PX", 160)
         self.job_queue_max_depth: int = _int(source, "JOB_QUEUE_MAX_DEPTH", 4)
         self.job_heartbeat_stale_s: int = _int(source, "JOB_HEARTBEAT_STALE_S", 180)
