@@ -40,7 +40,11 @@ from typing import Final
 
 import numpy as np
 
-from app.analysis.contact import CONTACT_NOT_FOUND, detect_contact_frame
+from app.analysis.contact import (
+    CONTACT_NOT_FOUND,
+    detect_contact_frame,
+    resolve_swing_direction,
+)
 from app.analysis.handedness import detect_handedness, racket_wrist_index
 from app.analysis.metrics import compute_swing_metrics
 from app.analysis.normalize import normalize_sequence
@@ -153,6 +157,13 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: and a confident disagreement adds one plain note through ``warn`` (never
 #: ``partial``). v3 let a detection at >= 0.5 override the user (serve 4902773
 #: tracked the ball-toss arm). A wrong user choice is now unrecoverable.
+#: Also v4: ``swing_direction_sign`` is re-measured after Stage 8 on the RACKET
+#: wrist, as the sign of its x-displacement over the 5 frames leading INTO its
+#: own speed peak (``contact.resolve_swing_direction``); Stages 9-15 use that.
+#: Stage 7's value (longer-path wrist, global peak vs the slowest frame anywhere
+#: before it) is kept only when the local one cannot be measured (< 0.10 TU, or
+#: the wrist unseen). It feeds contact filtering, phases, contact_point_forward
+#: and the front-knee choice, so those can change on a clip whose sign flips.
 PIPELINE_VERSION: Final[str] = "v4"
 
 #: The one plain-language warning added when the user's declared shot type and
@@ -534,6 +545,10 @@ def run_analysis_job(
 
             handedness = detect_handedness(seq, context.request.handedness_hint)
             record_handedness(accumulator, handedness)
+            # Stage 7 measured the swing direction before the racket hand was
+            # known; re-measure it on the racket wrist, around its own speed
+            # peak, and let Stages 9-15 (and the ball stage) read that one.
+            seq = resolve_swing_direction(seq, handedness)
 
             contact = detect_contact_frame(
                 seq,

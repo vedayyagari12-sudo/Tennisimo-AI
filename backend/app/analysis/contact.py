@@ -12,6 +12,7 @@ reason for this module to throw.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Final
 
 import numpy as np
@@ -230,6 +231,91 @@ def peak_speed_index(speed: np.ndarray, reliable: np.ndarray | None = None) -> i
             candidates = np.flatnonzero(flags)
             return int(candidates[int(np.argmax(values[candidates]))])
     return int(np.argmax(values))
+
+
+# --- Stage 7 step 9, recomputed once the racket wrist is known (after Stage 8) --
+
+#: Length, in frames, of the window LEADING INTO the racket wrist's own speed
+#: peak over which the swing direction is measured: [peak - 5, peak], 0.17 s
+#: at 30 fps -- the last stretch of the motion into the strike, which is what
+#: Stage 7 step 9 defines the sign as (takeback-end -> contact). Leading, not
+#: centred: on a serve the speed peak FOLLOWS contact, and a window centred on
+#: it is dominated by the follow-through sweeping back across the body (corpus:
+#: serve_01_baseline_4902773 reads -1 centred, +1 leading, and the visible drive
+#: into contact is +x). On the corpus 4, 5 and 6 frames give the same sign
+#: wherever they clear the displacement floor; 3 is too short to clear it on
+#: serve_01, 8 starts to reach back into the takeback (tennis_serve_10340710).
+SWING_DIRECTION_LEAD_FRAMES: Final[int] = 5
+
+#: Below this |x displacement| across that window the direction is not measured
+#: and Stage 7's sign is kept. NEW NUMBER: on the corpus the measured leads are
+#: either >= 0.125 TU or landmark-jitter sized (serve_03_practice_4902165 reads
+#: 0.002 and keeps Stage 7's sign).
+SWING_DIRECTION_MIN_DISPLACEMENT_TU: Final[float] = 0.10
+
+
+def local_swing_direction_sign(
+    seq: NormalizedSequence,
+    handedness: Handedness,
+    *,
+    lead_frames: int = SWING_DIRECTION_LEAD_FRAMES,
+    min_displacement_tu: float = SWING_DIRECTION_MIN_DISPLACEMENT_TU,
+) -> int | None:
+    """Sign of the RACKET wrist's x-displacement INTO its own speed peak.
+
+    Stage 7's ``swing_direction_sign`` is computed before handedness exists, so
+    it uses whichever wrist travelled further and compares that wrist's GLOBAL
+    speed peak with the slowest frame anywhere before it -- which, on a window
+    holding two swings, can be 70 frames and a different motion away. This
+    measures the racket wrist only, over ``[peak - lead_frames, peak]``
+    (clamped), from the first to the last frame in which the wrist was visible.
+    The peak is Stage 9's own (``peak_speed_index`` over trustworthy frames).
+
+    Returns None -- "keep Stage 7's value" -- when the hand is UNKNOWN, no frame
+    is trustworthy, fewer than two frames in the window saw the wrist, or the
+    displacement is under ``min_displacement_tu``.
+    """
+    if handedness == Handedness.UNKNOWN:
+        return None
+    points = np.asarray(seq.points, dtype=np.float64)
+    count = int(points.shape[0])
+    if count < 2:
+        return None
+    speed = racket_hand_speed(seq, handedness)
+    reliable = racket_wrist_reliable(seq, handedness)
+    if speed.shape[0] != count or not bool(np.any(reliable)):
+        return None
+    peak = peak_speed_index(speed, reliable)
+    wrist = racket_wrist_index(handedness)
+    visibility = np.asarray(seq.visibility, dtype=np.float64)
+    if visibility.ndim == 2 and visibility.shape[0] == count:
+        seen = landmark_visible(visibility[:, wrist])
+    else:
+        seen = np.ones((count,), dtype=bool)
+    first = max(0, peak - int(lead_frames))
+    last = peak
+    frames = [frame for frame in range(first, last + 1) if bool(seen[frame])]
+    if len(frames) < 2:
+        return None
+    displacement = float(points[frames[-1], wrist, 0] - points[frames[0], wrist, 0])
+    if not np.isfinite(displacement) or abs(displacement) < float(min_displacement_tu):
+        return None
+    return 1 if displacement > 0.0 else -1
+
+
+def resolve_swing_direction(
+    seq: NormalizedSequence, handedness: HandednessResult
+) -> NormalizedSequence:
+    """``seq`` with ``swing_direction_sign`` re-measured on the racket wrist.
+
+    Run once, between Stage 8 and Stage 9; every later stage (9, 12, 13, 14, 15)
+    reads the returned sequence. Unchanged -- the SAME object -- when
+    :func:`local_swing_direction_sign` cannot measure, or agrees.
+    """
+    sign = local_swing_direction_sign(seq, handedness.handedness)
+    if sign is None or sign == int(seq.swing_direction_sign):
+        return seq
+    return dataclasses.replace(seq, swing_direction_sign=sign)
 
 
 def sustained_motion_frames(
