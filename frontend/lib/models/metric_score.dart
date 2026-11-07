@@ -1,6 +1,26 @@
 import 'enums.dart';
 import 'json_utils.dart';
 
+/// Metrics the app treats as UNSCORED, whatever the server sends with them.
+///
+/// None of these measures what its name says, so none may produce advice or
+/// appear as a scored row with a verdict or reference band:
+///
+///  * `wrist_lag_deg` reads only the elbow, the wrist and the wrist's
+///    velocity; a straight swinging arm always reads 90.
+///  * `shoulder_turn_deg` and `hip_rotation_deg` are in-plane line angles.
+///    A true 80° trunk turn seen by a level camera reads 0.0, and a pure tilt
+///    with no turn reads about 30: they measure tilt, not turn.
+///
+/// A newer backend omits them or sends them without a verdict; an older one
+/// still sends them scored. This set makes the app ignore them in every case.
+/// The ONE place the app names them as unscored.
+const Set<String> kUnscoredMetrics = <String>{
+  'wrist_lag_deg',
+  'shoulder_turn_deg',
+  'hip_rotation_deg',
+};
+
 /// One scored swing metric.
 ///
 /// Mirrors `backend/app/models/feedback.py::MetricScore`, widened for the

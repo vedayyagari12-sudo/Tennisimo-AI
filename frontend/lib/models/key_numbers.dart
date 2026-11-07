@@ -10,7 +10,9 @@
 /// are left out rather than translated — "0.34 TU" means nothing to a player,
 /// and converting it to centimetres would invent a real-world scale the
 /// pipeline does not measure. So are the always-null ones
-/// (`weight_transfer_tu`, `balance_sway_tu`, `takeback_displacement_tu`).
+/// (`weight_transfer_tu`, `balance_sway_tu`, `takeback_displacement_tu`),
+/// and every metric in [kUnscoredMetrics], even when the server still sends
+/// it with a verdict.
 library;
 
 import 'analysis_response.dart';
@@ -110,7 +112,10 @@ List<KeyNumber> buildKeyNumbers(AnalysisResponse analysis) {
 
   final List<MetricScore> chosen = <MetricScore>[
     for (final MetricScore m in analysis.metrics)
-      if (kPlainMetricLabels.containsKey(m.name) && _unitFits(m)) m,
+      if (kPlainMetricLabels.containsKey(m.name) &&
+          !kUnscoredMetrics.contains(m.name) &&
+          _unitFits(m))
+        m,
   ];
 
   int rank(MetricScore m) {

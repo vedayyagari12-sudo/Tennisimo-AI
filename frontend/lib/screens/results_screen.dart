@@ -117,7 +117,14 @@ class ResultsScreen extends StatelessWidget {
             // torso-unit figures are for advanced players, not a beginner.
             _CategoriesSection(analysis: analysis),
             if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
-            _MetricsSection(metrics: analysis.metrics),
+            // Unscored metrics are left out of the list entirely, so an older
+            // backend's verdict and band for them are never shown.
+            _MetricsSection(
+              metrics: <MetricScore>[
+                for (final MetricScore m in analysis.metrics)
+                  if (!kUnscoredMetrics.contains(m.name)) m,
+              ],
+            ),
           ],
         ),
       ),
@@ -643,10 +650,10 @@ class _CategoryRow extends StatelessWidget {
   }
 }
 
-/// Every raw measurement, behind an expander that starts closed.
+/// Every scored raw measurement, behind an expander that starts closed.
 ///
-/// Nothing is dropped: opening it shows the full list exactly as before. It
-/// is collapsed so a beginner is not met with a page of torso-unit figures.
+/// Only [kUnscoredMetrics] are dropped, by the caller. It is collapsed so a
+/// beginner is not met with a page of torso-unit figures.
 class _MetricsSection extends StatelessWidget {
   const _MetricsSection({required this.metrics});
 

@@ -82,9 +82,33 @@ const Map<String, int> _metricsPerCategory = <String, int>{
 bool _banded(ShotType shot) =>
     shot == ShotType.forehandTopspin || shot == ShotType.forehandSlice;
 
-List<CategoryScore> _categories(ShotType shot, Map<String, double?> scores) {
+/// The same counts on a backend that no longer scores `shoulder_turn_deg`,
+/// `hip_rotation_deg` (both preparation) or `wrist_lag_deg` (contact). The
+/// exact numbers are the backend's to decide; the UI must cope with any.
+const Map<String, int> _metricsPerCategoryUnscoredOmitted = <String, int>{
+  'preparation': 1,
+  'contact': 4,
+  'swing_path': 3,
+  'balance': 2,
+  'follow_through': 1,
+};
+
+/// The three metric names an older backend still scores and a newer one
+/// omits. Spelled out here rather than read from `kUnscoredMetrics`, so the
+/// fixtures do not agree with the app by construction.
+const Set<String> _unscoredNames = <String>{
+  'wrist_lag_deg',
+  'shoulder_turn_deg',
+  'hip_rotation_deg',
+};
+
+List<CategoryScore> _categories(
+  ShotType shot,
+  Map<String, double?> scores, {
+  Map<String, int> perCategory = _metricsPerCategory,
+}) {
   return <CategoryScore>[
-    for (final MapEntry<String, int> entry in _metricsPerCategory.entries)
+    for (final MapEntry<String, int> entry in perCategory.entries)
       _category(shot, entry.key, entry.value, scores[entry.key]),
   ];
 }
@@ -276,6 +300,13 @@ List<MetricScore> forehandMetrics() => <MetricScore>[
   _m('balance_sway_tu', null, MetricUnit.torsoUnits, MetricVerdict.unavailable),
 ];
 
+/// [forehandMetrics] as a newer backend sends it: the three unscored metrics
+/// are not in the list at all.
+List<MetricScore> forehandMetricsUnscoredOmitted() => <MetricScore>[
+  for (final MetricScore m in forehandMetrics())
+    if (!_unscoredNames.contains(m.name)) m,
+];
+
 /// A serve's metric list: only the base bands exist, so the contact metrics
 /// are measured but carry no reference range, and hip turn was not measurable.
 List<MetricScore> serveMetrics() => <MetricScore>[
@@ -347,11 +378,17 @@ List<MetricScore> serveMetrics() => <MetricScore>[
 
 /// Gemini-sourced coaching tied to the forehand metrics above. No numbers in
 /// any of it: the guard only ever lets through numbers the pipeline produced.
-CoachingFeedback forehandFeedback({bool template = false}) => CoachingFeedback(
+///
+/// [turnAdvice] false drops the hip-turn improvement, as a newer backend that
+/// no longer scores hip turn would.
+CoachingFeedback forehandFeedback({
+  bool template = false,
+  bool turnAdvice = true,
+}) => CoachingFeedback(
   summary: 'Your racket path is the thing holding this forehand back.',
   strengths: const <String>['Good separation between hips and shoulders.'],
-  improvements: const <Improvement>[
-    Improvement(
+  improvements: <Improvement>[
+    const Improvement(
       priority: 1,
       title: 'Swing up through the ball',
       why: 'A flat path gives the ball no topspin to bring it down.',
@@ -361,7 +398,7 @@ CoachingFeedback forehandFeedback({bool template = false}) => CoachingFeedback(
           'opposite shoulder.',
       metricRefs: <String>['swing_path_angle_deg', 'swing_plane_deviation_tu'],
     ),
-    Improvement(
+    if (turnAdvice) const Improvement(
       priority: 2,
       title: 'Turn your hips earlier',
       why:
@@ -374,7 +411,7 @@ CoachingFeedback forehandFeedback({bool template = false}) => CoachingFeedback(
       metricRefs: <String>['hip_rotation_deg'],
     ),
     Improvement(
-      priority: 3,
+      priority: turnAdvice ? 3 : 2,
       title: 'Meet the ball further out',
       why: 'A cramped arm at contact costs reach and control.',
       cue: 'Hit with a long arm, out in front of your front hip.',
@@ -413,6 +450,7 @@ AnalysisResponse fixtureAnalysis({
   ShotType? inferredShot,
   bool mismatch = false,
   bool? shotSpecificScoring,
+  Map<String, int> perCategory = _metricsPerCategory,
 }) => AnalysisResponse(
   analysisId: id,
   createdAt: createdAt,
@@ -427,7 +465,7 @@ AnalysisResponse fixtureAnalysis({
   shotTypeMismatch: mismatch,
   shotSpecificScoring: shotSpecificScoring,
   overallScore: overall,
-  categories: _categories(shot, categories),
+  categories: _categories(shot, categories, perCategory: perCategory),
   metrics: metrics,
   ballSpeed: null,
   feedback: feedback,
@@ -961,6 +999,63 @@ AnalysisResponse declaredServeMismatchNoScore() => fixtureAnalysis(
   shotSpecificScoring: false,
 );
 
+const Map<String, double?> _forehandCategoryScores = <String, double?>{
+  'preparation': 76,
+  'contact': 78,
+  'swing_path': 48,
+  'follow_through': 82,
+  'balance': 74,
+};
+
+/// A forehand from a NEWER backend: `wrist_lag_deg`, `shoulder_turn_deg`
+/// and `hip_rotation_deg` are absent from the metric list, preparation
+/// counts one metric, and the coaching no longer mentions hip turn.
+AnalysisResponse forehandUnscoredOmitted({
+  String id = 'fhn0',
+  DateTime? createdAt,
+}) => fixtureAnalysis(
+  id: id,
+  createdAt: createdAt ?? DateTime.now().subtract(const Duration(hours: 2)),
+  shot: ShotType.forehandTopspin,
+  overall: 71,
+  categories: _forehandCategoryScores,
+  metrics: forehandMetricsUnscoredOmitted(),
+  feedback: forehandFeedback(turnAdvice: false),
+  perCategory: _metricsPerCategoryUnscoredOmitted,
+);
+
+/// A forehand from an OLDER backend: the three unscored metrics are still in
+/// the list, each with a value, a band and a low / ideal verdict.
+AnalysisResponse forehandUnscoredWithVerdicts() => fixtureAnalysis(
+  id: 'fho0',
+  createdAt: DateTime.now().subtract(const Duration(hours: 2)),
+  shot: ShotType.forehandTopspin,
+  overall: 71,
+  categories: _forehandCategoryScores,
+  metrics: forehandMetrics(),
+  feedback: forehandFeedback(),
+);
+
+/// Eight forehands whose NEWEST detail comes from a newer backend that omits
+/// the three unscored metrics; the older clips are unchanged.
+DashboardFixture forehandNewerBackend() {
+  final List<_Session> fh = _forehands();
+  final _Session newest = fh.first;
+  return DashboardFixture(
+    'forehand_newer_backend',
+    _source(<_Session>[
+      _Session(
+        newest.summary,
+        forehandUnscoredOmitted(
+          id: newest.summary.analysisId,
+          createdAt: newest.summary.createdAt,
+        ),
+      ),
+      ...fh.skip(1),
+    ]),
+  );
+}
+
 List<DashboardFixture> allFixtures() => <DashboardFixture>[
   newUser(),
   forehandOnly(),
@@ -970,4 +1065,5 @@ List<DashboardFixture> allFixtures() => <DashboardFixture>[
   wideShotMix(),
   mixedVersions(),
   declaredUnbandedServe(),
+  forehandNewerBackend(),
 ];

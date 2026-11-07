@@ -479,6 +479,10 @@ void _resultsScreenTests() {
     'declared serve, mismatch, generic score':
         declaredServeMismatchGenericScore,
     'declared serve, mismatch, no score': declaredServeMismatchNoScore,
+    // The same forehand from a newer backend that omits the three unscored
+    // metrics, and from an older one that still sends them with verdicts.
+    'forehand, unscored metrics omitted': forehandUnscoredOmitted,
+    'forehand, unscored metrics with verdicts': forehandUnscoredWithVerdicts,
   };
 
   for (final MapEntry<String, AnalysisResponse Function()> fixture
@@ -517,7 +521,11 @@ void _resultsScreenTests() {
               await tester.tap(toggle);
               await tester.pumpAndSettle();
               expect(tester.takeException(), isNull);
-              expect(find.text('Shoulder turn'), findsOneWidget);
+              expect(find.text('Shoulder hip separation'), findsOneWidget);
+              // Never a scored row, whichever backend sent the response.
+              expect(find.text('Shoulder turn'), findsNothing);
+              expect(find.text('Hip rotation'), findsNothing);
+              expect(find.text('Wrist lag'), findsNothing);
             }
 
             await scrollToEnd(tester);

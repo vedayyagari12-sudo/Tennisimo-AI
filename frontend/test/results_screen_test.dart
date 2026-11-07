@@ -16,7 +16,7 @@ Map<String, dynamic> _payload() => <String, dynamic>{
             'category': 'preparation',
             'score_0_100': 74.0,
             'weight': 0.25,
-            'metric_names': <String>['shoulder_turn_deg'],
+            'metric_names': <String>['contact_height_ratio'],
             'metrics_available': 1,
             'metrics_total': 1,
           },
@@ -31,14 +31,46 @@ Map<String, dynamic> _payload() => <String, dynamic>{
         ],
         'metrics': <Map<String, dynamic>>[
           <String, dynamic>{
-            'name': 'shoulder_turn_deg',
-            'value': 88.0,
-            'unit': 'deg',
+            'name': 'contact_height_ratio',
+            'value': 0.9,
+            'unit': 'ratio',
             'verdict': 'ideal',
           },
         ],
       },
     };
+
+/// The three metrics the app treats as unscored, as an older backend sends
+/// them: measured, banded and carrying a verdict.
+List<Map<String, dynamic>> _unscoredWithVerdicts() => <Map<String, dynamic>>[
+      <String, dynamic>{
+        'name': 'hip_rotation_deg',
+        'value': 0.0,
+        'unit': 'deg',
+        'verdict': 'low',
+        'score': 10.0,
+        'ideal_min': 35.0,
+        'ideal_max': 60.0,
+      },
+      <String, dynamic>{
+        'name': 'shoulder_turn_deg',
+        'value': 90.0,
+        'unit': 'deg',
+        'verdict': 'ideal',
+        'score': 90.0,
+        'ideal_min': 80.0,
+        'ideal_max': 110.0,
+      },
+      <String, dynamic>{
+        'name': 'wrist_lag_deg',
+        'value': 90.0,
+        'unit': 'deg',
+        'verdict': 'high',
+        'score': 20.0,
+        'ideal_min': 15.0,
+        'ideal_max': 45.0,
+      },
+    ];
 
 void main() {
   testWidgets('the score breakdown renders alongside the metric list',
@@ -58,7 +90,7 @@ void main() {
     expect(find.text('See all measurements'), findsOneWidget);
     await tester.tap(find.text('See all measurements'));
     await tester.pumpAndSettle();
-    expect(find.text('Shoulder turn'), findsOneWidget);
+    expect(find.text('Contact height'), findsOneWidget);
   });
 
   testWidgets('an unmeasured category is never rendered as 0',
@@ -107,14 +139,76 @@ void main() {
       ));
 
       expect(find.text('See all measurements'), findsOneWidget);
-      expect(find.text('Shoulder turn'), findsNothing);
+      expect(find.text('Contact height'), findsNothing);
       expect(find.text('Weight transfer'), findsNothing);
 
       await tester.tap(find.text('See all measurements'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Shoulder turn'), findsOneWidget);
+      expect(find.text('Contact height'), findsOneWidget);
       expect(find.text('Weight transfer'), findsOneWidget);
+    });
+
+    testWidgets('leaves out unscored metrics an older backend still scores',
+        (WidgetTester tester) async {
+      final Map<String, dynamic> payload = _payload();
+      ((payload['scorecard'] as Map<String, dynamic>)['metrics']
+              as List<Map<String, dynamic>>)
+          .addAll(_unscoredWithVerdicts());
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(analysis: AnalysisResponse.fromJson(payload)),
+      ));
+      await tester.tap(find.text('See all measurements'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Contact height'), findsOneWidget);
+      for (final String row in <String>[
+        'Hip rotation',
+        'Shoulder turn',
+        'Wrist lag',
+      ]) {
+        expect(find.text(row), findsNothing);
+      }
+      // Only the one scored row's verdict; none for the three, and none of
+      // their bands.
+      expect(find.text('In range'), findsOneWidget);
+      expect(find.textContaining('Below range'), findsNothing);
+      expect(find.textContaining('Above range'), findsNothing);
+      for (final String band in <String>['35.0', '80.0', '15.0']) {
+        expect(find.textContaining(band), findsNothing);
+      }
+    });
+
+    testWidgets('leaves out unscored metrics sent without a verdict',
+        (WidgetTester tester) async {
+      final Map<String, dynamic> payload = _payload();
+      ((payload['scorecard'] as Map<String, dynamic>)['metrics']
+              as List<Map<String, dynamic>>)
+          .addAll(<Map<String, dynamic>>[
+        for (final Map<String, dynamic> m in _unscoredWithVerdicts())
+          <String, dynamic>{'name': m['name'], 'value': m['value'], 'unit': 'deg'},
+      ]);
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(analysis: AnalysisResponse.fromJson(payload)),
+      ));
+      await tester.tap(find.text('See all measurements'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Hip rotation'), findsNothing);
+      expect(find.text('Shoulder turn'), findsNothing);
+      expect(find.text('Wrist lag'), findsNothing);
+    });
+
+    testWidgets('a list of only unscored metrics drops the expander',
+        (WidgetTester tester) async {
+      final Map<String, dynamic> payload = _payload();
+      (payload['scorecard'] as Map<String, dynamic>)['metrics'] =
+          _unscoredWithVerdicts();
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(analysis: AnalysisResponse.fromJson(payload)),
+      ));
+
+      expect(find.text('See all measurements'), findsNothing);
     });
 
     testWidgets('a null metric reads as not measured, never as 0 or the clip',
@@ -148,14 +242,14 @@ void main() {
       return payload;
     }
 
-    Map<String, dynamic> hip(double value, String verdict) =>
+    Map<String, dynamic> elbow(double value, String verdict) =>
         <String, dynamic>{
-          'name': 'hip_rotation_deg',
+          'name': 'elbow_angle_at_contact_deg',
           'value': value,
           'unit': 'deg',
           'verdict': verdict,
-          'ideal_min': 35.0,
-          'ideal_max': 60.0,
+          'ideal_min': 120.0,
+          'ideal_max': 160.0,
         };
 
     testWidgets('swing notes sit directly under the score header',
@@ -167,7 +261,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(
-              withFeedback(<Map<String, dynamic>>[hip(25, 'low')])),
+              withFeedback(<Map<String, dynamic>>[elbow(112, 'low')])),
         ),
       ));
 
@@ -186,11 +280,12 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(
-              withFeedback(<Map<String, dynamic>>[hip(45, 'ideal')])),
+              withFeedback(<Map<String, dynamic>>[elbow(140, 'ideal')])),
         ),
       ));
 
-      expect(find.text('Nice hip turn — keep it up.'), findsOneWidget);
+      expect(find.text('Nice arm shape when you hit — keep it up.'),
+          findsOneWidget);
       expect(find.text('What is working'), findsNothing);
       expect(find.text('Good separation between hips and shoulders.'),
           findsNothing);
@@ -201,7 +296,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(
-              withFeedback(<Map<String, dynamic>>[hip(25, 'low')])),
+              withFeedback(<Map<String, dynamic>>[elbow(112, 'low')])),
         ),
       ));
 
@@ -242,8 +337,8 @@ void main() {
           'value': value,
           'unit': 'deg',
           'verdict': verdict,
-          'ideal_min': 35.0,
-          'ideal_max': 60.0,
+          'ideal_min': 120.0,
+          'ideal_max': 160.0,
         };
 
     testWidgets('come from the rule table even when the AI fell back',
@@ -251,7 +346,9 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(withMetrics(
-            <Map<String, dynamic>>[metric('hip_rotation_deg', 25, 'low')],
+            <Map<String, dynamic>>[
+              metric('elbow_angle_at_contact_deg', 112, 'low'),
+            ],
             source: 'template',
           )),
         ),
@@ -259,11 +356,12 @@ void main() {
 
       expect(find.text('Swing notes'), findsOneWidget);
       expect(
-        find.text('Looks like your hips could turn a bit more — that’s where '
-            'your power comes from.'),
+        find.text('Looks like your arm is a bit bent when you hit — let it '
+            'reach out a little more.'),
         findsOneWidget,
       );
-      expect(find.text('Hip turn 25° · ideal 35–60°'), findsOneWidget);
+      expect(find.text('Elbow angle at contact 112° · ideal 120–160°'),
+          findsOneWidget);
       // The AI card is still there underneath, unchanged.
       expect(find.text('Turn your hips earlier'), findsOneWidget);
     });
@@ -274,14 +372,51 @@ void main() {
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(withMetrics(
             <Map<String, dynamic>>[
-              metric('hip_rotation_deg', null, 'unavailable'),
+              metric('elbow_angle_at_contact_deg', null, 'unavailable'),
             ],
           )),
         ),
       ));
 
       expect(find.text('Swing notes'), findsNothing);
+      expect(find.textContaining('Elbow angle'), findsNothing);
+    });
+
+    testWidgets('no note for unscored metrics an older backend still scores',
+        (WidgetTester tester) async {
+      // Every metric left is unscored, so no note remains: the card is gone,
+      // not an empty box.
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(
+          analysis: AnalysisResponse.fromJson(
+            withMetrics(_unscoredWithVerdicts()),
+          ),
+        ),
+      ));
+
+      expect(find.text('Swing notes'), findsNothing);
+      expect(find.textContaining('Looks like'), findsNothing);
+      expect(find.textContaining('Nice '), findsNothing);
       expect(find.textContaining('Hip turn'), findsNothing);
+      expect(find.textContaining('Shoulder turn'), findsNothing);
+      expect(find.textContaining('Wrist lag'), findsNothing);
+    });
+
+    testWidgets('fewer notes when the unscored metrics are absent',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: ResultsScreen(
+          analysis: AnalysisResponse.fromJson(withMetrics(
+            <Map<String, dynamic>>[
+              metric('elbow_angle_at_contact_deg', 112, 'low'),
+            ],
+          )),
+        ),
+      ));
+
+      expect(find.text('Swing notes'), findsOneWidget);
+      expect(find.textContaining('Elbow angle at contact 112°'),
+          findsOneWidget);
     });
   });
 }

@@ -267,6 +267,24 @@ void _renders(String out) {
     await _save(tester, '$out/results_forehand_412_full.png', 1);
   });
 
+  // The same forehand from a newer backend: no wrist lag, shoulder turn or
+  // hip rotation in the metric list, and fewer swing notes.
+  testWidgets('render results screen without the unscored metrics', (
+    WidgetTester tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    final ResultsScreen screen = ResultsScreen(
+      analysis: forehandUnscoredOmitted(),
+    );
+    await _pump(tester, screen, const Size(412, 915));
+    await _growToFit(tester, screen, const Size(412, 915));
+    await _save(
+      tester,
+      '$out/results_forehand_unscored_omitted_412_full.png',
+      1,
+    );
+  });
+
   // An unbanded serve: two of five categories are null by construction, so
   // this is the radar's broken-outline case.
   for (final MapEntry<String, Size> viewport in _viewports.entries) {

@@ -46,7 +46,7 @@ void main() {
     test('plain labels only, never a raw wire name', () {
       final List<KeyNumber> k = buildKeyNumbers(
         _analysis(<MetricScore>[
-          _m('hip_rotation_deg', 40, lo: 35, hi: 60),
+          _m('elbow_angle_at_contact_deg', 140, lo: 120, hi: 160),
           _m('knee_flexion_min_deg', 150, lo: 135, hi: 165),
           _m('shoulder_hip_separation_deg', 50, lo: 40, hi: 65),
         ]),
@@ -54,17 +54,60 @@ void main() {
       expect(
         k.map((KeyNumber n) => n.label),
         containsAll(<String>[
-          'Hip turn',
+          'Elbow angle at contact',
           'Front-knee angle',
           'Hip-shoulder separation',
         ]),
       );
     });
 
+    test('unscored metrics are left out, even with a verdict', () {
+      // An older backend: all three still scored, with bands and verdicts.
+      final List<KeyNumber> k = buildKeyNumbers(
+        _analysis(<MetricScore>[
+          _m(
+            'hip_rotation_deg',
+            0,
+            verdict: MetricVerdict.low,
+            score: 10,
+            lo: 35,
+            hi: 60,
+          ),
+          _m('shoulder_turn_deg', 90, score: 90, lo: 80, hi: 110),
+          _m(
+            'wrist_lag_deg',
+            90,
+            verdict: MetricVerdict.high,
+            score: 20,
+            lo: 15,
+            hi: 45,
+          ),
+          _m('knee_flexion_min_deg', 150, score: 95, lo: 135, hi: 165),
+        ]),
+      );
+      expect(k.map((KeyNumber n) => n.metric.name), <String>[
+        'knee_flexion_min_deg',
+      ]);
+    });
+
+    test('a response without the unscored metrics still works', () {
+      // A newer backend: the three are simply absent.
+      final List<KeyNumber> k = buildKeyNumbers(
+        _analysis(<MetricScore>[
+          _m('knee_flexion_min_deg', 150, score: 95, lo: 135, hi: 165),
+        ]),
+      );
+      expect(k.single.metric.name, 'knee_flexion_min_deg');
+      expect(
+        buildKeyNumbers(_analysis(const <MetricScore>[])),
+        isEmpty,
+      );
+    });
+
     test('torso-unit, ratio and always-null metrics are left out', () {
       final List<KeyNumber> k = buildKeyNumbers(
         _analysis(<MetricScore>[
-          _m('hip_rotation_deg', 40, lo: 35, hi: 60),
+          _m('elbow_angle_at_contact_deg', 140, lo: 120, hi: 160),
           _m('contact_point_forward_tu', 0.3, unit: MetricUnit.torsoUnits),
           _m('peak_hand_speed_tu_s', 7, unit: MetricUnit.torsoUnitsPerSec),
           _m('contact_height_ratio', 0.9, unit: MetricUnit.ratio),
@@ -74,14 +117,14 @@ void main() {
         ]),
       );
       expect(k.map((KeyNumber n) => n.metric.name), <String>[
-        'hip_rotation_deg',
+        'elbow_angle_at_contact_deg',
       ]);
     });
 
     test('an angle arriving in a non-degree unit is left out', () {
       final List<KeyNumber> k = buildKeyNumbers(
         _analysis(<MetricScore>[
-          _m('hip_rotation_deg', 40, unit: MetricUnit.unrecognized),
+          _m('elbow_angle_at_contact_deg', 140, unit: MetricUnit.unrecognized),
           _m('tempo_ratio', 2.0, unit: MetricUnit.seconds),
         ]),
       );
@@ -93,8 +136,13 @@ void main() {
       'then not measured', () {
     final List<KeyNumber> k = buildKeyNumbers(
       _analysis(<MetricScore>[
-        _m('wrist_lag_deg', null, verdict: MetricVerdict.unavailable),
-        _m('shoulder_turn_deg', 90, score: 80, lo: 80, hi: 110),
+        _m(
+          'tempo_ratio',
+          null,
+          unit: MetricUnit.ratio,
+          verdict: MetricVerdict.unavailable,
+        ),
+        _m('shoulder_hip_separation_deg', 50, score: 80, lo: 40, hi: 65),
         _m('knee_flexion_min_deg', 150, score: 95, lo: 135, hi: 165),
         _m(
           'elbow_angle_at_contact_deg',
@@ -102,12 +150,12 @@ void main() {
           verdict: MetricVerdict.unavailable,
         ),
         _m(
-          'hip_rotation_deg',
-          30,
+          'swing_path_angle_deg',
+          10,
           verdict: MetricVerdict.low,
           score: 60,
-          lo: 35,
-          hi: 60,
+          lo: 15,
+          hi: 35,
         ),
         _m(
           'swing_path_angle_deg',
@@ -119,25 +167,28 @@ void main() {
         ),
       ]),
     );
-    expect(k.map((KeyNumber n) => n.metric.name), <String>[
-      'swing_path_angle_deg',
-      'hip_rotation_deg',
-      'knee_flexion_min_deg',
-      'shoulder_turn_deg',
-      'elbow_angle_at_contact_deg',
-      'wrist_lag_deg',
-    ]);
+    expect(
+      k.map((KeyNumber n) => '${n.metric.name} ${n.metric.score}'),
+      <String>[
+        'swing_path_angle_deg 20.0',
+        'swing_path_angle_deg 60.0',
+        'knee_flexion_min_deg 95.0',
+        'shoulder_hip_separation_deg 80.0',
+        'elbow_angle_at_contact_deg null',
+        'tempo_ratio null',
+      ],
+    );
   });
 
   group('formatting', () {
     test('not measured is an em dash, never a zero', () {
       final KeyNumber n = _one(
         _m(
-          'hip_rotation_deg',
+          'elbow_angle_at_contact_deg',
           null,
           verdict: MetricVerdict.unavailable,
-          lo: 35,
-          hi: 60,
+          lo: 120,
+          hi: 160,
         ),
       );
       expect(n.valueText, '—');
@@ -149,42 +200,42 @@ void main() {
     test('degrees round to whole numbers with the degree sign', () {
       final KeyNumber n = _one(
         _m(
-          'hip_rotation_deg',
-          25.4,
+          'elbow_angle_at_contact_deg',
+          112.4,
           verdict: MetricVerdict.low,
-          lo: 35,
-          hi: 60,
+          lo: 120,
+          hi: 160,
         ),
       );
-      expect(n.valueText, '25°');
-      expect(n.idealText, '35–60°');
+      expect(n.valueText, '112°');
+      expect(n.idealText, '120–160°');
     });
 
     test('rounding never contradicts the verdict', () {
-      // 34.6 rounds to 35, which would sit inside a 35-60 band.
+      // 119.6 rounds to 120, which would sit inside a 120-160 band.
       expect(
         _one(
           _m(
-            'hip_rotation_deg',
-            34.6,
+            'elbow_angle_at_contact_deg',
+            119.6,
             verdict: MetricVerdict.low,
-            lo: 35,
-            hi: 60,
+            lo: 120,
+            hi: 160,
           ),
         ).valueText,
-        '34.6°',
+        '119.6°',
       );
       expect(
         _one(
           _m(
-            'hip_rotation_deg',
-            60.3,
+            'elbow_angle_at_contact_deg',
+            160.3,
             verdict: MetricVerdict.high,
-            lo: 35,
-            hi: 60,
+            lo: 120,
+            hi: 160,
           ),
         ).valueText,
-        '60.3°',
+        '160.3°',
       );
     });
 
@@ -220,11 +271,11 @@ void main() {
       final List<KeyNumber> k = buildKeyNumbers(
         _analysis(<MetricScore>[
           _m(
-            'hip_rotation_deg',
-            25,
+            'elbow_angle_at_contact_deg',
+            112,
             verdict: MetricVerdict.low,
-            lo: 35,
-            hi: 60,
+            lo: 120,
+            hi: 160,
           ),
           _m('swing_plane_deviation_tu', 0.1, unit: MetricUnit.torsoUnits),
         ]),

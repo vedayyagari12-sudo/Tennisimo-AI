@@ -60,8 +60,8 @@ String? _say(String name, MetricVerdict verdict, {bool far = false}) =>
 
 /// What each direction of advice must say, and must never say.
 ///
-/// This is the table the rule table is checked against: a below-range hip
-/// turn must say "more", never "steadier".
+/// This is the table the rule table is checked against: a below-range
+/// swing path must say "low to high", never "steep".
 class _Direction {
   const _Direction(this.must, this.never);
   final List<String> must;
@@ -70,28 +70,6 @@ class _Direction {
 
 const Map<String, Map<MetricVerdict, _Direction>>
 _directions = <String, Map<MetricVerdict, _Direction>>{
-  // Below = hips turned LESS than ideal -> turn more.
-  'hip_rotation_deg': <MetricVerdict, _Direction>{
-    MetricVerdict.low: _Direction(
-      <String>['more'],
-      <String>['steadier', 'too much'],
-    ),
-    MetricVerdict.high: _Direction(
-      <String>['too much', 'steadier'],
-      <String>['more power', 'turn a bit more'],
-    ),
-  },
-  // Below = shoulders turned LESS than ideal -> turn further.
-  'shoulder_turn_deg': <MetricVerdict, _Direction>{
-    MetricVerdict.low: _Direction(
-      <String>['turn them'],
-      <String>['shorter', 'compact', 'too much'],
-    ),
-    MetricVerdict.high: _Direction(
-      <String>['too much'],
-      <String>['further', 'sideways'],
-    ),
-  },
   // 180 is straight. Below = MORE bent -> reach out; above = straighter ->
   // keep a bend.
   'elbow_angle_at_contact_deg': <MetricVerdict, _Direction>{
@@ -236,6 +214,58 @@ void main() {
     });
   });
 
+  group('unscored metrics never produce advice', () {
+    test('the unscored set is exactly the three that mismeasure', () {
+      expect(kUnscoredMetrics, <String>{
+        'wrist_lag_deg',
+        'shoulder_turn_deg',
+        'hip_rotation_deg',
+      });
+    });
+
+    test('hip and shoulder turn have no rule-table entry', () {
+      expect(kAdviceRules.containsKey('hip_rotation_deg'), isFalse);
+      expect(kAdviceRules.containsKey('shoulder_turn_deg'), isFalse);
+    });
+
+    test('no note for any verdict, near or far, either side', () {
+      for (final String name in kUnscoredMetrics) {
+        for (final MetricVerdict v in <MetricVerdict>[
+          MetricVerdict.low,
+          MetricVerdict.high,
+        ]) {
+          expect(_say(name, v), isNull, reason: '$name ${v.wire} near');
+          expect(_say(name, v, far: true), isNull, reason: '$name ${v.wire}');
+        }
+        final (double lo, double hi) = _bands[name]!;
+        for (final MetricVerdict v in MetricVerdict.values) {
+          expect(adviceFor(_m(name, (lo + hi) / 2, v)), isNull, reason: name);
+        }
+      }
+    });
+
+    test('an older backend sending them scored yields no bullet', () {
+      final List<AdviceBullet> b = buildSwingAdvice(
+        <KeyNumber>[
+          for (final (String, double, MetricVerdict) s
+              in <(String, double, MetricVerdict)>[
+                ('hip_rotation_deg', 0, MetricVerdict.low),
+                ('shoulder_turn_deg', 30, MetricVerdict.low),
+                ('wrist_lag_deg', 90, MetricVerdict.high),
+                ('hip_rotation_deg', 45, MetricVerdict.ideal),
+                ('shoulder_turn_deg', 90, MetricVerdict.ideal),
+              ])
+            KeyNumber(
+              metric: _m(s.$1, s.$2, s.$3, score: 50),
+              label: kPlainMetricLabels[s.$1]!,
+            ),
+        ],
+        maxPraise: 5,
+      );
+      expect(b, isEmpty);
+    });
+  });
+
   group('never advice about something not seen', () {
     test('a null value says nothing, whatever the verdict', () {
       for (final String name in kAdviceRules.keys) {
@@ -355,7 +385,9 @@ void main() {
 
     test('view-sensitive fixes are offered, not asserted', () {
       for (final String name in _viewSensitive) {
-        final AdviceRule rule = kAdviceRules[name]!;
+        // Unscored metrics have no entry, so nothing to check.
+        final AdviceRule? rule = kAdviceRules[name];
+        if (rule == null) continue;
         for (final String? s in <String?>[
           rule.belowNear,
           rule.belowFar,
@@ -368,8 +400,11 @@ void main() {
       }
     });
 
-    test('every plain-labelled metric has a rule entry', () {
-      expect(kAdviceRules.keys.toSet(), kPlainMetricLabels.keys.toSet());
+    test('every scored plain-labelled metric has a rule entry', () {
+      expect(
+        kAdviceRules.keys.toSet().difference(kUnscoredMetrics),
+        kPlainMetricLabels.keys.toSet().difference(kUnscoredMetrics),
+      );
     });
   });
 
@@ -396,9 +431,10 @@ void main() {
       );
       expect(b.map((AdviceBullet x) => x.number.metric.name), <String>[
         'swing_path_angle_deg',
-        'hip_rotation_deg',
-        // separation has no fix advice, so it is skipped, not counted.
+        // hip turn (unscored) and separation (no fix advice) are skipped,
+        // not counted.
         'elbow_angle_at_contact_deg',
+        'tempo_ratio',
         'knee_flexion_min_deg',
       ]);
       expect(b.last.isPraise, isTrue);
@@ -407,8 +443,10 @@ void main() {
 
     test('uncapped fixes include every off-target number with advice', () {
       final List<AdviceBullet> b = buildSwingAdvice(numbers, maxPraise: 2);
-      expect(b.where((AdviceBullet x) => !x.isPraise), hasLength(4));
-      expect(b.where((AdviceBullet x) => x.isPraise), hasLength(2));
+      // swing path, elbow, tempo; hip turn is unscored.
+      expect(b.where((AdviceBullet x) => !x.isPraise), hasLength(3));
+      // knee only; shoulder turn is unscored.
+      expect(b.where((AdviceBullet x) => x.isPraise), hasLength(1));
     });
 
     test('nothing measured, nothing said', () {

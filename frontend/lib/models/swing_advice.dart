@@ -13,14 +13,16 @@
 /// measures (from `backend/app/analysis/metrics.py`) and so which way
 /// "below" points. Where it points against intuition — the knee — it says so.
 ///
+/// Metrics in [kUnscoredMetrics] (`wrist_lag_deg`, `shoulder_turn_deg`,
+/// `hip_rotation_deg`) get no advice of any kind, praise included: they do
+/// not measure what their names say, so there is nothing true to advise.
+///
 /// Metrics whose direction cannot be stated with confidence get no fix
 /// advice at all:
 ///
 ///  * `shoulder_hip_separation_deg` is a SIGNED shoulder-minus-hip angle that
 ///    the backend never normalises for which way the player faces, so "below
 ///    range" may just be a mirror-image player. Praise only.
-///  * `wrist_lag_deg` is, in the backend's own words, "a proxy only: the
-///    racket head is not an observable landmark". No advice either way.
 ///  * `swing_path_angle_deg` is only trusted within ±90°. The backend fits the
 ///    hand's direction of travel against +x without applying
 ///    `swing_direction_sign`, so a low-to-high swing travelling LEFT reads as
@@ -34,8 +36,8 @@ import 'metric_score.dart';
 /// How far outside its range a value must be, in multiples of the range's
 /// own width, before a sentence may say "way too", "very" or "hardly".
 ///
-/// One full range-width: hip turn with a 35–60° band (25° wide) has to be
-/// under 10° or over 85° to be called far off. Anything closer gets the
+/// One full range-width: a swing path with a 15–35° band (20° wide) has to
+/// be under -5° or over 55° to be called far off. Anything closer gets the
 /// "a bit" wording — the advice must not exaggerate.
 const double kFarOutsideRangeWidths = 1.0;
 
@@ -78,40 +80,10 @@ class AdviceRule {
 /// written as "Looks like …": the reading may partly be the filming angle,
 /// so the advice is offered, not asserted.
 const Map<String, AdviceRule> kAdviceRules = <String, AdviceRule>{
-  // hip_rotation_deg: max - min of the hip-line angle, take-back start to
-  // follow-through end. Below = the hips turned less than ideal.
-  'hip_rotation_deg': AdviceRule(
-    belowNear:
-        'Looks like your hips could turn a bit more — that’s where '
-        'your power comes from.',
-    belowFar:
-        'Looks like your hips are hardly turning — let them turn '
-        'through the shot for more power.',
-    aboveNear:
-        'Looks like your hips turn a little too much — try keeping '
-        'them a bit steadier.',
-    aboveFar:
-        'Looks like your hips turn way too much — keep them steadier '
-        'through the swing.',
-    inRange: 'Nice hip turn — keep it up.',
-  ),
-  // shoulder_turn_deg: the same range for the shoulder line. Below = the
-  // shoulders turned less than ideal.
-  'shoulder_turn_deg': AdviceRule(
-    belowNear:
-        'Looks like your shoulders could turn a bit more — turn them '
-        'further as you take the racket back.',
-    belowFar:
-        'Looks like your shoulders are hardly turning — turn them '
-        'sideways as you take the racket back.',
-    aboveNear:
-        'Looks like your shoulders turn a little too much — try a '
-        'slightly shorter turn.',
-    aboveFar:
-        'Looks like your shoulders turn way too much — keep the turn '
-        'more compact.',
-    inRange: 'Nice shoulder turn — keep it up.',
-  ),
+  // No hip_rotation_deg or shoulder_turn_deg entries: both are in-plane line
+  // angles that read tilt, not turn (a true 80° turn seen by a level camera
+  // reads 0.0), so they are in [kUnscoredMetrics] and get no advice.
+  //
   // Signed, and not normalised for facing direction: praise only.
   'shoulder_hip_separation_deg': AdviceRule(
     inRange: 'Nice stretch between your hips and shoulders — keep it up.',
@@ -249,8 +221,10 @@ AdviceRule? adviceRuleFor(MetricScore metric) {
 /// The sentence for [metric], or null when nothing should be said.
 ///
 /// Null for anything not measured: there is never advice about something
-/// that was not seen.
+/// that was not seen. Null for anything in [kUnscoredMetrics], whatever
+/// verdict an older backend still sent with it.
 String? adviceFor(MetricScore metric) {
+  if (kUnscoredMetrics.contains(metric.name)) return null;
   final double? v = metric.value;
   if (v == null) return null;
   final AdviceRule? rule = adviceRuleFor(metric);
