@@ -366,7 +366,7 @@ class Scorecard(BaseModel):
     categories: list[CategoryScore]
     metrics: list[MetricScore]
     rubric_version: str = Field(
-        default="rubric_v0_placeholder",
+        default="rubric_v0.1_placeholder",
         description=(
             "Must equal app.analysis.rubric.RUBRIC_VERSION; pinned by "
             "test_rubric_version_is_one_shared_constant. It cannot IMPORT that "

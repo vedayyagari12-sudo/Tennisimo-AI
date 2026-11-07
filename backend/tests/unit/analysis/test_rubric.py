@@ -104,6 +104,16 @@ def test_category_weights_cover_the_five_categories_and_sum_to_one() -> None:
     assert sum(CATEGORY_WEIGHTS.values()) == pytest.approx(1.0)
 
 
+# Weight withdrawn from a category when shoulder_turn_deg / hip_rotation_deg
+# (preparation, 0.30 each) and wrist_lag_deg (contact, 0.15) stopped being
+# scored. The surviving weights were deliberately NOT rescaled: score_category
+# renormalizes over the available members, so the scores are identical.
+WITHDRAWN_WEIGHT: dict[ScoreCategory, float] = {
+    ScoreCategory.PREPARATION: 0.60,
+    ScoreCategory.CONTACT: 0.15,
+}
+
+
 @pytest.mark.parametrize("shot_type", list(ShotType))
 def test_within_category_weights_sum_to_one_where_the_category_is_banded(
     shot_type: ShotType,
@@ -119,14 +129,15 @@ def test_within_category_weights_sum_to_one_where_the_category_is_banded(
             1 for spec in METRIC_SPECS.values() if spec.category == category
         )
         if full:
-            assert sum(band.weight for band in members) == pytest.approx(1.0), category
+            expected = 1.0 - WITHDRAWN_WEIGHT.get(category, 0.0)
+            assert sum(band.weight for band in members) == pytest.approx(expected), category
 
 
 def test_hard_bounds_are_one_band_width_out_and_clamp_at_physical_limits() -> None:
     elbow = METRIC_SPECS["elbow_angle_at_contact_deg"]
     assert hard_bounds(120.0, 160.0, elbow) == (80.0, 180.0)  # 200 clamped to 180
-    wrist = METRIC_SPECS["wrist_lag_deg"]
-    assert hard_bounds(15.0, 45.0, wrist) == (0.0, 75.0)  # -15 clamped to 0
+    speed = METRIC_SPECS["peak_hand_speed_tu_s"]
+    assert hard_bounds(4.0, 9.0, speed) == (0.0, 14.0)  # -1 clamped to 0
     separation = METRIC_SPECS["shoulder_hip_separation_deg"]
     assert hard_bounds(40.0, 65.0, separation) == (15.0, 90.0)  # unclamped
 
@@ -141,8 +152,8 @@ def test_lower_is_better_is_set_exactly_where_zero_is_perfect() -> None:
 
 
 def test_make_band_inherits_category_weight_and_unit_from_the_spec() -> None:
-    band = make_band("hip_rotation_deg", 30.0, 50.0)
-    spec = METRIC_SPECS["hip_rotation_deg"]
+    band = make_band("shoulder_hip_separation_deg", 30.0, 50.0)
+    spec = METRIC_SPECS["shoulder_hip_separation_deg"]
     assert band.category == spec.category
     assert band.weight == spec.weight
     assert band.unit == spec.unit
@@ -171,4 +182,4 @@ def test_rubric_version_names_itself_a_placeholder() -> None:
     Deliberately contradicts PIPELINE.md:1013 ("rubric_version stays
     rubric_v1"); the divergence is recorded in PIPELINE.md's change log.
     """
-    assert RUBRIC_VERSION == "rubric_v0_placeholder"
+    assert RUBRIC_VERSION == "rubric_v0.1_placeholder"

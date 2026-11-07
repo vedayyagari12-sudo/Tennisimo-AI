@@ -40,10 +40,7 @@ from tests.unit.analysis.synthetic_swing import (
 # Every metric set to a value comfortably inside the forehand_topspin band.
 IN_BAND_TOPSPIN: dict[str, float] = {
     "shoulder_hip_separation_deg": 52.0,
-    "shoulder_turn_deg": 95.0,
-    "hip_rotation_deg": 47.0,
     "elbow_angle_at_contact_deg": 140.0,
-    "wrist_lag_deg": 30.0,
     "contact_height_ratio": 0.90,
     "contact_point_forward_tu": 0.42,
     "peak_hand_speed_tu_s": 9.0,
@@ -129,18 +126,18 @@ def test_non_finite_values_are_unavailable_rather_than_scored() -> None:
 
 
 def test_score_metric_carries_the_band_and_the_view_sensitivity_flag() -> None:
-    band = make_band("shoulder_turn_deg", 80.0, 110.0)
-    metric = score_metric("shoulder_turn_deg", 95.0, band)
-    assert metric.name == "shoulder_turn_deg"
-    assert metric.value == pytest.approx(95.0)
+    band = make_band("elbow_angle_at_contact_deg", 120.0, 160.0)
+    metric = score_metric("elbow_angle_at_contact_deg", 140.0, band)
+    assert metric.name == "elbow_angle_at_contact_deg"
+    assert metric.value == pytest.approx(140.0)
     assert metric.unit == MetricUnit.DEGREES
     assert metric.score_0_100 == 100.0
     assert metric.weight == band.weight
-    assert (metric.ideal_min, metric.ideal_max) == (80.0, 110.0)
-    assert metric.category == ScoreCategory.PREPARATION
+    assert (metric.ideal_min, metric.ideal_max) == (120.0, 160.0)
+    assert metric.category == ScoreCategory.CONTACT
     assert metric.view_sensitive is True
 
-    unavailable = score_metric("shoulder_turn_deg", None, band)
+    unavailable = score_metric("elbow_angle_at_contact_deg", None, band)
     assert unavailable.value is None
     assert unavailable.score_0_100 is None
     assert unavailable.verdict == MetricVerdict.UNAVAILABLE

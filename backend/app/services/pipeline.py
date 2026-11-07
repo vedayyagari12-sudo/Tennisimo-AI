@@ -28,6 +28,7 @@ fault, and per Part E.4 it is not grounds for ``partial``.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import time
 from collections.abc import Iterator
@@ -44,7 +45,7 @@ from app.analysis.handedness import detect_handedness, racket_wrist_index
 from app.analysis.metrics import compute_swing_metrics
 from app.analysis.normalize import normalize_sequence
 from app.analysis.phases import segment_swing_phases
-from app.analysis.rubric import RUBRIC_VERSION
+from app.analysis.rubric import RUBRIC_VERSION, is_unscored_metric_warning
 from app.analysis.scoring import build_scorecard
 from app.analysis.shot_type import infer_shot_type, resolve_shot_type
 from app.analysis.speed import compute_ball_speed
@@ -88,6 +89,8 @@ from app.pose.sequence import build_pose_sequence, detection_rate
 from app.pose.video_io import MOTION_SCAN_COARSE_FLAG, VideoDecodeError, open_pose_stream
 from app.services.orchestrator import JobContext, JobFailure
 from app.services.repository import AnalysisRow
+
+logger = logging.getLogger("tennisform.pipeline")
 
 #: PIPELINE.md Stage 6: fewer than 40 % of sampled frames carrying a pose is
 #: ``no_pose_detected``. ``extract_keypoints`` deliberately does NOT apply this
@@ -137,6 +140,13 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: ``unknown``, is the PRIMARY shot type and selects the rubric, so a declared
 #: forehand is scored on the forehand bands (declared serve/volley/backhand
 #: still score on the generic ones). The classifier runs as a cross-check.
+#: Also v4 (no second bump): ``shoulder_turn_deg``, ``hip_rotation_deg`` and
+#: ``wrist_lag_deg`` are no longer SCORED (rubric ``rubric_v0.1_placeholder``):
+#: the first two measure in-plane tilt, not turn, and wrist lag is blind to the
+#: hand. They are still computed into ``SwingMetrics`` as diagnostics, but are in
+#: no category, no ``overall_score``, no ``Scorecard.metrics`` row and no Gemini
+#: payload, and their ``*_line_*`` warnings are logged, not shown, and never make
+#: a job ``partial``. Preparation is now ``shoulder_hip_separation_deg`` alone.
 PIPELINE_VERSION: Final[str] = "v4"
 
 #: The one plain-language warning added when the user's declared shot type and
@@ -230,6 +240,27 @@ def record_shot_type(accumulator: Accumulator, shot_type: ShotTypeInference) -> 
         accumulator.degrade("shot type could not be determined from technique")
     if shot_type.mismatch:
         accumulator.warn(SHOT_TYPE_MISMATCH_NOTE)
+
+
+def record_metric_warnings(accumulator: Accumulator, warnings: list[str]) -> None:
+    """Stage 13's contribution to warnings, Gemini's low-confidence list and status.
+
+    Any Stage 13 warning makes the analysis ``partial`` and is shown -- EXCEPT
+    one that only says ``shoulder_turn_deg`` / ``hip_rotation_deg`` could not be
+    measured. Those concern a number that is in no score and shown to nobody
+    (``rubric.UNSCORED_DIAGNOSTIC_METRICS``), so they are logged at debug and
+    never reach ``warnings``, ``low_confidence`` or the status.
+    """
+    kept: list[str] = []
+    for warning in warnings:
+        if is_unscored_metric_warning(warning):
+            logger.debug("unscored diagnostic metric warning: %s", warning)
+        else:
+            kept.append(warning)
+    accumulator.warnings.extend(kept)
+    accumulator.low_confidence.extend(kept)
+    if kept:
+        accumulator.partial = True
 
 
 def unavailable_speed(reason: BallSpeedUnavailableReason) -> BallSpeedResult:
@@ -514,10 +545,7 @@ def run_analysis_job(
             metrics, metric_warnings = compute_swing_metrics(
                 seq, handedness, contact, phases
             )
-            accumulator.warnings.extend(metric_warnings)
-            accumulator.low_confidence.extend(metric_warnings)
-            if metric_warnings:
-                accumulator.partial = True
+            record_metric_warnings(accumulator, metric_warnings)
 
             # The user's declaration, when there is one, is the PRIMARY type;
             # the classifier still runs and is kept as the cross-check.
@@ -649,6 +677,7 @@ __all__ = [
     "DecodeMeter",
     "StageTimer",
     "contact_at_window_edge",
+    "record_metric_warnings",
     "record_shot_type",
     "run_analysis_job",
     "stage_timings",

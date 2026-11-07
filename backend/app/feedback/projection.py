@@ -31,7 +31,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final
 
-from app.analysis.rubric import CATEGORY_WEIGHTS, METRIC_SPECS, RUBRIC_VERSION
+from app.analysis.rubric import (
+    CATEGORY_WEIGHTS,
+    EXCLUDED_METRICS,
+    METRIC_SPECS,
+    RUBRIC_VERSION,
+)
 from app.models.enums import MetricVerdict
 from app.models.feedback import BallSpeedResult as FeedbackBallSpeed
 from app.models.feedback import FeedbackInput
@@ -89,12 +94,26 @@ def _rubric_weight(name: str) -> float:
     return float(CATEGORY_WEIGHTS.get(spec.category, 0.0)) * float(spec.weight)
 
 
+def coachable_scorecard_metrics(scorecard: Scorecard) -> list[WireMetricScore]:
+    """``scorecard.metrics`` minus any metric the rubric does not score.
+
+    Stage 15 no longer emits a row for ``rubric.EXCLUDED_METRICS`` (which
+    includes the withdrawn ``shoulder_turn_deg`` / ``hip_rotation_deg`` /
+    ``wrist_lag_deg``). This filter is the second lock: a scorecard built
+    before their withdrawal can still carry them, and Gemini must never be
+    shown, or steered to coach, a measurement that does not measure what its
+    name says.
+    """
+    return [metric for metric in scorecard.metrics if metric.name not in EXCLUDED_METRICS]
+
+
 def priority_metric_names(
     scorecard: Scorecard, *, limit: int = MAX_PRIORITY_METRICS
 ) -> list[str]:
     """The metrics Gemini is steered to coach, worst first (design C.8).
 
-    1. Only ``low`` / ``high`` verdicts -- available AND outside band.
+    1. Only ``low`` / ``high`` verdicts -- available AND outside band -- of a
+       metric the rubric scores (never ``EXCLUDED_METRICS``).
     2. Rank by ``score_0_100`` ascending: worst first.
     3. **View-sensitivity demotion.** A metric flagged ``view_sensitive`` sorts
        after an equally-bad view-insensitive one. ``PIPELINE.md:945`` calls that
@@ -111,7 +130,7 @@ def priority_metric_names(
     """
     coachable = [
         metric
-        for metric in scorecard.metrics
+        for metric in coachable_scorecard_metrics(scorecard)
         if metric.verdict in _COACHABLE and metric.score_0_100 is not None
     ]
     coachable.sort(
@@ -168,7 +187,10 @@ def build_feedback_input(
         truncated_clip=truncated_clip,
         overall_score=scorecard.overall_score,
         category_scores=category_scores,
-        metrics=[to_feedback_metric_score(metric) for metric in scorecard.metrics],
+        metrics=[
+            to_feedback_metric_score(metric)
+            for metric in coachable_scorecard_metrics(scorecard)
+        ],
         ball_speed=to_feedback_ball_speed(ball_speed),
         priority_metric_names=priority_metric_names(scorecard),
         low_confidence_warnings=list(low_confidence_warnings),
@@ -178,6 +200,7 @@ def build_feedback_input(
 __all__: Sequence[str] = (
     "MAX_PRIORITY_METRICS",
     "build_feedback_input",
+    "coachable_scorecard_metrics",
     "priority_metric_names",
     "to_feedback_ball_speed",
     "to_feedback_metric_score",

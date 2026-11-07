@@ -97,6 +97,13 @@ SHOULDER_LINE_FORESHORTENED: Final[str] = "shoulder_line_foreshortened"
 HIP_LINE_FORESHORTENED: Final[str] = "hip_line_foreshortened"
 SHOULDER_LINE_TOO_FEW_FRAMES: Final[str] = "shoulder_line_too_few_frames"
 HIP_LINE_TOO_FEW_FRAMES: Final[str] = "hip_line_too_few_frames"
+# Which metric each of those flags is about (Stage 15 decides what that means).
+TURN_METRIC_WARNING_FLAGS: Final[dict[str, str]] = {
+    SHOULDER_LINE_FORESHORTENED: "shoulder_turn_deg",
+    SHOULDER_LINE_TOO_FEW_FRAMES: "shoulder_turn_deg",
+    HIP_LINE_FORESHORTENED: "hip_rotation_deg",
+    HIP_LINE_TOO_FEW_FRAMES: "hip_rotation_deg",
+}
 
 # Each metric's `view_sensitive` flag, from the Stage 13 table's third column.
 # It is not a field of SwingMetrics -- the schema at PIPELINE.md line 1809 puts

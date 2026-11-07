@@ -1,0 +1,342 @@
+{
+ "analysis_id": "80b90ede-c955-424d-8128-7c0b9bfca48e",
+ "user_id": "39dc0344-b240-425c-9aa0-3505868bf2cf",
+ "created_at": "2026-11-07T12:52:46.707075Z",
+ "status": "partial",
+ "pipeline_version": "v4",
+ "video": {
+  "duration_s": 9.0,
+  "source_fps": 25.0,
+  "analysis_fps": 30.0,
+  "rotation_deg": 0,
+  "width_px": 640,
+  "height_px": 360,
+  "cal_space_width_px": 1280,
+  "cal_space_height_px": 720,
+  "frames_decoded": 201,
+  "frames_sampled": 240,
+  "analysis_window_start_s": 0.0,
+  "analysis_window_end_s": 8.0,
+  "motion_scan_used": false
+ },
+ "pose_quality": {
+  "frames_with_pose": 240,
+  "frames_missing": 0,
+  "detection_rate": 1.0,
+  "mean_visibility": 0.7738469579761538,
+  "longest_gap_frames": 0,
+  "interpolated_frames": 0,
+  "torso_scale_px": 151.70026433003022,
+  "core_window_start_s": 5.96,
+  "core_window_end_s": 7.96,
+  "core_coverage_fraction": 1.0,
+  "longest_core_gap_frames": 0,
+  "estimated_camera_view": "unknown",
+  "usable": true,
+  "flags": []
+ },
+ "handedness": {
+  "handedness": "left",
+  "confidence": 0.7319695304925216,
+  "source": "detected",
+  "racket_hand_path_length_tu": 14.927302436571086,
+  "off_hand_path_length_tu": 5.835602052985203,
+  "warnings": []
+ },
+ "contact": {
+  "frame_index": 229,
+  "time_s": 7.640000000000001,
+  "contact_absolute_time_s": 7.640000000000001,
+  "confidence": 0.5754851511804695,
+  "peak_hand_speed_tu_s": 12.086872568448452,
+  "peak_frame_index": 227,
+  "prominence_ratio": 1.585660325619473,
+  "method": "peak_speed_decel_onset_v1",
+  "sanity_flags": []
+ },
+ "phases": {
+  "phases": [
+   {
+    "name": "ready",
+    "start_frame": 0,
+    "end_frame": -1,
+    "start_time_s": 0.0,
+    "end_time_s": 0.0,
+    "duration_s": 0.0
+   },
+   {
+    "name": "takeback",
+    "start_frame": 0,
+    "end_frame": 222,
+    "start_time_s": 0.0,
+    "end_time_s": 7.4,
+    "duration_s": 7.4
+   },
+   {
+    "name": "forward_swing",
+    "start_frame": 223,
+    "end_frame": 227,
+    "start_time_s": 7.44,
+    "end_time_s": 7.5600000000000005,
+    "duration_s": 0.1200000000000001
+   },
+   {
+    "name": "contact",
+    "start_frame": 228,
+    "end_frame": 230,
+    "start_time_s": 7.6000000000000005,
+    "end_time_s": 7.68,
+    "duration_s": 0.07999999999999918
+   },
+   {
+    "name": "follow_through",
+    "start_frame": 231,
+    "end_frame": 232,
+    "start_time_s": 7.72,
+    "end_time_s": 7.72,
+    "duration_s": 0.0
+   }
+  ],
+  "tempo_ratio": 61.666666666666615
+ },
+ "shot_type": {
+  "shot_type": "unknown",
+  "confidence": 0.43636363636363634,
+  "class_scores": {
+   "forehand_topspin": 0.3,
+   "forehand_slice": 0.11818181818181818,
+   "backhand_one_handed": 0.07272727272727274,
+   "backhand_two_handed": 0.0,
+   "serve": 0.43636363636363634,
+   "volley": 0.07272727272727274
+  },
+  "evidence": [
+   "contact height ratio 1.37 > 1.30 threshold -> serve",
+   "wrist separation reached 2.38 TU >= 0.35 threshold around contact -> one-handed",
+   "racket wrist +1.26 TU toward the racket side of the shoulder line at contact -> weak evidence for a forehand",
+   "swing path 63.2 deg > 10.0 and follow-through height 0.80 TU >= 0.20 -> topspin",
+   "serve evidence fired; volley evidence suppressed (a serve satisfies 'contact forward of the body' trivially)",
+   "top class score 0.44 did not clear both gates (>= 0.45 and a margin >= 0.15) -> unknown"
+  ],
+  "rule_version": "shot_rules_v1",
+  "source": "inferred",
+  "inferred_shot_type": null,
+  "inferred_confidence": null,
+  "mismatch": false,
+  "shot_specific_scoring": false
+ },
+ "metrics": {
+  "shoulder_hip_separation_deg": -14.816918127825971,
+  "shoulder_turn_deg": 23.510008821502083,
+  "hip_rotation_deg": 14.747626868592022,
+  "elbow_angle_at_contact_deg": 155.53185486629286,
+  "wrist_lag_deg": 108.23282325245935,
+  "contact_height_ratio": 1.3738009594917941,
+  "contact_point_forward_tu": 1.2343686547646153,
+  "peak_hand_speed_tu_s": 12.086872568448452,
+  "swing_path_angle_deg": 63.24969091267084,
+  "swing_plane_deviation_tu": 0.13506882480049912,
+  "knee_flexion_min_deg": null,
+  "weight_transfer_tu": null,
+  "follow_through_height_tu": 0.7985230210433101,
+  "balance_sway_tu": null,
+  "head_stillness_tu": 0.020857276009842194,
+  "wrist_separation_at_contact_tu": 2.30683062623459,
+  "takeback_displacement_tu": null,
+  "tempo_ratio": 61.666666666666615
+ },
+ "ball_speed": {
+  "ball_speed_mph": null,
+  "confidence": "unavailable",
+  "detections_used": 0,
+  "unavailable_reason": "not_calibrated"
+ },
+ "scorecard": {
+  "overall_score": 39.2,
+  "categories": [
+   {
+    "category": "preparation",
+    "score_0_100": 17.7,
+    "weight": 0.2,
+    "metric_names": [
+     "shoulder_hip_separation_deg",
+     "shoulder_turn_deg",
+     "hip_rotation_deg"
+    ],
+    "metrics_available": 3,
+    "metrics_total": 3
+   },
+   {
+    "category": "contact",
+    "score_0_100": null,
+    "weight": 0.3,
+    "metric_names": [],
+    "metrics_available": 0,
+    "metrics_total": 0
+   },
+   {
+    "category": "swing_path",
+    "score_0_100": 19.9,
+    "weight": 0.25,
+    "metric_names": [
+     "swing_plane_deviation_tu",
+     "tempo_ratio"
+    ],
+    "metrics_available": 2,
+    "metrics_total": 2
+   },
+   {
+    "category": "balance",
+    "score_0_100": 100.0,
+    "weight": 0.15,
+    "metric_names": [
+     "knee_flexion_min_deg",
+     "head_stillness_tu"
+    ],
+    "metrics_available": 1,
+    "metrics_total": 2
+   },
+   {
+    "category": "follow_through",
+    "score_0_100": null,
+    "weight": 0.1,
+    "metric_names": [],
+    "metrics_available": 0,
+    "metrics_total": 0
+   }
+  ],
+  "metrics": [
+   {
+    "name": "shoulder_hip_separation_deg",
+    "value": -14.816918127825971,
+    "unit": "deg",
+    "verdict": "low",
+    "score_0_100": 0.0,
+    "weight": 0.4,
+    "ideal_min": 30.0,
+    "ideal_max": 65.0,
+    "category": "preparation",
+    "view_sensitive": false
+   },
+   {
+    "name": "shoulder_turn_deg",
+    "value": 23.510008821502083,
+    "unit": "deg",
+    "verdict": "low",
+    "score_0_100": 0.0,
+    "weight": 0.3,
+    "ideal_min": 70.0,
+    "ideal_max": 110.0,
+    "category": "preparation",
+    "view_sensitive": true
+   },
+   {
+    "name": "hip_rotation_deg",
+    "value": 14.747626868592022,
+    "unit": "deg",
+    "verdict": "low",
+    "score_0_100": 59.0,
+    "weight": 0.3,
+    "ideal_min": 25.0,
+    "ideal_max": 60.0,
+    "category": "preparation",
+    "view_sensitive": true
+   },
+   {
+    "name": "swing_plane_deviation_tu",
+    "value": 0.13506882480049912,
+    "unit": "TU",
+    "verdict": "high",
+    "score_0_100": 31.2,
+    "weight": 0.35,
+    "ideal_min": 0.0,
+    "ideal_max": 0.08,
+    "category": "swing_path",
+    "view_sensitive": true
+   },
+   {
+    "name": "tempo_ratio",
+    "value": 61.666666666666615,
+    "unit": "ratio",
+    "verdict": "high",
+    "score_0_100": 0.0,
+    "weight": 0.2,
+    "ideal_min": 1.5,
+    "ideal_max": 3.0,
+    "category": "swing_path",
+    "view_sensitive": false
+   },
+   {
+    "name": "knee_flexion_min_deg",
+    "value": null,
+    "unit": "deg",
+    "verdict": "unavailable",
+    "score_0_100": null,
+    "weight": 0.55,
+    "ideal_min": 130.0,
+    "ideal_max": 165.0,
+    "category": "balance",
+    "view_sensitive": true
+   },
+   {
+    "name": "head_stillness_tu",
+    "value": 0.020857276009842194,
+    "unit": "TU",
+    "verdict": "ideal",
+    "score_0_100": 100.0,
+    "weight": 0.45,
+    "ideal_min": 0.0,
+    "ideal_max": 0.06,
+    "category": "balance",
+    "view_sensitive": false
+   }
+  ],
+  "rubric_version": "rubric_v0_placeholder"
+ },
+ "feedback": {
+  "summary": "A committed swing.",
+  "strengths": [
+   "Quiet head."
+  ],
+  "improvements": [
+   {
+    "priority": 1,
+    "title": "Turn more",
+    "why": "The body opens early.",
+    "cue": "Chin to shoulder.",
+    "drill": "Shadow swings.",
+    "metric_refs": [
+     "knee_flexion_min_deg"
+    ]
+   }
+  ],
+  "source": "gemini",
+  "model": "gemini-2.5-flash",
+  "guard": {
+   "passed": true,
+   "rejected_tokens": [],
+   "fields_discarded": [],
+   "fell_back_to_template": false,
+   "mph_rule": "banned",
+   "model_finish_reason": null
+  },
+  "latency_ms": 0
+ },
+ "warnings": [
+  "phases shorter than 2 frames collapsed to zero duration: ready",
+  "shot type could not be determined from technique",
+  "3 of 5 scoring categories were measurable"
+ ],
+ "timings": {
+  "download_ms": 24,
+  "motion_scan_ms": 0,
+  "decode_ms": 1867,
+  "pose_ms": 4934,
+  "analysis_ms": 7,
+  "ball_detect_ms": 0,
+  "ball_speed_ms": 0,
+  "feedback_ms": 1,
+  "persist_ms": 0,
+  "total_ms": 6845
+ }
+}

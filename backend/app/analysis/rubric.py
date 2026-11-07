@@ -47,7 +47,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.analysis.metrics import METRIC_VIEW_SENSITIVE
+from app.analysis.metrics import METRIC_VIEW_SENSITIVE, TURN_METRIC_WARNING_FLAGS
 from app.models.enums import MetricUnit, ScoreCategory, ShotType
 
 #: Persisted on every stored analysis row, so it is a contract string and
@@ -63,7 +63,14 @@ from app.models.enums import MetricUnit, ScoreCategory, ShotType
 #: assert a validated rubric that does not exist. Naming the placeholder makes
 #: the eventual tuning a version BUMP, visible in every stored row, rather than
 #: a silent change to what `rubric_v1` means.
-RUBRIC_VERSION: Final[str] = "rubric_v0_placeholder"
+#:
+#: `rubric_v0.1_placeholder`: shoulder_turn_deg, hip_rotation_deg and
+#: wrist_lag_deg were withdrawn from every band table (see
+#: UNSCORED_DIAGNOSTIC_METRICS), which changes what `preparation`, `contact`
+#: and `overall_score` are computed from. No band was retuned. Nothing
+#: constrains the stored string (DATABASE_SETUP.md: the incident-2 CHECK on
+#: `analyses.rubric_version` was dropped and every value is accepted).
+RUBRIC_VERSION: Final[str] = "rubric_v0.1_placeholder"
 
 # Emitted only when at least this many of the five categories have a real score.
 # A clip where only `contact` is measurable otherwise produces an "overall swing
@@ -126,22 +133,17 @@ class MetricBand(BaseModel):
 
 METRIC_SPECS: Final[dict[str, MetricSpec]] = {
     # preparation
+    # The ONLY preparation metric since shoulder_turn_deg / hip_rotation_deg
+    # were withdrawn (see UNSCORED_DIAGNOSTIC_METRICS). Its weight is left at
+    # 0.40: weights are pre-renormalization and score_category renormalizes
+    # over the category's available members, so a lone member carries the
+    # whole category whatever its weight.
     "shoulder_hip_separation_deg": MetricSpec(
         category=ScoreCategory.PREPARATION, weight=0.40, unit=MetricUnit.DEGREES
     ),
-    "shoulder_turn_deg": MetricSpec(
-        category=ScoreCategory.PREPARATION,
-        weight=0.30,
-        unit=MetricUnit.DEGREES,
-        physical_min=0.0,
-    ),
-    "hip_rotation_deg": MetricSpec(
-        category=ScoreCategory.PREPARATION,
-        weight=0.30,
-        unit=MetricUnit.DEGREES,
-        physical_min=0.0,
-    ),
-    # contact
+    # contact -- weights sum to 0.85 since wrist_lag_deg (0.15) was withdrawn;
+    # left unchanged for the same reason (renormalized, so scores are identical
+    # to rescaling them, and the Stage 16 tie-break ranks stay as they were).
     "contact_height_ratio": MetricSpec(
         category=ScoreCategory.CONTACT, weight=0.25, unit=MetricUnit.RATIO
     ),
@@ -151,13 +153,6 @@ METRIC_SPECS: Final[dict[str, MetricSpec]] = {
     "elbow_angle_at_contact_deg": MetricSpec(
         category=ScoreCategory.CONTACT,
         weight=0.20,
-        unit=MetricUnit.DEGREES,
-        physical_min=0.0,
-        physical_max=180.0,
-    ),
-    "wrist_lag_deg": MetricSpec(
-        category=ScoreCategory.CONTACT,
-        weight=0.15,
         unit=MetricUnit.DEGREES,
         physical_min=0.0,
         physical_max=180.0,
@@ -207,9 +202,53 @@ METRIC_SPECS: Final[dict[str, MetricSpec]] = {
     ),
 }
 
+# Still COMPUTED by Stage 13 (the pure functions and their tests stay, and the
+# raw value stays in the response's ``SwingMetrics`` as an internal
+# diagnostic), but NOT SCORED: each measures something other than what its
+# name says, so it is in no band table, no category, no overall score, no
+# ``Scorecard.metrics`` row and no Gemini payload. Its Stage 13 warnings
+# (``*_line_foreshortened`` / ``*_line_too_few_frames``) neither reach users nor
+# make an analysis ``partial``; the pipeline logs them at debug instead.
+UNSCORED_DIAGNOSTIC_METRICS: Final[dict[str, str]] = {
+    "shoulder_turn_deg": (
+        "an in-plane (image-plane) line angle, so it measures shoulder TILT, not "
+        "turn: a true 80 deg trunk turn about the vertical axis seen by a level "
+        "camera reads 0.0, and a 40 deg in-plane tilt with no turn reads ~29.6"
+    ),
+    "hip_rotation_deg": (
+        "same in-plane line angle as shoulder_turn_deg, on the hip line: "
+        "measures tilt, not rotation"
+    ),
+    "wrist_lag_deg": (
+        "reads only elbow, wrist and wrist velocity at contact-3, so it is blind "
+        "to the hand: a straight arm swinging about a fixed shoulder reads 90.0 "
+        "at every frame and bending the elbow only lowers it; its 15-45 / 5-25 "
+        "bands had no source"
+    ),
+}
+
+#: Stage 13 warning flags that concern ONLY an unscored diagnostic metric. A
+#: Stage 13 warning STARTS with its flag (``metrics.turn_flag_warning``).
+UNSCORED_METRIC_WARNING_FLAGS: Final[frozenset[str]] = frozenset(
+    flag
+    for flag, metric_name in TURN_METRIC_WARNING_FLAGS.items()
+    if metric_name in UNSCORED_DIAGNOSTIC_METRICS
+)
+
+
+def is_unscored_metric_warning(warning: str) -> bool:
+    """True when a Stage 13 warning is about an unscored diagnostic metric only.
+
+    Such a warning says a number nobody is shown could not be measured, so it
+    must not make the analysis ``partial`` or appear in user-facing warnings.
+    """
+    return warning.split(":", 1)[0].strip() in UNSCORED_METRIC_WARNING_FLAGS
+
+
 # Deliberately NOT scored, with the reason attached to each, because "why is
 # this metric missing from the scorecard" is otherwise a recurring question.
 EXCLUDED_METRICS: Final[dict[str, str]] = {
+    **UNSCORED_DIAGNOSTIC_METRICS,
     "weight_transfer_tu": (
         "structurally unmeasurable: Stage 7 pins the mid-hip at the origin, so "
         "its displacement is identically zero on every clip (metrics.py:109-118)"
@@ -296,10 +335,7 @@ def _table(ranges: dict[str, tuple[float, float]]) -> dict[str, MetricBand]:
 # Carried over verbatim from the original `topspin` archetype.
 _FOREHAND_TOPSPIN: Final[dict[str, tuple[float, float]]] = {
     "shoulder_hip_separation_deg": (40.0, 65.0),
-    "shoulder_turn_deg": (80.0, 110.0),
-    "hip_rotation_deg": (35.0, 60.0),
     "elbow_angle_at_contact_deg": (120.0, 160.0),
-    "wrist_lag_deg": (15.0, 45.0),
     "contact_height_ratio": (0.75, 1.05),
     "contact_point_forward_tu": (0.25, 0.60),
     "peak_hand_speed_tu_s": (6.0, 12.0),
@@ -314,10 +350,7 @@ _FOREHAND_TOPSPIN: Final[dict[str, tuple[float, float]]] = {
 # Carried over verbatim from the original `slice` archetype.
 _FOREHAND_SLICE: Final[dict[str, tuple[float, float]]] = {
     "shoulder_hip_separation_deg": (30.0, 50.0),
-    "shoulder_turn_deg": (70.0, 100.0),
-    "hip_rotation_deg": (25.0, 45.0),
     "elbow_angle_at_contact_deg": (140.0, 175.0),
-    "wrist_lag_deg": (5.0, 25.0),
     "contact_height_ratio": (0.55, 0.95),
     "contact_point_forward_tu": (0.20, 0.55),
     "peak_hand_speed_tu_s": (4.0, 9.0),
@@ -337,8 +370,6 @@ _FOREHAND_SLICE: Final[dict[str, tuple[float, float]]] = {
 # score both a good topspin and a good slice as wrong.
 _BASE: Final[dict[str, tuple[float, float]]] = {
     "shoulder_hip_separation_deg": (30.0, 65.0),
-    "shoulder_turn_deg": (70.0, 110.0),
-    "hip_rotation_deg": (25.0, 60.0),
     "swing_plane_deviation_tu": (0.0, 0.08),
     "tempo_ratio": (1.5, 3.0),
     "knee_flexion_min_deg": (130.0, 165.0),
