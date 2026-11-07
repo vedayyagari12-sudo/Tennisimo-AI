@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from app.analysis.handedness import (
+    HANDEDNESS_MISMATCH_NOTE,
     HINT_CONFIDENCE_FLOOR,
     detect_handedness,
     normalized_margin,
@@ -80,10 +81,43 @@ def test_two_handed_swing_has_low_confidence_and_honours_the_hint() -> None:
     assert hinted.confidence < HINT_CONFIDENCE_FLOOR
 
 
-def test_a_hint_does_not_override_a_confident_detection() -> None:
+def test_a_hint_beats_even_a_confident_detection_and_keeps_it_as_a_cross_check() -> None:
     result = detect_handedness(swing(Handedness.RIGHT), hint=Handedness.LEFT)
+    assert result.confidence >= HINT_CONFIDENCE_FLOOR
+    assert result.handedness == Handedness.LEFT
+    assert result.source == HandednessSource.USER_HINT
+    assert result.detected_handedness == Handedness.RIGHT
+    # Exactly ONE plain-language note, no numbers in it.
+    assert result.warnings == [HANDEDNESS_MISMATCH_NOTE]
+    assert not any(character.isdigit() for character in HANDEDNESS_MISMATCH_NOTE)
+    # The racket-hand path is the HINTED (left) wrist's.
+    assert racket_wrist_index(result.handedness) == LEFT_WRIST
+    assert result.racket_hand_path_length_tu is not None
+    assert result.off_hand_path_length_tu is not None
+    assert result.racket_hand_path_length_tu < result.off_hand_path_length_tu
+
+
+def test_a_hint_that_agrees_with_a_confident_detection_adds_nothing() -> None:
+    result = detect_handedness(swing(Handedness.RIGHT), hint=Handedness.RIGHT)
     assert result.handedness == Handedness.RIGHT
+    assert result.source == HandednessSource.USER_HINT
+    assert result.detected_handedness == Handedness.RIGHT
+    assert result.warnings == []
+
+
+def test_a_low_confidence_disagreement_does_not_add_the_mismatch_note() -> None:
+    """Below the floor the detection is not confident enough to contradict."""
+    result = detect_handedness(two_handed_swing(), hint=Handedness.LEFT)
+    assert result.confidence < HINT_CONFIDENCE_FLOOR
+    assert HANDEDNESS_MISMATCH_NOTE not in result.warnings
+
+
+@pytest.mark.parametrize("hint", [None, Handedness.UNKNOWN])
+def test_no_concrete_hint_leaves_detection_in_charge(hint: Handedness | None) -> None:
+    result = detect_handedness(swing(Handedness.LEFT), hint=hint)
+    assert result.handedness == Handedness.LEFT
     assert result.source == HandednessSource.DETECTED
+    assert result.detected_handedness is None
     assert result.warnings == []
 
 
@@ -219,3 +253,12 @@ def test_an_unseen_racket_wrist_reports_an_unmeasured_path_not_zero() -> None:
     assert result.handedness == Handedness.RIGHT
     assert result.racket_hand_path_length_tu is None
     assert result.off_hand_path_length_tu is not None
+
+
+def test_a_stored_result_without_detected_handedness_still_validates() -> None:
+    from app.models.responses import HandednessResult
+
+    old = {"handedness": "left", "confidence": 0.73, "source": "detected", "warnings": []}
+    result = HandednessResult.model_validate(old)
+    assert result.detected_handedness is None
+    assert HandednessResult.model_validate(result.model_dump(mode="json")) == result

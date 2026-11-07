@@ -559,3 +559,39 @@ def test_agreement_and_no_declaration_add_nothing() -> None:
         record_shot_type(accumulator, shot_type)
         assert accumulator.warnings == []
         assert accumulator.partial is False
+
+
+# --- Stage 8: the user's hand beats detection, as a NOTE never a downgrade ----
+
+
+def test_a_confident_detection_disagreeing_with_the_users_hand_is_a_note_not_partial() -> None:
+    from app.analysis.handedness import HANDEDNESS_MISMATCH_NOTE, detect_handedness
+    from app.services.pipeline import record_handedness
+    from tests.unit.analysis.synthetic import make_normalized_sequence, triangular_speed
+
+    seq = make_normalized_sequence(triangular_speed(61, 30, 12.0), handedness=Handedness.RIGHT)
+    handedness = detect_handedness(seq, hint=Handedness.LEFT)
+    assert handedness.handedness is Handedness.LEFT
+    assert handedness.detected_handedness is Handedness.RIGHT
+
+    accumulator = Accumulator()
+    record_handedness(accumulator, handedness)
+
+    assert accumulator.warnings == [HANDEDNESS_MISMATCH_NOTE]
+    assert accumulator.partial is False
+    assert accumulator.low_confidence == []
+
+
+def test_every_stage_8_warning_is_recorded_without_a_downgrade() -> None:
+    from app.services.pipeline import record_handedness
+
+    handedness = HandednessResult(
+        handedness=Handedness.RIGHT,
+        confidence=0.1,
+        source=HandednessSource.USER_HINT,
+        warnings=["low separation (confidence 0.10 < 0.5); user hint right applied over detection left"],
+    )
+    accumulator = Accumulator()
+    record_handedness(accumulator, handedness)
+    assert accumulator.warnings == handedness.warnings
+    assert accumulator.partial is False

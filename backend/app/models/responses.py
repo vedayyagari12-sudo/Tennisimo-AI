@@ -99,6 +99,13 @@ class HandednessResult(BaseModel):
     racket_hand_path_length_tu: float | None = Field(default=None)
     off_hand_path_length_tu: float | None = Field(default=None)
     warnings: list[str] = Field(default_factory=list)
+    detected_handedness: Handedness | None = Field(
+        default=None,
+        description="Stage 8 detection's own answer when the user picked a hand (source "
+        "'user_hint'); the user's choice always wins and this is kept as a cross-check. "
+        "None when detection decided (no concrete hint), and on payloads stored before "
+        "this key existed. confidence is detection's separation confidence.",
+    )
 
 
 class ContactDetection(BaseModel):

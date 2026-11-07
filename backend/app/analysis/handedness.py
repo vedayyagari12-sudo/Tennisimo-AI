@@ -2,7 +2,9 @@
 
 Racket hand = the wrist scoring higher on integrated path length AND on peak
 radial distance from mid-hip. Cannot raise: low separation yields
-``confidence < 0.5``, and when a hint is present the hint wins.
+``confidence < 0.5``. A concrete hint (right/left) ALWAYS wins, whatever the
+detection confidence; detection then runs only as a cross-check
+(``detected_handedness``). No hint, or ``unknown``, and detection decides.
 """
 
 from __future__ import annotations
@@ -25,6 +27,16 @@ from app.models.responses import HandednessResult
 
 HINT_CONFIDENCE_FLOOR: Final[float] = 0.5
 MARGIN_GAIN: Final[float] = 2.0
+
+#: The one plain-language warning added when the user picked a hand and a
+#: CONFIDENT detection (>= HINT_CONFIDENCE_FLOOR) saw the other one. A NOTE, not
+#: a downgrade: the user's choice was used, so it never makes an analysis
+#: ``partial`` (the pipeline adds Stage 8 warnings through ``warn`` only).
+HANDEDNESS_MISMATCH_NOTE: Final[str] = (
+    "You picked this hand, but the swing looked a bit like the other hand to our "
+    "analysis. We used your choice. If you play with the other hand, pick that "
+    "one next time."
+)
 
 
 class UnknownHandednessError(ValueError):
@@ -184,15 +196,24 @@ def detect_handedness(
 
     handedness = detected
     source = HandednessSource.DETECTED
-    if confidence < HINT_CONFIDENCE_FLOOR and hint is not None and hint != Handedness.UNKNOWN:
-        # Two-handed backhands are the known failure case: both wrists move
-        # nearly identically, so the profile hint is the fallback.
-        warnings.append(
-            f"low separation (confidence {confidence:.2f} < {HINT_CONFIDENCE_FLOOR}); "
-            f"user hint {hint.value} applied over detection {detected.value}"
-        )
+    detected_handedness: Handedness | None = None
+    if hint is not None and hint != Handedness.UNKNOWN:
+        # The user's concrete choice ALWAYS wins. Detection still runs and is
+        # kept as a cross-check: it was ~62 % accurate on the corpus, and on a
+        # serve it confidently picked the ball-toss arm (0.73) over the user's
+        # correct "right". The cost, stated: a WRONG choice is now unrecoverable.
         handedness = hint
         source = HandednessSource.USER_HINT
+        detected_handedness = detected
+        if confidence < HINT_CONFIDENCE_FLOOR:
+            # Two-handed backhands are the known failure case: both wrists move
+            # nearly identically.
+            warnings.append(
+                f"low separation (confidence {confidence:.2f} < {HINT_CONFIDENCE_FLOOR}); "
+                f"user hint {hint.value} applied over detection {detected.value}"
+            )
+        elif detected != hint:
+            warnings.append(HANDEDNESS_MISMATCH_NOTE)
 
     # The comparison above keeps the 0.0 floats (an unseen wrist correctly
     # loses it), but the REPORTED path of an unseen wrist is unmeasured: None,
@@ -207,6 +228,7 @@ def detect_handedness(
         racket_hand_path_length_tu=right_reported if racket_is_right else left_reported,
         off_hand_path_length_tu=left_reported if racket_is_right else right_reported,
         warnings=warnings,
+        detected_handedness=detected_handedness,
     )
 
 

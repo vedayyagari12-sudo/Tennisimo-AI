@@ -147,6 +147,12 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: no category, no ``overall_score``, no ``Scorecard.metrics`` row and no Gemini
 #: payload, and their ``*_line_*`` warnings are logged, not shown, and never make
 #: a job ``partial``. Preparation is now ``shoulder_hip_separation_deg`` alone.
+#: Also v4: the request's concrete ``handedness_hint`` (right/left) ALWAYS sets
+#: the racket hand (``source = user_hint``), even over a confident detection;
+#: detection runs as a cross-check (``HandednessResult.detected_handedness``)
+#: and a confident disagreement adds one plain note through ``warn`` (never
+#: ``partial``). v3 let a detection at >= 0.5 override the user (serve 4902773
+#: tracked the ball-toss arm). A wrong user choice is now unrecoverable.
 PIPELINE_VERSION: Final[str] = "v4"
 
 #: The one plain-language warning added when the user's declared shot type and
@@ -240,6 +246,18 @@ def record_shot_type(accumulator: Accumulator, shot_type: ShotTypeInference) -> 
         accumulator.degrade("shot type could not be determined from technique")
     if shot_type.mismatch:
         accumulator.warn(SHOT_TYPE_MISMATCH_NOTE)
+
+
+def record_handedness(accumulator: Accumulator, handedness: HandednessResult) -> None:
+    """Stage 8's contribution to warnings. Never to the status.
+
+    Every Stage 8 warning goes through ``warn``, never ``degrade`` -- including
+    ``handedness.HANDEDNESS_MISMATCH_NOTE``: the user picked a hand, that choice
+    was used, and a confident detection disagreeing with it makes nothing less
+    trustworthy than the user's own answer, so the status must not change.
+    """
+    for warning in handedness.warnings:
+        accumulator.warn(warning)
 
 
 def record_metric_warnings(accumulator: Accumulator, warnings: list[str]) -> None:
@@ -515,7 +533,7 @@ def run_analysis_job(
                 accumulator.degrade("subject identity was unstable across the clip")
 
             handedness = detect_handedness(seq, context.request.handedness_hint)
-            accumulator.warnings.extend(handedness.warnings)
+            record_handedness(accumulator, handedness)
 
             contact = detect_contact_frame(
                 seq,
@@ -677,6 +695,7 @@ __all__ = [
     "DecodeMeter",
     "StageTimer",
     "contact_at_window_edge",
+    "record_handedness",
     "record_metric_warnings",
     "record_shot_type",
     "run_analysis_job",

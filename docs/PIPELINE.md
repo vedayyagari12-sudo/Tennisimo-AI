@@ -881,13 +881,22 @@ with the path-length defect when scoping a fix.
 | **Owner** | `analysis/handedness.py` |
 | **In** | `NormalizedSequence`, `hint: Handedness \| None` |
 | **Out** | `HandednessResult` |
-| **Fails** | Cannot raise. Low separation → `confidence < 0.5`, and if a hint exists the hint wins with `source="user_hint"` and a warning is appended. |
+| **Fails** | Cannot raise. Low separation → `confidence < 0.5`. A concrete hint (`right`/`left`) ALWAYS wins, at any confidence, with `source="user_hint"` (§8.2). |
 
 Racket hand = the wrist with the greater score on: integrated path length (Σ‖Δp‖) over the clip, **and** peak radial distance from mid-hip. Confidence = normalized margin between the two wrists, clipped to `[0,1]`. Tie-break: the wrist further from mid-hip at the peak-speed frame.
 
-Two-handed backhands are the known failure case — both wrists move nearly identically. This is *why* `Handedness` is detected separately from grip: two-handedness is decided in Stage 13 by wrist separation, and handedness falls back to the user hint whenever confidence < 0.5. The client always sends `handedness_hint` from the user profile, so this is a fallback that is essentially always available.
+Two-handed backhands are the known failure case — both wrists move nearly identically. This is *why* `Handedness` is detected separately from grip: two-handedness is decided in Stage 13 by wrist separation, and a concrete user hint sets the hand outright (§8.2), so a two-handed swing with a hint is never decided by the near-tie. Without a hint, detection decides at whatever confidence it reaches.
 
 > **VALIDATION GAP -- Stage 8's own discrimination does not work on real footage.** Two-handed backhands are no longer the *only* failure case. On real clips (§9.1) confidence stayed in **0.05-0.36** on every clip tested, never reaching the 0.5 override threshold, and the detected hand was **wrong on more than half of a 7-clip batch** of visually-confirmed right-handed players -- after the visibility fix, not before it. The hint path is confirmed working (it correctly overrode wrong detections on `serve_01` and `serve_04`), so the shipped system is correct in practice; but the hint is currently the **primary** signal, not the fallback, and `source="detected"` with `confidence >= 0.5` is not a state real footage has yet produced. A request with no hint, or with a wrong profile hint, has no safety net and fails **silently** -- see the Stage 13 note on handedness-sensitive metrics.
+
+#### 8.2 The user's hand is PRIMARY; detection is a cross-check (pipeline v4)
+
+When the request carries a concrete `handedness_hint` (`right` or `left`), `detect_handedness` returns `handedness = hint` and `source = "user_hint"` **always**, whatever the detection confidence. Before this, the hint applied only below `HINT_CONFIDENCE_FLOOR` (0.5) and a detection at or above it won: on `serve_01_baseline_4902773` detection overrode the user's correct `right` with `left` at 0.73 and the pipeline tracked the ball-toss arm (§8.1). The app requires the user to pick a hand, and detection was ~62 % accurate on the corpus.
+
+- Detection still runs. Its answer is kept as `HandednessResult.detected_handedness` (`None` when there was no concrete hint, and on payloads stored before the key existed). `confidence` remains detection's separation confidence.
+- If detection is confident (`confidence >= HINT_CONFIDENCE_FLOOR`) AND disagrees, ONE plain-language note (`handedness.HANDEDNESS_MISMATCH_NOTE`) is added to `warnings` through `pipeline.record_handedness` → `Accumulator.warn`, never `degrade`: **it never makes the job `partial`** and is not an error. Below the floor the existing technical "low separation ... user hint applied" warning is kept unchanged and no note is added.
+- No hint, or `unknown`: unchanged — detection decides, `source = "detected"`, `detected_handedness = None`.
+- **Cost, stated:** a WRONG user choice is now unrecoverable — no detection, however confident, can correct it. The note is the only trace.
 
 ---
 
@@ -2740,6 +2749,11 @@ class HandednessResult(BaseModel):
         description="Free-text, NOT a closed vocabulary -- do not branch on these. "
                     "Records incomplete wrist visibility and the coverage scaling applied, "
                     "path/radius criterion disagreement, and hint-over-detection override.",
+    )
+    detected_handedness: Handedness | None = Field(
+        default=None,
+        description="Detection's own answer when a concrete hint was given (the hint always "
+                    "wins, §8.2). None without a hint and on rows stored before v4.",
     )
 
 class ContactDetection(BaseModel):
