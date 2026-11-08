@@ -164,6 +164,10 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: before it) is kept only when the local one cannot be measured (< 0.10 TU, or
 #: the wrist unseen). It feeds contact filtering, phases, contact_point_forward
 #: and the front-knee choice, so those can change on a clip whose sign flips.
+#: Also v4: that re-measure may only REPLACE Stage 7's sign when its lead window
+#: is one motion (|net| / path >= 0.5, ``contact.lead_window_straightness``); an
+#: out-and-back flick keeps Stage 7's sign (34449247 had flipped on a 0.14
+#: window and was scored as a confident slice; it is ``contact_not_found`` again).
 #: Also v4: the Stage 5 motion scan now runs on every clip LONGER than the
 #: analysis window (``MOTION_SCAN_THRESHOLD_S`` defaults to the window, 8 s,
 #: not 10 s), so an 8-10 s clip's window is placed on the motion instead of on

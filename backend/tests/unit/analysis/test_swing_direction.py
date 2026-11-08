@@ -16,6 +16,8 @@ import pytest
 from app.analysis.contact import (
     SWING_DIRECTION_LEAD_FRAMES,
     SWING_DIRECTION_MIN_DISPLACEMENT_TU,
+    SWING_DIRECTION_MIN_STRAIGHTNESS,
+    lead_window_straightness,
     local_swing_direction_sign,
     resolve_swing_direction,
 )
@@ -213,3 +215,84 @@ def test_the_racket_wrist_is_the_one_measured() -> None:
     seq = sequence(x, racket=LEFT_WRIST, stage7_sign=1)
     assert local_swing_direction_sign(seq, Handedness.LEFT) == -1
     assert local_swing_direction_sign(seq, Handedness.RIGHT) is None  # still wrist
+
+
+# --- a flip needs ONE motion in the lead window -------------------------------
+
+
+def out_and_back() -> np.ndarray:
+    """The wrist flicks out to +x, then snaps back FASTER, past its start.
+
+    The speed peak is on the return, so the 5-frame lead window holds the end of
+    the outward motion AND the start of the return: a net -x displacement that
+    clears the 0.10 TU floor but is the residue of two opposing motions (the
+    shape of tennis_forehand_34449247, a player turning, not a stroke).
+    """
+    return np.concatenate([
+        hold(0.5, 10),
+        ease(0.5, 1.3, 8)[1:],  # out, slower
+        ease(1.3, 0.2, 5)[1:],  # back, faster: the global speed peak
+        hold(0.2, 10),
+    ])
+
+
+def test_the_straightness_constant_is_the_documented_one() -> None:
+    assert SWING_DIRECTION_MIN_STRAIGHTNESS == pytest.approx(0.5)
+
+
+def test_an_out_and_back_flick_does_not_flip_the_stage_7_sign() -> None:
+    seq = sequence(out_and_back(), stage7_sign=1)
+    # The local measurement alone WOULD flip: it reads -1 and clears the floor...
+    assert local_swing_direction_sign(seq, Handedness.RIGHT) == -1
+    # ...but its window is not one motion,
+    straightness = lead_window_straightness(seq, Handedness.RIGHT)
+    assert straightness is not None
+    assert straightness < SWING_DIRECTION_MIN_STRAIGHTNESS
+    # so Stage 7's sign stands, and the sequence is the same object.
+    resolved = resolve_swing_direction(seq, hand(Handedness.RIGHT))
+    assert resolved is seq
+    assert resolved.swing_direction_sign == 1
+
+
+def test_the_mirrored_flick_does_not_flip_either() -> None:
+    seq = sequence(-out_and_back(), stage7_sign=-1)
+    assert local_swing_direction_sign(seq, Handedness.RIGHT) == 1
+    assert resolve_swing_direction(seq, hand(Handedness.RIGHT)).swing_direction_sign == -1
+
+
+def test_an_out_and_back_flick_that_agrees_with_stage_7_is_unchanged() -> None:
+    seq = sequence(out_and_back(), stage7_sign=-1)
+    assert resolve_swing_direction(seq, hand(Handedness.RIGHT)) is seq
+
+
+def test_a_one_way_drive_still_flips_and_reads_fully_straight() -> None:
+    """The 8224254 shape: Stage 7 reads -1, the drive into the peak is +x."""
+    x = np.concatenate([
+        hold(1.0, 10), ease(1.0, -1.0, 40), hold(-1.0, 10), ease(-1.0, 0.6, 12), hold(0.6, 10),
+    ])
+    seq = sequence(x)
+    assert seq.swing_direction_sign == -1
+    straightness = lead_window_straightness(seq, Handedness.RIGHT)
+    assert straightness == pytest.approx(1.0)
+    assert resolve_swing_direction(seq, hand(Handedness.RIGHT)).swing_direction_sign == 1
+
+
+def test_the_threshold_is_what_decides_the_flick() -> None:
+    """Same flick: refused at the shipped threshold, accepted with none."""
+    seq = sequence(out_and_back(), stage7_sign=1)
+    assert resolve_swing_direction(
+        seq, hand(Handedness.RIGHT), min_straightness=0.0
+    ).swing_direction_sign == -1
+
+
+def test_straightness_is_unmeasurable_when_the_window_is() -> None:
+    x = np.concatenate([hold(0.8, 20), ease(0.8, -0.6, 10), hold(-0.6, 10)])
+    seq = sequence(x, stage7_sign=1)
+    assert lead_window_straightness(seq, Handedness.UNKNOWN) is None
+    seq.visibility[:, RIGHT_WRIST] = 0.05
+    assert lead_window_straightness(seq, Handedness.RIGHT) is None
+
+
+def test_straightness_is_none_when_the_wrist_never_moves_in_x() -> None:
+    seq = sequence(hold(0.4, 30), stage7_sign=1)
+    assert lead_window_straightness(seq, Handedness.RIGHT) is None

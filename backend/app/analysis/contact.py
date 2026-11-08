@@ -253,6 +253,54 @@ SWING_DIRECTION_LEAD_FRAMES: Final[int] = 5
 #: 0.002 and keeps Stage 7's sign).
 SWING_DIRECTION_MIN_DISPLACEMENT_TU: Final[float] = 0.10
 
+#: The local sign may REPLACE Stage 7's only when the lead window holds one
+#: motion: |net x-displacement| / x path length over the visible frames of the
+#: window must be at least this (0.5 = at least 3/4 of the wrist's x travel went
+#: the measured way). An out-and-back flick leaves a net that is the small
+#: residue of two opposing motions, whose sign depends on where the window
+#: happens to start -- not a swing direction, and not evidence against Stage 7.
+#: A refusal changes no gate: Stage 9 then runs on Stage 7's sign, exactly as
+#: when the local sign cannot be measured. NEW NUMBER. Corpus (5-frame lead):
+#: the two accepted flips read 0.98 (tennis_forehand_8224254) and 1.00
+#: (tennis_forehand_8224589); the refused one, tennis_forehand_34449247, reads
+#: 0.14 (net -0.125 TU over a 0.865 TU path, and the sign itself changes with
+#: the window: -0.314 TU at 4 frames, +0.099 at 6). Clips whose local sign
+#: AGREES with Stage 7 are untouched whatever they read (serve_01: 0.49).
+SWING_DIRECTION_MIN_STRAIGHTNESS: Final[float] = 0.5
+
+
+def _lead_window_x(
+    seq: NormalizedSequence, handedness: Handedness, lead_frames: int
+) -> np.ndarray | None:
+    """Racket-wrist x over the visible frames of ``[peak - lead_frames, peak]``.
+
+    The peak is Stage 9's own (``peak_speed_index`` over trustworthy frames).
+    None when the hand is UNKNOWN, no frame is trustworthy, or fewer than two
+    frames in the window saw the wrist.
+    """
+    if handedness == Handedness.UNKNOWN:
+        return None
+    points = np.asarray(seq.points, dtype=np.float64)
+    count = int(points.shape[0])
+    if count < 2:
+        return None
+    speed = racket_hand_speed(seq, handedness)
+    reliable = racket_wrist_reliable(seq, handedness)
+    if speed.shape[0] != count or not bool(np.any(reliable)):
+        return None
+    peak = peak_speed_index(speed, reliable)
+    wrist = racket_wrist_index(handedness)
+    visibility = np.asarray(seq.visibility, dtype=np.float64)
+    if visibility.ndim == 2 and visibility.shape[0] == count:
+        seen = landmark_visible(visibility[:, wrist])
+    else:
+        seen = np.ones((count,), dtype=bool)
+    first = max(0, peak - int(lead_frames))
+    frames = [frame for frame in range(first, peak + 1) if bool(seen[frame])]
+    if len(frames) < 2:
+        return None
+    return np.asarray(points[frames, wrist, 0], dtype=np.float64)
+
 
 def local_swing_direction_sign(
     seq: NormalizedSequence,
@@ -275,45 +323,61 @@ def local_swing_direction_sign(
     is trustworthy, fewer than two frames in the window saw the wrist, or the
     displacement is under ``min_displacement_tu``.
     """
-    if handedness == Handedness.UNKNOWN:
+    xs = _lead_window_x(seq, handedness, lead_frames)
+    if xs is None:
         return None
-    points = np.asarray(seq.points, dtype=np.float64)
-    count = int(points.shape[0])
-    if count < 2:
-        return None
-    speed = racket_hand_speed(seq, handedness)
-    reliable = racket_wrist_reliable(seq, handedness)
-    if speed.shape[0] != count or not bool(np.any(reliable)):
-        return None
-    peak = peak_speed_index(speed, reliable)
-    wrist = racket_wrist_index(handedness)
-    visibility = np.asarray(seq.visibility, dtype=np.float64)
-    if visibility.ndim == 2 and visibility.shape[0] == count:
-        seen = landmark_visible(visibility[:, wrist])
-    else:
-        seen = np.ones((count,), dtype=bool)
-    first = max(0, peak - int(lead_frames))
-    last = peak
-    frames = [frame for frame in range(first, last + 1) if bool(seen[frame])]
-    if len(frames) < 2:
-        return None
-    displacement = float(points[frames[-1], wrist, 0] - points[frames[0], wrist, 0])
+    displacement = float(xs[-1] - xs[0])
     if not np.isfinite(displacement) or abs(displacement) < float(min_displacement_tu):
         return None
     return 1 if displacement > 0.0 else -1
 
 
+def lead_window_straightness(
+    seq: NormalizedSequence,
+    handedness: Handedness,
+    *,
+    lead_frames: int = SWING_DIRECTION_LEAD_FRAMES,
+) -> float | None:
+    """How ONE-WAY the racket wrist's x motion into its speed peak is, in [0, 1].
+
+    ``|x_last - x_first| / sum(|x_i+1 - x_i|)`` over the same visible frames of
+    the same window :func:`local_swing_direction_sign` measures. 1.0: every step
+    went the same way. Near 0: the wrist went out and came back, so the net
+    displacement is a residue, not a direction. None when that window cannot be
+    measured or the wrist did not move in x at all.
+    """
+    xs = _lead_window_x(seq, handedness, lead_frames)
+    if xs is None:
+        return None
+    path = float(np.sum(np.abs(np.diff(xs))))
+    net = abs(float(xs[-1] - xs[0]))
+    if not np.isfinite(path) or not np.isfinite(net) or path <= 0.0:
+        return None
+    return float(min(net / path, 1.0))
+
+
 def resolve_swing_direction(
-    seq: NormalizedSequence, handedness: HandednessResult
+    seq: NormalizedSequence,
+    handedness: HandednessResult,
+    *,
+    min_straightness: float = SWING_DIRECTION_MIN_STRAIGHTNESS,
 ) -> NormalizedSequence:
     """``seq`` with ``swing_direction_sign`` re-measured on the racket wrist.
 
     Run once, between Stage 8 and Stage 9; every later stage (9, 12, 13, 14, 15)
     reads the returned sequence. Unchanged -- the SAME object -- when
-    :func:`local_swing_direction_sign` cannot measure, or agrees.
+    :func:`local_swing_direction_sign` cannot measure, or agrees, or when it
+    disagrees but its lead window is not one motion
+    (:func:`lead_window_straightness` < ``min_straightness``): overriding Stage
+    7 needs a clear swing direction, and an out-and-back flick is not one
+    (tennis_forehand_34449247: a player turning, flipped +1 -> -1 on a 0.14
+    window, then scored as a confident forehand_slice).
     """
     sign = local_swing_direction_sign(seq, handedness.handedness)
     if sign is None or sign == int(seq.swing_direction_sign):
+        return seq
+    straightness = lead_window_straightness(seq, handedness.handedness)
+    if straightness is None or straightness < float(min_straightness):
         return seq
     return dataclasses.replace(seq, swing_direction_sign=sign)
 
