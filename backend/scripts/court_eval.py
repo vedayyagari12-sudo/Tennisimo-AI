@@ -1,4 +1,5 @@
-"""Court mode evaluation, minimal: ``--mode candidates`` (brief batch E).
+"""Court mode evaluation: ``--mode candidates`` (brief batch E) and
+``--mode events`` (build step 16: the whole engine, wire JSON in court.json).
 
 NOT a test and not part of the pure layer: it decodes video and writes files.
 It runs the step 7-8 front end over one clip and reports what the design 1.4
@@ -49,17 +50,16 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.analysis.camera_stability import assess_camera_stability  # noqa: E402
-from app.analysis.court_calibration import CourtCalibration, CourtTap, calibrate_court  # noqa: E402
-from app.ball.camera_motion import CameraMotionSampler  # noqa: E402
-from app.ball.flight_detector import (  # noqa: E402
-    FLIGHT_CANDIDATE_DTYPE,
-    court_roi_mask,
-    expected_diameter_fn,
-    find_flight_candidates,
+from app.analysis.ball_events import PoseHit  # noqa: E402
+from app.analysis.court_session import analyze_court_session  # noqa: E402
+from app.ball.flight_detector import court_roi_mask  # noqa: E402
+from app.models.court import CourtCalibrationRequest, CourtEnd, CourtFormat  # noqa: E402
+from app.services.court_offline import (  # noqa: E402
+    taps_in_track_space,
+    CourtVideoInputs,
+    extract_court_inputs,
+    project_court_result,
 )
-from app.ball.flight_frames import iter_track_frames, probe_court_clip  # noqa: E402
-from app.models.court import CourtCalibrationRequest  # noqa: E402
 
 OUTPUT_ROOT: Final[Path] = BACKEND_ROOT / "build" / "court_eval"
 #: Design 1.4: a candidate within 3 px of the label counts.
@@ -159,82 +159,42 @@ def count_summary(per_frame: npt.NDArray[np.int64]) -> dict[str, float | int]:
     }
 
 
-def taps_in_track_space(request: CourtCalibrationRequest, track_size: tuple[int, int]) -> list[CourtTap]:
-    """Normalised taps to TRACK_SPACE pixels (brief Constants)."""
-    width, height = track_size
-    return [CourtTap(t.keypoint, t.x * width, t.y * height) for t in request.taps]
+def load_request(taps_json: Path | None) -> CourtCalibrationRequest | None:
+    if taps_json is None:
+        return None
+    return CourtCalibrationRequest.model_validate_json(taps_json.read_text(encoding="utf-8"))
+
+
+def calibration_summary(inputs: CourtVideoInputs) -> dict[str, Any] | None:
+    verdict = inputs.calibration_verdict
+    if verdict is None:
+        return None
+    calibration = verdict.calibration
+    report: dict[str, Any] = {
+        "accepted": calibration is not None,
+        "rejection": None if verdict.rejection is None else verdict.rejection.value,
+    }
+    if calibration is not None and inputs.track_size is not None:
+        roi = court_roi_mask(calibration, inputs.track_size)
+        report.update(
+            calls_allowed=calibration.calls_allowed,
+            reprojection_rms_px=round(calibration.reprojection_rms_px, 3),
+            camera_height_m=round(calibration.pose.height_m, 3),
+            roi_frame_fraction=round(float(np.mean(roi > 0)), 4),
+        )
+    return report
 
 
 def run_candidates(
     video: Path, taps_json: Path | None, labels_jsonl: Path | None
 ) -> tuple[dict[str, Any], npt.NDArray[np.void], npt.NDArray[np.float64]]:
     started = time.monotonic()
-    probe = probe_court_clip(video)
-    request = (
-        CourtCalibrationRequest.model_validate_json(taps_json.read_text(encoding="utf-8"))
-        if taps_json is not None
-        else None
-    )
-    sampler = CameraMotionSampler()
-    window: deque[tuple[float, npt.NDArray[np.uint8], npt.NDArray[np.uint8]]] = deque(maxlen=3)
-    times: list[float] = []
-    chunks: list[npt.NDArray[np.void]] = []
-    per_frame: list[int] = []
-    calibration: CourtCalibration | None = None
-    calibration_report: dict[str, Any] | None = None
-    roi: npt.NDArray[np.uint8] | None = None
-    diameter: Callable[[float, float], float] | None = None
-    track_size: tuple[int, int] | None = None
-
-    for index, (pts_s, bgr) in enumerate(iter_track_frames(video, probe)):
-        if track_size is None:
-            track_size = (int(bgr.shape[1]), int(bgr.shape[0]))
-            if request is not None:
-                # Taps are fractions of the video frame, so they map straight to
-                # TRACK_SPACE; the request's frame size is only the aspect check.
-                verdict = calibrate_court(
-                    taps_in_track_space(request, track_size),
-                    track_size,
-                    video_frame_size=(request.frame_width_px, request.frame_height_px),
-                )
-                calibration = verdict.calibration
-                calibration_report = {
-                    "accepted": calibration is not None,
-                    "rejection": None if verdict.rejection is None else verdict.rejection.value,
-                }
-                if calibration is not None:
-                    roi = court_roi_mask(calibration, track_size)
-                    diameter = expected_diameter_fn(calibration)
-                    calibration_report.update(
-                        calls_allowed=calibration.calls_allowed,
-                        reprojection_rms_px=round(calibration.reprojection_rms_px, 3),
-                        camera_height_m=round(calibration.pose.height_m, 3),
-                        roi_frame_fraction=round(float(np.mean(roi > 0)), 4),
-                    )
-        times.append(pts_s)
-        sampler.add(pts_s, bgr)
-        window.append((pts_s, cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bgr))
-        if len(window) == 3:
-            (_, prev_gray, _), (cur_s, cur_gray, cur_bgr), (_, next_gray, _) = window
-            found = find_flight_candidates(
-                prev_gray,
-                cur_gray,
-                next_gray,
-                cur_bgr,
-                index - 1,
-                cur_s,
-                roi,
-                diameter,
-            )
-            chunks.append(found)
-            per_frame.append(len(found))
-
-    frame_times = np.asarray(times, dtype=np.float64)
-    candidates = np.concatenate(chunks) if chunks else np.zeros(0, dtype=FLIGHT_CANDIDATE_DTYPE)
-    samples = sampler.result()
-    stability = assess_camera_stability(
-        samples.times_s, samples.shifts_px, samples.feature_counts, max(samples.long_edge_px, 1)
-    )
+    inputs = extract_court_inputs(video, load_request(taps_json))
+    probe, track_size, stability = inputs.probe, inputs.track_size, inputs.stability
+    candidates, frame_times = inputs.candidates, inputs.frame_times_s
+    times = list(frame_times)
+    per_frame = list(inputs.per_frame_counts)
+    calibration_report = calibration_summary(inputs)
     deltas = np.diff(frame_times)
     summary: dict[str, Any] = {
         "mode": "candidates",
@@ -257,9 +217,7 @@ def run_candidates(
             "rms_shift_px": stability.rms_shift_px,
             "bumped_at_s": stability.bumped_at_s,
             "samples": stability.samples,
-            "median_feature_count": (
-                float(np.median(samples.feature_counts)) if samples.feature_counts.size else None
-            ),
+            "median_feature_count": inputs.median_feature_count,
         },
         "calibration": calibration_report,
         "labels": None,
@@ -282,16 +240,97 @@ def run_candidates(
     return summary, candidates, frame_times
 
 
+class PoseHitLine(BaseModel):
+    """One ``--pose-hits-json`` entry: a contact from the swing pipeline."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    time_s: float
+    wrist_u_px: float | None = None
+    wrist_v_px: float | None = None
+    end: CourtEnd | None = None
+    confidence: float = 1.0
+    shot_type: str | None = None
+
+
+def load_pose_hits(path: Path | None) -> tuple[PoseHit, ...]:
+    if path is None:
+        return ()
+    hits = []
+    for row in json.loads(path.read_text(encoding="utf-8")):
+        line = PoseHitLine.model_validate(row)
+        wrist = (
+            None
+            if line.wrist_u_px is None or line.wrist_v_px is None
+            else (line.wrist_u_px, line.wrist_v_px)
+        )
+        hits.append(PoseHit(line.time_s, wrist, line.end, line.confidence, line.shot_type))
+    return tuple(hits)
+
+
+def run_events(
+    video: Path, taps_json: Path | None, pose_hits_json: Path | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Step 16: the whole court engine over one clip. Returns (summary, wire)."""
+    started = time.monotonic()
+    request = load_request(taps_json)
+    inputs = extract_court_inputs(video, request)
+    calibration = (
+        inputs.calibration_verdict.calibration if inputs.calibration_verdict is not None else None
+    )
+    frame_size = inputs.track_size or (1, 1)
+    result = analyze_court_session(
+        inputs.candidates,
+        inputs.frame_times_s,
+        calibration,
+        inputs.stability,
+        load_pose_hits(pose_hits_json),
+        court_format=request.court_format if request is not None else CourtFormat.SINGLES,
+        frame_size=frame_size,
+    )
+    wire = project_court_result(result, frame_size=frame_size)
+    summary: dict[str, Any] = {
+        "mode": "events",
+        "video": video.name,
+        "frames_decoded": int(inputs.frame_times_s.size),
+        "status": wire.status.value,
+        "refusal_reason": None if wire.refusal_reason is None else wire.refusal_reason.value,
+        "camera": wire.camera.verdict.value,
+        "calibration": calibration_summary(inputs),
+        "flights": len(result.flights),
+        "events": {
+            kind: sum(1 for e in result.events if e.kind.value == kind)
+            for kind in sorted({e.kind.value for e in result.events})
+        },
+        "landings": wire.summary.count,
+        "calls": {k.value: v for k, v in wire.summary.verdict_counts.items()},
+        "rallies": len(wire.rallies),
+        "elapsed_s": round(time.monotonic() - started, 2),
+    }
+    return summary, wire.model_dump(mode="json")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--mode", choices=["candidates"], default="candidates")
+    parser.add_argument("--mode", choices=["candidates", "events"], default="candidates")
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--taps-json", type=Path)
     parser.add_argument("--labels-jsonl", type=Path)
+    parser.add_argument("--pose-hits-json", type=Path, help="events mode: list of pose hits")
     parser.add_argument("--out", help="output name under backend/build/court_eval/")
     args = parser.parse_args(argv)
 
     destination = output_dir(args.out or args.video.stem)
+    if args.mode == "events":
+        events_summary, wire = run_events(args.video, args.taps_json, args.pose_hits_json)
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "court.json").write_text(json.dumps(wire, indent=2), encoding="utf-8")
+        (destination / "summary.json").write_text(
+            json.dumps(events_summary, indent=2), encoding="utf-8"
+        )
+        print(json.dumps(events_summary, indent=2))
+        print(f"wrote {destination}")
+        return 0
     summary, candidates, frame_times = run_candidates(args.video, args.taps_json, args.labels_jsonl)
     destination.mkdir(parents=True, exist_ok=True)
     np.save(destination / "candidates.npy", candidates)
