@@ -7,18 +7,27 @@ import '../models/ball_speed.dart';
 import '../models/chart_data.dart';
 import '../models/coaching_feedback.dart';
 import '../models/enums.dart';
-import '../models/key_numbers.dart';
 import '../models/metric_score.dart';
-import '../models/swing_advice.dart';
+import '../models/swing_coaching.dart';
+import '../widgets/coaching_list.dart';
 import '../widgets/content_width.dart';
 import '../widgets/skill_radar.dart';
-import '../widgets/swing_advice_list.dart';
 
 /// Renders one finished analysis.
 class ResultsScreen extends StatelessWidget {
-  const ResultsScreen({super.key, required this.analysis});
+  const ResultsScreen({
+    super.key,
+    required this.analysis,
+    this.offerRecordAnother = false,
+  });
 
   final AnalysisResponse analysis;
+
+  /// True when this screen follows a swing just recorded or chosen. A
+  /// practising player's next move is the next swing, so a pinned button takes
+  /// them straight back to the record screen with their settings intact. Off
+  /// when opened from history, where "record another" would be a non sequitur.
+  final bool offerRecordAnother;
 
   @override
   Widget build(BuildContext context) {
@@ -26,10 +35,23 @@ class ResultsScreen extends StatelessWidget {
     // Plain one-line coaching from the fixed rule table: every off-target
     // number, then a couple of in-range ones. Deterministic, so it is there
     // even when the AI feedback below is missing or fell back.
-    final List<AdviceBullet> notes = buildSwingAdvice(
-      buildKeyNumbers(analysis),
-      maxPraise: kResultsPraiseBullets,
-    );
+    final List<CoachingItem> coaching = buildCoaching(analysis);
+    final List<CoachingItem> allFixes = <CoachingItem>[
+      for (final CoachingItem c in coaching)
+        if (c.isOffTarget && c.advice != null) c,
+    ];
+    // A coach gives two or three things at a time, not every number at once.
+    // The rest are in "See all measurements", each with its gap.
+    final List<CoachingItem> fixes =
+        allFixes.take(kResultsFixItems).toList();
+    final int moreOffTarget = coaching
+            .where((CoachingItem c) => c.isOffTarget)
+            .length -
+        fixes.length;
+    final List<CoachingItem> praise = <CoachingItem>[
+      for (final CoachingItem c in coaching)
+        if (c.isInRange && c.advice != null) c,
+    ].take(kResultsPraiseItems).toList();
 
     // Debug-only. Nothing in this app surfaced guard diagnostics anywhere, so a
     // truncated Gemini draft looked identical to a normal template answer from
@@ -44,6 +66,20 @@ class ResultsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Your swing')),
+      bottomNavigationBar: offerRecordAnother
+          ? SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: FilledButton.icon(
+                  // The analysing screen replaced itself with this one, so a
+                  // pop lands on the record screen it came from.
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.videocam_outlined),
+                  label: const Text('Record another swing'),
+                ),
+              ),
+            )
+          : null,
       body: ContentWidth(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -64,13 +100,32 @@ class ResultsScreen extends StatelessWidget {
               _MismatchNote(analysis: analysis),
               const SizedBox(height: 16),
             ],
-            // The plain "do this" bullets lead: they are written for a
-            // beginner, and they come from the rule table, so they are here
-            // whether or not the AI feedback below arrived.
-            if (notes.isNotEmpty) ...<Widget>[
+            // What went wrong and how to fix it leads: each item is the
+            // change, the measured gap, and a drill. All from the fixed rule
+            // table, so it is here whether or not the AI feedback arrived.
+            if (fixes.isNotEmpty) ...<Widget>[
               _SectionCard(
-                title: 'Swing notes',
-                child: SwingAdviceList(bullets: notes),
+                title: kWorkOnTitle,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    CoachingList(items: fixes),
+                    if (moreOffTarget > 0) ...<Widget>[
+                      const Divider(height: 24),
+                      Text(
+                        moreOffTargetLine(moreOffTarget),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (praise.isNotEmpty) ...<Widget>[
+              _SectionCard(
+                title: kWorkingTitle,
+                child: CoachingList(items: praise),
               ),
               const SizedBox(height: 16),
             ],
@@ -89,7 +144,7 @@ class ResultsScreen extends StatelessWidget {
             // a swing is never left without a single positive.
             if (feedback != null &&
                 feedback.strengths.isNotEmpty &&
-                !notes.any((AdviceBullet b) => b.isPraise)) ...<Widget>[
+                praise.isEmpty) ...<Widget>[
               _SectionCard(
                 title: 'What is working',
                 child: Column(
@@ -117,14 +172,9 @@ class ResultsScreen extends StatelessWidget {
             // torso-unit figures are for advanced players, not a beginner.
             _CategoriesSection(analysis: analysis),
             if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
-            // Unscored metrics are left out of the list entirely, so an older
+            // Unscored metrics are left out by buildCoaching, so an older
             // backend's verdict and band for them are never shown.
-            _MetricsSection(
-              metrics: <MetricScore>[
-                for (final MetricScore m in analysis.metrics)
-                  if (!kUnscoredMetrics.contains(m.name)) m,
-              ],
-            ),
+            _MetricsSection(items: coaching),
           ],
         ),
       ),
@@ -650,19 +700,20 @@ class _CategoryRow extends StatelessWidget {
   }
 }
 
-/// Every scored raw measurement, behind an expander that starts closed.
-///
-/// Only [kUnscoredMetrics] are dropped, by the caller. It is collapsed so a
-/// beginner is not met with a page of torso-unit figures.
+/// Every scored measurement, behind an expander that starts closed: plain
+/// name, value in a readable unit, what it measures, the target and the gap.
 class _MetricsSection extends StatelessWidget {
-  const _MetricsSection({required this.metrics});
+  const _MetricsSection({required this.items});
 
-  final List<MetricScore> metrics;
+  final List<CoachingItem> items;
 
   @override
   Widget build(BuildContext context) {
-    if (metrics.isEmpty) return const SizedBox.shrink();
+    if (items.isEmpty) return const SizedBox.shrink();
     final ThemeData theme = Theme.of(context);
+    final bool anyTorso = items.any((CoachingItem c) =>
+        c.metric.unit == MetricUnit.torsoUnits ||
+        c.metric.unit == MetricUnit.torsoUnitsPerSec);
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
@@ -675,9 +726,13 @@ class _MetricsSection extends StatelessWidget {
         title: Text('See all measurements',
             style: theme.textTheme.titleMedium),
         children: <Widget>[
-          for (int i = 0; i < metrics.length; i++) ...<Widget>[
+          for (int i = 0; i < items.length; i++) ...<Widget>[
             if (i > 0) const Divider(height: 24),
-            _MetricRow(metric: metrics[i]),
+            _MetricRow(item: items[i]),
+          ],
+          if (anyTorso) ...<Widget>[
+            const Divider(height: 24),
+            Text(kTorsoLengthExplainer, style: theme.textTheme.bodySmall),
           ],
         ],
       ),
@@ -686,14 +741,16 @@ class _MetricsSection extends StatelessWidget {
 }
 
 class _MetricRow extends StatelessWidget {
-  const _MetricRow({required this.metric});
+  const _MetricRow({required this.item});
 
-  final MetricScore metric;
+  final CoachingItem item;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final String? band = metric.displayIdealBand;
+    final MetricScore metric = item.metric;
+    final String? target = item.targetText;
+    final String? what = item.what;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -705,33 +762,41 @@ class _MetricRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Expanded(
-              child: Text(metric.displayName,
-                  style: theme.textTheme.titleSmall),
+              child: Text(item.label, style: theme.textTheme.titleSmall),
             ),
             const SizedBox(width: 12),
             // Flexible so a long value at large text wraps instead of
-            // overflowing a narrow phone now the list can be opened there.
+            // overflowing a narrow phone.
             Flexible(
               child: Text(
-                metric.displayValue,
+                item.valueText,
                 textAlign: TextAlign.end,
-                style: metric.isMeasurable
+                style: item.isMeasured
                     ? theme.textTheme.titleSmall
                     : theme.textTheme.bodySmall,
               ),
             ),
           ],
         ),
+        if (what != null) ...<Widget>[
+          const SizedBox(height: 4),
+          Text(
+            what,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
         const SizedBox(height: 4),
         // One wrapping line rather than a Row of fixed pieces, so it cannot
         // overflow a narrow phone at large text. The verdict is left out for
         // an unmeasured value: the value already says "not measured".
         Text(
           <String>[
-            if (metric.isMeasurable ||
+            if (item.isMeasured ||
                 metric.verdict != MetricVerdict.unavailable)
               metric.verdict.label,
-            if (band != null) 'reference $band',
+            if (target != null) 'target $target',
+            if (item.isOffTarget && item.gapText != null) item.gapText!,
             if (metric.viewSensitive) 'camera-angle sensitive',
           ].join(' · '),
           style: theme.textTheme.bodySmall,
@@ -744,6 +809,23 @@ class _MetricRow extends StatelessWidget {
     );
   }
 }
+
+/// Section titles for the deterministic coaching.
+const String kWorkOnTitle = 'What to work on';
+const String kWorkingTitle = 'What is working';
+
+/// How many in-range items the results show.
+const int kResultsPraiseItems = 2;
+
+/// How many fixes the results lead with, most off-target first.
+const int kResultsFixItems = 3;
+
+/// PURE. The pointer to the off-target measurements not in the top fixes.
+String moreOffTargetLine(int count) => count == 1
+    ? '1 more measurement is off target. Fix these first, then check it '
+        'under "See all measurements" below.'
+    : '$count more measurements are off target. Fix these first, then check '
+        'them under "See all measurements" below.';
 
 /// A reference-band indicator: the ideal band as a filled segment, with the
 /// measured value marked on it. An unmeasurable value draws the band alone.

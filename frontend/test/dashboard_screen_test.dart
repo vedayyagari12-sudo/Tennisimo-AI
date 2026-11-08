@@ -114,21 +114,21 @@ void main() {
         );
         // No coverage on the hero, no swing notes: both would be fh1's.
         expect(find.textContaining('metrics measured'), findsNothing);
-        expect(find.text('Swing notes'), findsNothing);
+        expect(find.text('How to improve'), findsNothing);
         expect(find.text('Latest coverage'.toUpperCase()), findsNothing);
       },
     );
 
-    testWidgets('the forehand player sees plain swing notes, no torso units', (
+    testWidgets('the forehand player sees how to improve, no raw torso units', (
       WidgetTester tester,
     ) async {
       await _pumpDashboard(tester, forehandOnly());
       await tester.scrollUntilVisible(
-        find.text('Swing notes'),
+        find.text('How to improve'),
         300,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('Swing notes'), findsOneWidget);
+      expect(find.text('How to improve'), findsOneWidget);
       expect(
         find.text(
           'Swing a bit more from low to high — brush up the back of '

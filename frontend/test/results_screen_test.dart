@@ -72,9 +72,17 @@ List<Map<String, dynamic>> _unscoredWithVerdicts() => <Map<String, dynamic>>[
       },
     ];
 
+/// Tall enough that the lazy list builds every section, expander included.
+void _tallView(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 3000);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+}
+
 void main() {
   testWidgets('the score breakdown renders alongside the metric list',
       (WidgetTester tester) async {
+      _tallView(tester);
     await tester.pumpWidget(MaterialApp(
       home: ResultsScreen(analysis: AnalysisResponse.fromJson(_payload())),
     ));
@@ -95,6 +103,7 @@ void main() {
 
   testWidgets('an unmeasured category is never rendered as 0',
       (WidgetTester tester) async {
+      _tallView(tester);
     await tester.pumpWidget(MaterialApp(
       home: ResultsScreen(analysis: AnalysisResponse.fromJson(_payload())),
     ));
@@ -106,6 +115,7 @@ void main() {
 
   testWidgets('a payload with no categories omits the section entirely',
       (WidgetTester tester) async {
+      _tallView(tester);
     final Map<String, dynamic> json = _payload();
     (json['scorecard'] as Map<String, dynamic>).remove('categories');
     await tester.pumpWidget(MaterialApp(
@@ -133,6 +143,7 @@ void main() {
 
     testWidgets('is closed by default and opens to the full list',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
             analysis: AnalysisResponse.fromJson(withNullMetric())),
@@ -151,6 +162,7 @@ void main() {
 
     testWidgets('leaves out unscored metrics an older backend still scores',
         (WidgetTester tester) async {
+      _tallView(tester);
       final Map<String, dynamic> payload = _payload();
       ((payload['scorecard'] as Map<String, dynamic>)['metrics']
               as List<Map<String, dynamic>>)
@@ -181,6 +193,7 @@ void main() {
 
     testWidgets('leaves out unscored metrics sent without a verdict',
         (WidgetTester tester) async {
+      _tallView(tester);
       final Map<String, dynamic> payload = _payload();
       ((payload['scorecard'] as Map<String, dynamic>)['metrics']
               as List<Map<String, dynamic>>)
@@ -201,6 +214,7 @@ void main() {
 
     testWidgets('a list of only unscored metrics drops the expander',
         (WidgetTester tester) async {
+      _tallView(tester);
       final Map<String, dynamic> payload = _payload();
       (payload['scorecard'] as Map<String, dynamic>)['metrics'] =
           _unscoredWithVerdicts();
@@ -213,6 +227,7 @@ void main() {
 
     testWidgets('a null metric reads as not measured, never as 0 or the clip',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
             analysis: AnalysisResponse.fromJson(withNullMetric())),
@@ -252,8 +267,9 @@ void main() {
           'ideal_max': 160.0,
         };
 
-    testWidgets('swing notes sit directly under the score header',
+    testWidgets('what to work on sits directly under the score header',
         (WidgetTester tester) async {
+      _tallView(tester);
       // Tall enough that the lazy list builds every section.
       tester.view.physicalSize = const Size(800, 3000);
       tester.view.devicePixelRatio = 1.0;
@@ -266,7 +282,7 @@ void main() {
       ));
 
       final double header = tester.getTopLeft(find.text('overall')).dy;
-      final double notes = tester.getTopLeft(find.text('Swing notes')).dy;
+      final double notes = tester.getTopLeft(find.text('What to work on')).dy;
       final double summary = tester.getTopLeft(find.text('Coach summary')).dy;
       final double breakdown =
           tester.getTopLeft(find.text('Score breakdown')).dy;
@@ -275,8 +291,9 @@ void main() {
       expect(summary, lessThan(breakdown));
     });
 
-    testWidgets('praise in the swing notes replaces the AI strengths',
+    testWidgets('measured praise replaces the AI strengths',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(
@@ -286,13 +303,15 @@ void main() {
 
       expect(find.text('Nice arm shape when you hit — keep it up.'),
           findsOneWidget);
-      expect(find.text('What is working'), findsNothing);
+      // One "What is working" card: the measured one, not the AI's.
+      expect(find.text('What is working'), findsOneWidget);
       expect(find.text('Good separation between hips and shoulders.'),
           findsNothing);
     });
 
     testWidgets('the AI strengths show when the notes have no praise',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(
@@ -343,6 +362,7 @@ void main() {
 
     testWidgets('come from the rule table even when the AI fell back',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(withMetrics(
@@ -354,20 +374,27 @@ void main() {
         ),
       ));
 
-      expect(find.text('Swing notes'), findsOneWidget);
+      expect(find.text('What to work on'), findsOneWidget);
       expect(
         find.text('Looks like your arm is a bit bent when you hit — let it '
             'reach out a little more.'),
         findsOneWidget,
       );
-      expect(find.text('Elbow angle at contact 112° · ideal 120–160°'),
-          findsOneWidget);
+      // The number, the target and how far off — in readable units.
+      expect(
+        find.text('Elbow angle at contact: 112° · target 120–160° · '
+            '8° below target'),
+        findsOneWidget,
+      );
+      // And a drill to fix it.
+      expect(find.textContaining('Spacing drill'), findsOneWidget);
       // The AI card cites only hip_rotation_deg, which is unscored: hidden.
       expect(find.text('Turn your hips earlier'), findsNothing);
     });
 
     testWidgets('say nothing about a metric that was not measured',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(withMetrics(
@@ -378,12 +405,14 @@ void main() {
         ),
       ));
 
-      expect(find.text('Swing notes'), findsNothing);
-      expect(find.textContaining('Elbow angle'), findsNothing);
+      expect(find.text('What to work on'), findsNothing);
+      expect(find.text('What is working'), findsNothing);
+      expect(find.textContaining('Elbow angle at contact:'), findsNothing);
     });
 
     testWidgets('no note for unscored metrics an older backend still scores',
         (WidgetTester tester) async {
+      _tallView(tester);
       // Every metric left is unscored, so no note remains: the card is gone,
       // not an empty box.
       await tester.pumpWidget(MaterialApp(
@@ -394,7 +423,7 @@ void main() {
         ),
       ));
 
-      expect(find.text('Swing notes'), findsNothing);
+      expect(find.text('What to work on'), findsNothing);
       expect(find.textContaining('Looks like'), findsNothing);
       expect(find.textContaining('Nice '), findsNothing);
       expect(find.textContaining('Hip turn'), findsNothing);
@@ -404,6 +433,7 @@ void main() {
 
     testWidgets('fewer notes when the unscored metrics are absent',
         (WidgetTester tester) async {
+      _tallView(tester);
       await tester.pumpWidget(MaterialApp(
         home: ResultsScreen(
           analysis: AnalysisResponse.fromJson(withMetrics(
@@ -414,8 +444,8 @@ void main() {
         ),
       ));
 
-      expect(find.text('Swing notes'), findsOneWidget);
-      expect(find.textContaining('Elbow angle at contact 112°'),
+      expect(find.text('What to work on'), findsOneWidget);
+      expect(find.textContaining('Elbow angle at contact: 112°'),
           findsOneWidget);
     });
   });

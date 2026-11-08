@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
 import '../models/video_clip.dart';
+import '../services/capture_prefs.dart';
 import '../services/haptics.dart';
 import '../services/video_file_picker.dart';
 import '../services/video_intake.dart';
@@ -163,8 +164,34 @@ const String kShotTypeChoiceHelp =
 ///
 /// The camera is created at the device default frame rate. No frame rate is
 /// requested, forced, or defaulted (PIPELINE.md 11.5).
+/// Explains the start-delay control.
+const String kStartDelayHelp =
+    'Gives you time to walk to your spot after pressing Record. The 15-second '
+    'recording starts when the countdown ends.';
+
+/// PURE. The record button's label for the current state.
+String recordButtonLabel({
+  required bool isRecording,
+  required int? countdown,
+  required Duration remaining,
+  required int startDelaySeconds,
+}) {
+  if (isRecording) {
+    return 'Stop (${remaining.inSeconds.clamp(0, kMaxRecordingDuration.inSeconds)}s left)';
+  }
+  if (countdown != null) return 'Cancel (starts in ${countdown}s)';
+  if (startDelaySeconds > 0) return 'Record in ${startDelaySeconds}s';
+  return 'Record';
+}
+
 class RecordScreen extends StatefulWidget {
-  const RecordScreen({super.key});
+  const RecordScreen({
+    super.key,
+    this.prefsStore = const PreferencesCapturePrefsStore(),
+  });
+
+  /// Where the racket hand and start delay are remembered.
+  final CapturePrefsStore prefsStore;
 
   @override
   State<RecordScreen> createState() => _RecordScreenState();
@@ -226,17 +253,132 @@ class _RecordScreenState extends State<RecordScreen> {
   Handedness? _handedness;
   BallSpeedCalibration? _calibration;
 
+  /// True once the user has touched the handedness control in this session.
+  /// A slow prefs read must never overwrite a choice they just made.
+  bool _handednessTouched = false;
+
+  /// True when [_handedness] came from the previous session, not this one.
+  bool _handednessRemembered = false;
+
+  /// Seconds between pressing Record and the camera starting. A player filming
+  /// themselves alone has to walk 5-10 m to the baseline, and without a delay
+  /// that walk ate most of the 15-second window.
+  int _startDelaySeconds = 0;
+
+  /// Seconds left before recording starts, or null when no countdown is
+  /// running.
+  int? _countdown;
+  Timer? _countdownTimer;
+
   @override
   void initState() {
     super.initState();
     _setUpCamera();
+    _loadPrefs();
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _countdownTimer?.cancel();
     _controller?.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPrefs() async {
+    Handedness? hand;
+    int delay = 0;
+    try {
+      hand = await widget.prefsStore.readRacketHand();
+    } catch (_) {
+      // Nothing remembered. The user picks, as on a first run.
+    }
+    try {
+      delay = await widget.prefsStore.readStartDelay();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      if (hand != null && !_handednessTouched && !_intakeInFlight) {
+        _handedness = hand;
+        _handednessRemembered = true;
+      }
+      _startDelaySeconds = delay;
+    });
+  }
+
+  void _setHandedness(Handedness? hand) {
+    setState(() {
+      _handedness = hand;
+      _handednessTouched = true;
+      _handednessRemembered = false;
+    });
+    unawaited(_savePref(() => widget.prefsStore.writeRacketHand(hand)));
+  }
+
+  void _setStartDelay(int seconds) {
+    setState(() => _startDelaySeconds = seconds);
+    unawaited(_savePref(() => widget.prefsStore.writeStartDelay(seconds)));
+  }
+
+  Future<void> _savePref(Future<void> Function() write) async {
+    try {
+      await write();
+    } catch (_) {
+      // Not remembered next time. Nothing the user needs to hear about.
+    }
+  }
+
+  void _onRecordPressed() {
+    if (_isRecording) {
+      unawaited(_stopRecording());
+    } else if (_countdown != null) {
+      _cancelCountdown();
+    } else if (_startDelaySeconds > 0) {
+      _beginCountdown();
+    } else {
+      unawaited(_startRecording());
+    }
+  }
+
+  /// Holds the intake (so the hints are locked exactly as during a recording)
+  /// and ticks down once a second, then starts the real capture.
+  void _beginCountdown() {
+    final CameraController? controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (_isRecording || _intakeInFlight) return;
+    setState(() {
+      _intakeInFlight = true;
+      _countdown = _startDelaySeconds;
+    });
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      final int next = (_countdown ?? 1) - 1;
+      if (next > 0) {
+        setState(() => _countdown = next);
+        return;
+      }
+      t.cancel();
+      _countdownTimer = null;
+      setState(() {
+        _countdown = null;
+        // Handed straight to _startRecording, which re-takes the lock
+        // synchronously before its first await.
+        _intakeInFlight = false;
+      });
+      unawaited(_startRecording());
+    });
+  }
+
+  void _cancelCountdown() {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    setState(() {
+      _countdown = null;
+      _intakeInFlight = false;
+    });
   }
 
   Future<void> _setUpCamera() async {
@@ -562,10 +704,17 @@ class _RecordScreenState extends State<RecordScreen> {
               // the clip exists is either meaningless or a crash.
               onSelectionChanged: _intakeInFlight
                   ? null
-                  : (Set<Handedness> selection) => setState(
-                      () => _handedness =
-                          selection.isEmpty ? null : selection.first),
+                  : (Set<Handedness> selection) => _setHandedness(
+                      selection.isEmpty ? null : selection.first),
             ),
+            if (_handednessRemembered && _handedness != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Remembered from last time. Tap to change.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
             if (_handedness == null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -642,6 +791,22 @@ class _RecordScreenState extends State<RecordScreen> {
                   limit: kMaxRecordingDuration,
                 ),
               ),
+            // Huge on purpose: it has to be readable from the baseline.
+            if (_countdown != null)
+              ColoredBox(
+                color: Colors.black38,
+                child: Center(
+                  child: Text(
+                    '$_countdown',
+                    key: const ValueKey<String>('start-countdown'),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 160,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -654,9 +819,9 @@ class _RecordScreenState extends State<RecordScreen> {
     final bool ready = _controller != null &&
         _controller!.value.isInitialized &&
         _handedness != null &&
-        // Live while recording (that is the Stop button), dead at every other
-        // point of an intake.
-        (_isRecording || !_intakeInFlight);
+        // Live while recording (the Stop button) and while counting down (the
+        // Cancel button), dead at every other point of an intake.
+        (_isRecording || _countdown != null || !_intakeInFlight);
     final Duration remaining = kMaxRecordingDuration - _elapsed;
 
     return Column(
@@ -670,20 +835,47 @@ class _RecordScreenState extends State<RecordScreen> {
             ),
           if (_isRecording) const SizedBox(height: 8),
           FilledButton.icon(
-            onPressed: !ready
-                ? null
-                : (_isRecording ? _stopRecording : _startRecording),
-            icon: Icon(_isRecording ? Icons.stop : Icons.fiber_manual_record),
-            label: Text(
-              _isRecording
-                  ? 'Stop (${remaining.inSeconds.clamp(0, 15)}s left)'
-                  : 'Record',
-            ),
+            onPressed: !ready ? null : _onRecordPressed,
+            icon: Icon(_isRecording
+                ? Icons.stop
+                : (_countdown != null
+                    ? Icons.close
+                    : (_startDelaySeconds > 0
+                        ? Icons.timer_outlined
+                        : Icons.fiber_manual_record))),
+            label: Text(recordButtonLabel(
+              isRecording: _isRecording,
+              countdown: _countdown,
+              remaining: remaining,
+              startDelaySeconds: _startDelaySeconds,
+            )),
           ),
           const SizedBox(height: 6),
           Text(
             'Recording stops automatically at '
             '${kMaxRecordingDuration.inSeconds} seconds.',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Text('Start delay', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 6),
+          SegmentedButton<int>(
+            segments: <ButtonSegment<int>>[
+              for (final int s in kStartDelayChoices)
+                ButtonSegment<int>(
+                  value: s,
+                  label: Text(s == 0 ? 'Off' : '$s s'),
+                ),
+            ],
+            selected: <int>{_startDelaySeconds},
+            onSelectionChanged: _intakeInFlight
+                ? null
+                : (Set<int> selection) => _setStartDelay(selection.first),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            kStartDelayHelp,
+            textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall,
           ),
         ],
@@ -782,7 +974,10 @@ class _RecordScreenState extends State<RecordScreen> {
 
   Widget _buildCalibrationSection(ThemeData theme) {
     final bool ready =
-        _controller != null && _controller!.value.isInitialized && !_isRecording;
+        _controller != null &&
+        _controller!.value.isInitialized &&
+        !_isRecording &&
+        !_intakeInFlight;
     final BallSpeedCalibration? calibration = _calibration;
 
     return Card(

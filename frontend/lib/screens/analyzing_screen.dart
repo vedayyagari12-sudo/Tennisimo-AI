@@ -195,7 +195,7 @@ class _AnalyzingScreenState extends State<AnalyzingScreen> {
     await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
         builder: (BuildContext context) =>
-            ResultsScreen(analysis: analysis.data!),
+            ResultsScreen(analysis: analysis.data!, offerRecordAnother: true),
       ),
     );
   }

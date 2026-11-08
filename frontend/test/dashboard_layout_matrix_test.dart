@@ -514,7 +514,9 @@ void _resultsScreenTests() {
 
             if (expanded) {
               final Finder toggle = find.text('See all measurements');
-              await tester.scrollUntilVisible(toggle, 300,
+              // 600 px steps: at 2x text on a 320 px phone the coaching above
+              // the expander runs past 300 x 50 (the helper's iteration cap).
+              await tester.scrollUntilVisible(toggle, 600,
                   scrollable: find.byType(Scrollable).first);
               await tester.ensureVisible(toggle);
               await tester.pumpAndSettle();

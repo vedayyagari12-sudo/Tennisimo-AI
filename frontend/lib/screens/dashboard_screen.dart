@@ -7,8 +7,8 @@ import '../models/analysis_response.dart';
 import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
 import '../models/enums.dart';
-import '../models/key_numbers.dart';
 import '../models/swing_advice.dart';
+import '../models/swing_coaching.dart';
 import '../services/api_client.dart';
 import '../services/account_deletion.dart';
 import '../services/api_client.dart' as api
@@ -19,6 +19,7 @@ import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
+import '../widgets/coaching_list.dart';
 import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/focus_card.dart';
@@ -29,11 +30,13 @@ import '../widgets/shot_mix_chart.dart';
 import '../widgets/shot_type_section.dart';
 import '../widgets/skeleton_block.dart';
 import '../widgets/skill_radar.dart';
-import '../widgets/swing_advice_list.dart';
 import 'home_shell.dart';
 import 'login_screen.dart';
 import 'record_screen.dart';
 import 'results_screen.dart';
+
+/// The dashboard's coaching section title.
+const String kDashboardImproveTitle = 'How to improve';
 
 /// Where the dashboard gets its data: the history list, the per-analysis
 /// details, and the signed-in account.
@@ -506,23 +509,28 @@ class DashboardScreenState extends State<DashboardScreen> {
     ];
   }
 
-  /// The newest clip's top few plain coaching bullets, from the fixed rule
-  /// table in `swing_advice.dart` — not from AI text.
+  /// The newest clip's top fixes — each with the measured gap and a drill —
+  /// and one thing that is working. From the fixed rule table in
+  /// `swing_coaching.dart`, not from AI text.
   ///
   /// Silent when the newest clip's detail is not loaded (the breakdown block
   /// above already says so) or produced nothing to say.
   List<Widget> _buildSwingNotes() {
     final AnalysisResponse? latest = _latestDetail;
     if (latest == null) return const <Widget>[];
-    final List<AdviceBullet> bullets = buildSwingAdvice(
-      buildKeyNumbers(latest),
-      maxFixes: kDashboardFixBullets,
-      maxPraise: kDashboardPraiseBullets,
-    );
-    if (bullets.isEmpty) return const <Widget>[];
+    final List<CoachingItem> coaching = buildCoaching(latest);
+    final List<CoachingItem> items = <CoachingItem>[
+      ...coaching
+          .where((CoachingItem c) => c.isOffTarget && c.advice != null)
+          .take(kDashboardFixBullets),
+      ...coaching
+          .where((CoachingItem c) => c.isInRange && c.advice != null)
+          .take(kDashboardPraiseBullets),
+    ];
+    if (items.isEmpty) return const <Widget>[];
     return <Widget>[
-      const SectionHeader(title: 'Swing notes'),
-      AppCard(child: SwingAdviceList(bullets: bullets)),
+      const SectionHeader(title: kDashboardImproveTitle),
+      AppCard(child: CoachingList(items: items)),
       const SizedBox(height: AppSpacing.lg),
     ];
   }
