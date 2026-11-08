@@ -52,7 +52,7 @@ Branch `worktree-phase-2-ball-court`. Everything below is pure or offline code w
 
 **Still to do, blocked on owner decisions or footage**
 - Slice 0 experiment and Phase 2 footage (real accuracy, Decision 2).
-- Slices 2-8: Part 9 SQL, routes, Job, upload, screens. Needs Decision 1 (paid Supabase plan) and Decision 2 (launch limit).
+- Slices 2-8: Part 9 SQL, routes, Job, upload, screens. Storage is decided (Decision 1: free Cloud Storage bucket in us-east1, video deleted after processing); still blocked on Phase 1 and Decision 2 (launch limit, recommended 10 minutes).
 
 ---
 
@@ -67,7 +67,7 @@ The recommended shape:
 | Segmentation | One new pure module finds swings and slices the keypoints. Existing Stages 7-9 and 12-15 run unchanged on each slice. |
 | Compute | One Cloud Run Job per session, separate from the API service. Scale to zero, about $0.06-0.11 per 20-minute session (estimate, section 6). |
 | Storage | New `sessions` and `session_swings` tables. Swings never enter `analyses`, so older app builds keep working. |
-| Upload | TUS resumable upload direct to Supabase Storage. Requires a paid Supabase plan and a new client path, because the current path reads the whole file into RAM. |
+| Upload | Resumable upload direct to a Google Cloud Storage bucket in us-east1 by a signed URL (Decision 1, free tier), deleted after processing. Needs a new client path, because the current path reads the whole file into RAM. |
 | Limits | Launch at 10 minutes and 1 GiB, raise to 20 minutes once measured. Single-swing limits do not change. |
 | UI | New screens using the existing navigation, widgets and palette: stat wrap-up, video with synced shot list, filter chips, dead-time skipping. `ResultsScreen` is reused for swing detail. |
 
@@ -1480,7 +1480,7 @@ The riskiest assumption is in section 1 and is not repeated here.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | Move Supabase to a paid plan. Session Mode cannot run on the free per-file and project storage limits. | **Partly settled by Decision 3 (2026-11-08).** Deleting each video after processing removes most of the project-storage pressure, though the free 1 GB still holds only about three 10-minute uploads in flight at once. The free plan's 50 MB per-file cap is still far below a 10-minute file (about 300 MB), so slice 2 still needs one of: the paid plan, uploading to a Cloud Storage bucket in the Cloud Run project instead, or splitting the upload into parts. Owner to choose. |
+| 1 | Move Supabase to a paid plan. Session Mode cannot run on the free per-file and project storage limits. | **Owner decided (2026-11-08): stay free.** Session videos do not go to Supabase Storage. They upload to a Google Cloud Storage bucket in `us-east1`, the Cloud Run region, by a resumable signed URL the API issues. Always Free covers 5 GB-months of Standard storage in us-east1, us-west1 and us-central1 **[verify on Google's free-tier page before slice 2]**, with no 50 MB per-file cap. Because each video is deleted when processing ends (Decision 3), a 10-minute upload of about 300 MB stays far under 5 GB. The bucket gets a lifecycle rule deleting objects older than 2 days as a backstop. Supabase keeps auth and rows on the free plan; single-swing uploads are unchanged. |
 | 2 | Launch duration limit. | **10 minutes,** raise to 20 only with measured processing at or below 1.5× real time. |
 | 3 | Default raw-video retention. | **Owner decided (2026-11-08): delete the video as soon as processing ends.** Only the derived numbers are kept. See Retention below for what this removes. |
 | 4 | Age policy and legal review before public release. | **Add an age step and privacy policy, and get legal review.** Keep Session Mode allowlisted until then. Decide explicitly whether under-13s are allowed, and treat the `school` flavour separately. |
