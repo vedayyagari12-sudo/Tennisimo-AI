@@ -41,6 +41,7 @@ from app.ball.flight_detector import (
     FLIGHT_CANDIDATE_DTYPE,
     court_roi_mask,
     expected_diameter_fn,
+    max_diameter_fn,
     find_flight_candidates,
 )
 from app.ball.flight_frames import ClipProbe, iter_track_frames, probe_court_clip
@@ -103,6 +104,7 @@ def extract_court_inputs(
     verdict: CalibrationVerdict | None = None
     roi: npt.NDArray[np.uint8] | None = None
     diameter: Callable[[float, float], float] | None = None
+    largest: Callable[[float, float], float] | None = None
     track_size: tuple[int, int] | None = None
 
     for index, (pts_s, bgr) in enumerate(iter_track_frames(video, probe)):
@@ -117,13 +119,14 @@ def extract_court_inputs(
                 if verdict.calibration is not None:
                     roi = court_roi_mask(verdict.calibration, track_size)
                     diameter = expected_diameter_fn(verdict.calibration)
+                    largest = max_diameter_fn(verdict.calibration)
         times.append(pts_s)
         sampler.add(pts_s, bgr)
         window.append((pts_s, cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bgr))
         if len(window) == 3:
             (_, prev_gray, _), (cur_s, cur_gray, cur_bgr), (_, next_gray, _) = window
             found = find_flight_candidates(
-                prev_gray, cur_gray, next_gray, cur_bgr, index - 1, cur_s, roi, diameter
+                prev_gray, cur_gray, next_gray, cur_bgr, index - 1, cur_s, roi, diameter, largest
             )
             chunks.append(found)
             per_frame.append(len(found))

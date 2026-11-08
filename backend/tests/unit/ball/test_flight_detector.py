@@ -267,10 +267,14 @@ def test_size_gate_rejects_blobs_far_larger_than_expected() -> None:
 
 
 def test_colour_is_a_score_below_4_px_and_a_gate_above() -> None:
-    frames, truth = moving_ball_frames(8.0, bgr=GREY_BGR, step=16.0)
-    below = detect_middle(frames, expected_diameter_px=lambda x, y: COLOUR_GATE_DIAMETER_PX - 1.0)
+    small, _ = moving_ball_frames(3.0, bgr=GREY_BGR, step=16.0)
+    below = detect_middle(small, expected_diameter_px=lambda x, y: COLOUR_GATE_DIAMETER_PX - 1.0)
     assert len(below) == 1 and below[0]["colour_score"] == 0.0
+    frames, truth = moving_ball_frames(8.0, bgr=GREY_BGR, step=16.0)
     assert len(detect_middle(frames, expected_diameter_px=lambda x, y: 8.0)) == 0
+    # The blob's OWN size triggers the gate too (T2: far-court clutter 4+ px
+    # across where the ground estimate said 2 px).
+    assert len(detect_middle(frames, expected_diameter_px=lambda x, y: COLOUR_GATE_DIAMETER_PX - 1.0)) == 0
     yellow, _ = moving_ball_frames(8.0, step=16.0)
     above = detect_middle(yellow, expected_diameter_px=lambda x, y: 8.0)
     assert len(above) == 1 and above[0]["colour_score"] > 0.5
@@ -405,3 +409,33 @@ def test_t1_far_court_ball_found_where_existing_detector_finds_nothing() -> None
         existing = find_candidates(frames[1], background, index)
         assert all(math.hypot(c.x - truth[0], c.y - truth[1]) > 3.0 for c in existing)
     assert ours / len(chosen) >= 0.8
+
+
+
+# ------------------------------------------------ T2 fixes (2026-11-08)
+
+
+def test_max_diameter_exceeds_the_ground_estimate_for_an_airborne_ball() -> None:
+    """Regression (T2 seed 20270000): a ball 2.8 m up over the net measured
+    6.4 px against 1.2 px expected on the ground, and the size gate dropped it."""
+    from app.ball.flight_detector import max_diameter_fn
+
+    camera = look_at_camera()
+    calibration = calibration_for(camera)
+    ground = expected_diameter_fn(calibration)
+    largest = max_diameter_fn(calibration)
+    ball = np.array([[0.0, 0.0, 2.8]])
+    u, v = camera.project(ball)[0]
+    true_diameter = 0.067 * camera.focal_px / math.dist((0.0, 0.0, 2.8), camera.position_m)
+    assert ground(u, v) < true_diameter <= largest(u, v)
+
+
+def test_a_faint_blob_below_the_contrast_floor_is_dropped() -> None:
+    from app.ball.flight_detector import MIN_CONTRAST_FACTOR, MOTION_DIFF_FLOOR
+
+    faint, _ = moving_ball_frames(3.0, bgr=(120, 120, 120), step=16.0)
+    strong, truth = moving_ball_frames(3.0, step=16.0)
+    assert MIN_CONTRAST_FACTOR * MOTION_DIFF_FLOOR > 0
+    assert nearest(detect_middle(strong), truth) <= 0.75
+    found = detect_middle(faint)
+    assert all(float(r["contrast"]) >= MIN_CONTRAST_FACTOR * MOTION_DIFF_FLOOR for r in found)

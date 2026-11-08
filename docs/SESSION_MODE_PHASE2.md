@@ -1340,6 +1340,32 @@ Default scene: H = 3.5 m, 6 m back, 60 fps, at least 100 seeded rallies at T0, a
 
 **Calibration of `SIGMA_INFLATION`:** set once from T2, to bring coverage into range, recorded and frozen. If it needs to exceed 1.5, treat that as a bug in the covariance.
 
+### 11.2.1 Measured results (2026-11-08)
+
+T0: `tests/unit/analysis/test_court_e2e_t0.py`, 100 distinct seeds over every scenario except double fault (`t0_records` projects only the first ball). T2: `tests/unit/ball/test_court_e2e_pixels.py` (`court_pixels`), clean-rally seeds 20270001-04.
+
+| Measure | T0 | T2 1080p60 | T2 720p60 | Target (T0 / T2) |
+|---|---|---|---|---|
+| Bounce precision | 0.998 | 1.00 | 0.62 | 0.98 / 0.90 |
+| Point-deciding bounce recall | 0.993 | 0.63 | 0.50 | 0.98 / 0.90 |
+| All in-frame bounce recall | 0.919 | 0.50 | 0.40 | 0.98 / 0.90 |
+| Median bounce error, near | 0.008 m | 0.012 m | 0.018 m | 0.05 / 0.10 m |
+| Median along-court error, far | 0.029 m | 0.087 m | 0.027 m | 0.20 / 0.35 m |
+| In/out accuracy outside the band | 0.996 | 1.00 | 0.86 | 0.995 / 0.99 |
+| Confident wrong per 1000 | 0 | 0 | 0 | 5 / 10 |
+| Band coverage | 0.996 | 1.00 (n = 7) | 1.00 | 0.92-0.98 / 0.90-0.98 |
+| Rally exact / within one / range | 0.99 / 0.99 / 1.00 | 0.50 / 0.50 / 1.00 | 0.33 / 0.67 / 1.00 | 0.95 / 0.99 / 0.99 |
+| Point suggestions wrong | 0 of 51 (38 to review) | n/a | n/a | 1 % |
+| `too_close` rate near / far | 0.00 / 0.008 | 0.00 / 0.00 | 0.20 / 0.00 | report |
+
+Read with care:
+- **All-bounce recall** misses at T0 are dead-ball bounces after the point. They decide nothing, so the gate uses point-deciding recall.
+- **T2 recall and rally exactness are NOT met.** Misses are bounces at flight joins and tracks fragmented near the far player: event-layer work, best driven by real footage rather than this renderer. `test_t2_bounce_recall_meets_the_design_target` is a strict xfail so it flips when fixed.
+- **`SIGMA_INFLATION` is frozen at 1.0.** Coverage is above the band at both tiers, so the covariance is conservative; it was not narrowed on synthetic data (`line_calls.py`).
+- **Too-close rates do not show the 6.4 trend** (falling with resolution, rising with distance) at these sample sizes; four T2 rallies give 6-8 judged calls per resolution. Not resolved; needs the larger T2 set or real footage.
+
+Bugs this evaluation found and fixed, each with a test: whole flights rejected by a first-to-last displacement check and by one rough window; net balls called IN on the far half; a far player's hit read as an OUT bounce; dead-ball, split, own-side and impossible-crossing hits miscounted in rallies; ~50 noise candidates per T2 frame; airborne balls dropped by a ground-plane size gate; far-player clutter passing because colour was judged only by expected size.
+
 ### 11.3 Real-clip smoke run
 
 The 16 clips cannot validate in/out, depth, rally or scoring. None has a rally, a whole-flight ball, or a fixed camera on a full court.

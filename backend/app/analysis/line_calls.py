@@ -69,7 +69,12 @@ LINE_CALLS_VERSION: Final[str] = "line_calls_v1"
 #: 6.3: the ball's contact patch counts toward IN [estimate, verify].
 BALL_CONTACT_PATCH_RADIUS_M: Final[float] = 0.02
 LINE_CALL_Z: Final[float] = 1.96
-#: Set only from section 11 coverage; 1.0 until then.
+#: FROZEN at 1.0 on 2026-11-08 from section 11 coverage. Band coverage (true
+#: margin within +/- r) was 0.996 at T0 (255 calls, 100 seeds) and 1.0 at T2
+#: 1080p (7 calls): ABOVE the 0.92-0.98 target, so the covariance is, if
+#: anything, conservative. Inflation only widens it (design: > 1.5 means a
+#: covariance bug), and narrowing on synthetic data alone would raise the
+#: risk of confident wrong calls on real footage. Revisit with owner footage.
 SIGMA_INFLATION: Final[float] = 1.0
 
 _EDGE_NORMALS: Final[dict[str, tuple[float, float]]] = {

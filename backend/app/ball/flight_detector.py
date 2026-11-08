@@ -64,6 +64,12 @@ U8Array = npt.NDArray[np.uint8]
 #: Design 4.3: tau = max(8, 4 x MAD of the frame difference).
 MOTION_DIFF_FLOOR: Final[int] = 8
 MOTION_DIFF_MAD_FACTOR: Final[float] = 4.0
+#: A candidate's peak motion strength must reach this multiple of the frame's
+#: motion threshold. T2 (noise sigma 3, JPEG 60-85, drift) at 1080p: clutter
+#: has median strength 12 and P95 22 over a threshold of 8, the ball P1 18
+#: (far) and 81 (near). 2.5x keeps the ball and drops most of the clutter.
+#: Relative to the measured noise floor, so it scales with real footage.
+MIN_CONTRAST_FACTOR: Final[float] = 2.5
 #: Design 4.3: a 2x2 close, no open.
 CLOSE_KERNEL: Final[U8Array] = np.ones((2, 2), dtype=np.uint8)
 #: Paired anchors that make dilate-then-erode a true, shift-free closing.
@@ -86,6 +92,12 @@ COLOUR_GATE_DIAMETER_PX: Final[float] = 4.0
 #: At or above COLOUR_GATE_DIAMETER_PX, at least this fraction of the moving
 #: pixels must pass ``colour_mask``. Starting value; tune on T1/T2 only.
 COLOUR_GATE_MIN_SCORE: Final[float] = 0.2
+#: Precision first: a false landing on the shot map misleads; a missed one is
+#: only absent. T2 1080p, 4 seeds: this setting gave bounce precision 1.00 /
+#: recall 0.50; the looser (5 px, 0.1) gave 0.69 / 0.55. Neither meets the
+#: design 11.2 T2 targets; real footage decides (synthetic-tuned placeholder).
+OWN_SIZE_COLOUR_GATE_PX: Final[float] = 4.0
+OWN_SIZE_COLOUR_MIN_SCORE: Final[float] = 0.2
 
 #: Brief Constants / design 4.3: court polygon plus 4 m run-off ...
 RUNOFF_M: Final[float] = 4.0
@@ -119,17 +131,18 @@ def _close_2x2(mask: U8Array) -> U8Array:
 
 def _double_difference(
     prev_gray: U8Array, cur_gray: U8Array, next_gray: U8Array
-) -> tuple[U8Array, U8Array]:
-    """(closed mask 0/255, strength = min(|d_before|, |d_after|))."""
+) -> tuple[U8Array, U8Array, int]:
+    """(closed mask 0/255, strength = min(|d_before|, |d_after|), threshold)."""
     if not (prev_gray.shape == cur_gray.shape == next_gray.shape) or cur_gray.ndim != 2:
         raise ValueError("expected three single-channel frames of one shape")
     before = cur_gray.astype(np.int16) - prev_gray.astype(np.int16)
     after = next_gray.astype(np.int16) - cur_gray.astype(np.int16)
     abs_before = np.abs(before).astype(np.uint8)
     abs_after = np.abs(after).astype(np.uint8)
-    moving = (abs_before > _mad_threshold(before)) & (abs_after > _mad_threshold(after))
+    threshold_before, threshold_after = _mad_threshold(before), _mad_threshold(after)
+    moving = (abs_before > threshold_before) & (abs_after > threshold_after)
     mask = _close_2x2(moving.astype(np.uint8) * 255)
-    return mask, np.minimum(abs_before, abs_after)
+    return mask, np.minimum(abs_before, abs_after), max(threshold_before, threshold_after)
 
 
 def double_difference_mask(prev_gray: U8Array, cur_gray: U8Array, next_gray: U8Array) -> U8Array:
@@ -183,6 +196,7 @@ def find_flight_candidates(
     time_s: float,
     roi_mask: U8Array | None = None,
     expected_diameter_px: Callable[[float, float], float] | None = None,
+    max_diameter_px: Callable[[float, float], float] | None = None,
 ) -> npt.NDArray[np.void]:
     """Ball candidates in ``cur``, as ``FLIGHT_CANDIDATE_DTYPE`` records in
     raster order of the connected components.
@@ -190,8 +204,11 @@ def find_flight_candidates(
     ``roi_mask`` (0/255, frame-sized) limits where motion counts.
     ``expected_diameter_px(x, y)`` is the ball's expected diameter in pixels at
     an image point, or None when there is no calibration.
+    ``max_diameter_px(x, y)`` is the largest it could be there (an airborne
+    ball is nearer than the ground point); the size gate uses it when given.
     """
-    mask, strength = _double_difference(prev_gray, cur_gray, next_gray)
+    mask, strength, threshold = _double_difference(prev_gray, cur_gray, next_gray)
+    min_contrast = MIN_CONTRAST_FACTOR * threshold
     if roi_mask is not None:
         mask = cv2.bitwise_and(mask, roi_mask)
     count, labels, stats, centroids = cv2.connectedComponentsWithStats(
@@ -220,7 +237,12 @@ def find_flight_candidates(
         if shape is None:
             continue
         major, minor, orientation = shape
-        if diameter is not None and minor > SIZE_GATE_FACTOR * diameter + SIZE_GATE_MARGIN_PX:
+        ceiling = diameter
+        if max_diameter_px is not None and diameter is not None:
+            largest = float(max_diameter_px(cx, cy))
+            if math.isfinite(largest) and largest > diameter:
+                ceiling = largest
+        if ceiling is not None and minor > SIZE_GATE_FACTOR * ceiling + SIZE_GATE_MARGIN_PX:
             continue
 
         colour = colour_mask(np.ascontiguousarray(cur_bgr[y0:y1, x0:x1]))
@@ -231,7 +253,15 @@ def find_flight_candidates(
             and colour_score < COLOUR_GATE_MIN_SCORE
         ):
             continue
+        # Also judge colour once the blob ITSELF is big enough to have one:
+        # far-court clutter from a player's edges is 5+ px across where the
+        # ground-plane estimate says 2, and passed (82 % of such clutter scores
+        # under 0.2 against 6 % of ball blobs, T2 seed 20270001).
+        if minor >= OWN_SIZE_COLOUR_GATE_PX and colour_score < OWN_SIZE_COLOUR_MIN_SCORE:
+            continue
         contrast = float(np.max(strength[y0:y1, x0:x1][component]))
+        if contrast < min_contrast:
+            continue
         records.append(
             (int(frame_index), float(time_s), cx, cy, float(area), minor, major, orientation,
              colour_score, contrast)
@@ -247,6 +277,48 @@ def expected_diameter_fn(calibration: CourtCalibration) -> Callable[[float, floa
 
     def diameter(u_px: float, v_px: float) -> float:
         return BALL_DIAMETER_M * image_scale_px_per_m(pose, h_ic, (u_px, v_px))
+
+    return diameter
+
+
+def max_diameter_fn(calibration: CourtCalibration) -> Callable[[float, float], float]:
+    """The LARGEST diameter a ball at an image point could have: f x 0.067 /
+    range to the NEAREST point of its camera ray inside the playing volume
+    (the court plus ``RUNOFF_M``, up to ``ROI_HEIGHT_M``).
+
+    ``expected_diameter_fn`` assumes the ball is on the ground. An airborne
+    ball sits between the camera and that ground point, so it is bigger: a
+    ball 2.8 m up over the net measured 6.4 px against 1.2 px expected, and the
+    size gate threw it away for 40 consecutive frames (T2 seed 20270000). An
+    upper gate must use the nearest plausible point, not the ground.
+    """
+    pose = calibration.pose
+    m = pose.projection_matrix
+    centre = np.asarray(pose.position_m, dtype=np.float64)
+    near_y = -(HALF_LENGTH_M + RUNOFF_M)
+    far_y = HALF_LENGTH_M + RUNOFF_M
+    ground = expected_diameter_fn(calibration)
+
+    def diameter(u_px: float, v_px: float) -> float:
+        direction = np.linalg.solve(m[:, :3], np.array([u_px, v_px, 1.0]))
+        norm = float(np.linalg.norm(direction))
+        if norm == 0.0:
+            return ground(u_px, v_px)
+        direction = direction / norm
+        if direction[1] < 0.0:  # pointing away from the court: use its sign
+            direction = -direction
+        # Smallest reach along the ray that is inside the volume.
+        reach = 0.0
+        if centre[1] < near_y and direction[1] > 0.0:
+            reach = max(reach, (near_y - centre[1]) / direction[1])
+        if centre[2] > ROI_HEIGHT_M and direction[2] < 0.0:
+            reach = max(reach, (ROI_HEIGHT_M - centre[2]) / direction[2])
+        if reach <= 0.0 or not math.isfinite(reach):
+            return ground(u_px, v_px)
+        point = centre + reach * direction
+        if point[1] > far_y:
+            return ground(u_px, v_px)
+        return max(pose.focal_px * BALL_DIAMETER_M / reach, ground(u_px, v_px))
 
     return diameter
 
