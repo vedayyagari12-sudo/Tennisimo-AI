@@ -22,6 +22,15 @@ String? lineCallSentence(LineCall? call) {
 const String kNoCallText =
     'No line call. Tap at least 8 court points when you set up to get in or out calls.';
 
+/// Backend flag on a landing at the net: which side it fell is not measurable.
+const String kAtNetFlag = 'at_net';
+const String kAtNetText =
+    'Landed at the net. Which side it fell on cannot be measured, so it is not called.';
+
+/// Why a landing has no call, in words the player can act on.
+String noCallText(ShotLanding landing) =>
+    landing.flags.contains(kAtNetFlag) ? kAtNetText : kNoCallText;
+
 /// One landing's call. "Too close to call" is a calm, neutral state: the
 /// ball was nearer the line than we can measure, which is not a failure.
 class LineCallCard extends StatelessWidget {
@@ -74,7 +83,7 @@ class LineCallCard extends StatelessWidget {
               Text(lineCallSentence(call)!, style: theme.textTheme.bodyMedium),
             ] else ...<Widget>[
               const SizedBox(height: AppSpacing.sm),
-              Text(kNoCallText, style: theme.textTheme.bodyMedium),
+              Text(noCallText(landing), style: theme.textTheme.bodyMedium),
             ],
             if (onViewVideo != null) ...<Widget>[
               const SizedBox(height: AppSpacing.md),

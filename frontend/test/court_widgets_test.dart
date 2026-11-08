@@ -132,6 +132,14 @@ void main() {
       expect(find.text('View in video'), findsOneWidget);
     });
 
+    testWidgets('a landing at the net says why it is not called', (WidgetTester tester) async {
+      final ShotLanding atNet = ShotLanding.fromJson(
+          landingJson(id: 'b_net', x: 0.2, y: 0.1, verdict: null)..['flags'] = <String>['at_net']);
+      await tester.pumpWidget(_host(LineCallCard(landing: atNet)));
+      expect(find.text(kAtNetText), findsOneWidget);
+      expect(find.text(kNoCallText), findsNothing);
+    });
+
     test('centimetres never round a real distance to 0', () {
       expect(centimetres(0.004), 'under 1 cm');
       expect(centimetres(-0.4), '40 cm');
