@@ -14,15 +14,13 @@
 /// "below" points. Where it points against intuition — the knee — it says so.
 ///
 /// Metrics in [kUnscoredMetrics] (`wrist_lag_deg`, `shoulder_turn_deg`,
-/// `hip_rotation_deg`) get no advice of any kind, praise included: they do
-/// not measure what their names say, so there is nothing true to advise.
+/// `hip_rotation_deg`, `shoulder_hip_separation_deg`) get no advice of any
+/// kind, praise included: they do not measure what their names say, so there
+/// is nothing true to advise.
 ///
 /// Metrics whose direction cannot be stated with confidence get no fix
 /// advice at all:
 ///
-///  * `shoulder_hip_separation_deg` is a SIGNED shoulder-minus-hip angle that
-///    the backend never normalises for which way the player faces, so "below
-///    range" may just be a mirror-image player. Praise only.
 ///  * `swing_path_angle_deg` is only trusted within ±90°. The backend fits the
 ///    hand's direction of travel against +x without applying
 ///    `swing_direction_sign`, so a low-to-high swing travelling LEFT reads as
@@ -80,14 +78,11 @@ class AdviceRule {
 /// written as "Looks like …": the reading may partly be the filming angle,
 /// so the advice is offered, not asserted.
 const Map<String, AdviceRule> kAdviceRules = <String, AdviceRule>{
-  // No hip_rotation_deg or shoulder_turn_deg entries: both are in-plane line
-  // angles that read tilt, not turn (a true 80° turn seen by a level camera
-  // reads 0.0), so they are in [kUnscoredMetrics] and get no advice.
+  // No hip_rotation_deg, shoulder_turn_deg or shoulder_hip_separation_deg
+  // entries: the first two are in-plane line angles that read tilt, not turn
+  // (a true 80° turn seen by a level camera reads 0.0), and separation is
+  // their difference. All three are in [kUnscoredMetrics] and get no advice.
   //
-  // Signed, and not normalised for facing direction: praise only.
-  'shoulder_hip_separation_deg': AdviceRule(
-    inRange: 'Nice stretch between your hips and shoulders — keep it up.',
-  ),
   // elbow_angle_at_contact_deg: shoulder-elbow-wrist angle at contact; 180
   // is a straight arm. Below = MORE bent than ideal; above = straighter.
   'elbow_angle_at_contact_deg': AdviceRule(

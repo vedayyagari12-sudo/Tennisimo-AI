@@ -48,7 +48,7 @@ void main() {
         _analysis(<MetricScore>[
           _m('elbow_angle_at_contact_deg', 140, lo: 120, hi: 160),
           _m('knee_flexion_min_deg', 150, lo: 135, hi: 165),
-          _m('shoulder_hip_separation_deg', 50, lo: 40, hi: 65),
+          _m('swing_path_angle_deg', 20, lo: 15, hi: 35),
         ]),
       );
       expect(
@@ -56,13 +56,13 @@ void main() {
         containsAll(<String>[
           'Elbow angle at contact',
           'Front-knee angle',
-          'Hip-shoulder separation',
+          'Swing path',
         ]),
       );
     });
 
     test('unscored metrics are left out, even with a verdict', () {
-      // An older backend: all three still scored, with bands and verdicts.
+      // An older backend: all four still scored, with bands and verdicts.
       final List<KeyNumber> k = buildKeyNumbers(
         _analysis(<MetricScore>[
           _m(
@@ -82,6 +82,7 @@ void main() {
             lo: 15,
             hi: 45,
           ),
+          _m('shoulder_hip_separation_deg', 50, score: 88, lo: 40, hi: 65),
           _m('knee_flexion_min_deg', 150, score: 95, lo: 135, hi: 165),
         ]),
       );
@@ -142,7 +143,7 @@ void main() {
           unit: MetricUnit.ratio,
           verdict: MetricVerdict.unavailable,
         ),
-        _m('shoulder_hip_separation_deg', 50, score: 80, lo: 40, hi: 65),
+        _m('elbow_angle_at_contact_deg', 140, score: 80, lo: 120, hi: 160),
         _m('knee_flexion_min_deg', 150, score: 95, lo: 135, hi: 165),
         _m(
           'elbow_angle_at_contact_deg',
@@ -173,7 +174,7 @@ void main() {
         'swing_path_angle_deg 20.0',
         'swing_path_angle_deg 60.0',
         'knee_flexion_min_deg 95.0',
-        'shoulder_hip_separation_deg 80.0',
+        'elbow_angle_at_contact_deg 80.0',
         'elbow_angle_at_contact_deg null',
         'tempo_ratio null',
       ],

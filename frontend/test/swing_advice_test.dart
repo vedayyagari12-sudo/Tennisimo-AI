@@ -198,15 +198,6 @@ void main() {
   });
 
   group('no advice where the direction is unknown', () {
-    test('hip-shoulder separation: praise only, never a fix', () {
-      expect(_say('shoulder_hip_separation_deg', MetricVerdict.low), isNull);
-      expect(_say('shoulder_hip_separation_deg', MetricVerdict.high), isNull);
-      expect(
-        adviceFor(_m('shoulder_hip_separation_deg', 50, MetricVerdict.ideal)),
-        isNotNull,
-      );
-    });
-
     test('wrist lag: nothing either way', () {
       for (final MetricVerdict v in MetricVerdict.values) {
         expect(adviceFor(_m('wrist_lag_deg', 30, v)), isNull);
@@ -215,17 +206,20 @@ void main() {
   });
 
   group('unscored metrics never produce advice', () {
-    test('the unscored set is exactly the three that mismeasure', () {
+    test('the unscored set is exactly the four that mismeasure', () {
       expect(kUnscoredMetrics, <String>{
         'wrist_lag_deg',
         'shoulder_turn_deg',
         'hip_rotation_deg',
+        'shoulder_hip_separation_deg',
       });
     });
 
-    test('hip and shoulder turn have no rule-table entry', () {
+    test('hip turn, shoulder turn and separation have no rule-table entry',
+        () {
       expect(kAdviceRules.containsKey('hip_rotation_deg'), isFalse);
       expect(kAdviceRules.containsKey('shoulder_turn_deg'), isFalse);
+      expect(kAdviceRules.containsKey('shoulder_hip_separation_deg'), isFalse);
     });
 
     test('no note for any verdict, near or far, either side', () {
@@ -254,6 +248,8 @@ void main() {
                 ('wrist_lag_deg', 90, MetricVerdict.high),
                 ('hip_rotation_deg', 45, MetricVerdict.ideal),
                 ('shoulder_turn_deg', 90, MetricVerdict.ideal),
+                ('shoulder_hip_separation_deg', 50, MetricVerdict.ideal),
+                ('shoulder_hip_separation_deg', 20, MetricVerdict.low),
               ])
             KeyNumber(
               metric: _m(s.$1, s.$2, s.$3, score: 50),
@@ -431,8 +427,7 @@ void main() {
       );
       expect(b.map((AdviceBullet x) => x.number.metric.name), <String>[
         'swing_path_angle_deg',
-        // hip turn (unscored) and separation (no fix advice) are skipped,
-        // not counted.
+        // hip turn and separation (both unscored) are skipped, not counted.
         'elbow_angle_at_contact_deg',
         'tempo_ratio',
         'knee_flexion_min_deg',

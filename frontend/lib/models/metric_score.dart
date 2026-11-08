@@ -11,6 +11,9 @@ import 'json_utils.dart';
 ///  * `shoulder_turn_deg` and `hip_rotation_deg` are in-plane line angles.
 ///    A true 80° trunk turn seen by a level camera reads 0.0, and a pure tilt
 ///    with no turn reads about 30: they measure tilt, not turn.
+///  * `shoulder_hip_separation_deg` is the shoulder-line minus hip-line
+///    angle, the difference of those same two in-plane angles, so it
+///    inherits the same flaw. The backend stops scoring it too.
 ///
 /// A newer backend omits them or sends them without a verdict; an older one
 /// still sends them scored. This set makes the app ignore them in every case.
@@ -19,6 +22,7 @@ const Set<String> kUnscoredMetrics = <String>{
   'wrist_lag_deg',
   'shoulder_turn_deg',
   'hip_rotation_deg',
+  'shoulder_hip_separation_deg',
 };
 
 /// One scored swing metric.

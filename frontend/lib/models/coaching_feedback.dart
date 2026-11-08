@@ -1,5 +1,16 @@
 import 'enums.dart';
 import 'json_utils.dart';
+import 'metric_score.dart';
+
+/// True when [metricRefs] is non-empty and EVERY ref is in
+/// [kUnscoredMetrics].
+///
+/// The ONE test for whether a coaching card is about nothing but unscored
+/// metrics. An older backend can still send AI advice tied only to them
+/// ("Turn your hips earlier" citing `hip_rotation_deg`); such a card is
+/// hidden. A card with no refs, or with at least one scored ref, stays.
+bool refersOnlyToUnscoredMetrics(List<String> metricRefs) =>
+    metricRefs.isNotEmpty && metricRefs.every(kUnscoredMetrics.contains);
 
 /// One prioritised coaching improvement.
 ///
@@ -100,6 +111,15 @@ class CoachingFeedback {
   final String summary;
   final List<String> strengths;
   final List<Improvement> improvements;
+
+  /// [improvements] without the cards [refersOnlyToUnscoredMetrics] rejects,
+  /// in the same order. What the app renders; [improvements] stays the raw
+  /// server list.
+  List<Improvement> get shownImprovements => <Improvement>[
+    for (final Improvement i in improvements)
+      if (!refersOnlyToUnscoredMetrics(i.metricRefs)) i,
+  ];
+
   final FeedbackSource source;
   final String? model;
 

@@ -362,8 +362,8 @@ void main() {
       );
       expect(find.text('Elbow angle at contact 112° · ideal 120–160°'),
           findsOneWidget);
-      // The AI card is still there underneath, unchanged.
-      expect(find.text('Turn your hips earlier'), findsOneWidget);
+      // The AI card cites only hip_rotation_deg, which is unscored: hidden.
+      expect(find.text('Turn your hips earlier'), findsNothing);
     });
 
     testWidgets('say nothing about a metric that was not measured',

@@ -102,7 +102,7 @@ class ResultsScreen extends StatelessWidget {
               const SizedBox(height: 16),
             ],
             if (feedback != null && feedback.improvements.isNotEmpty) ...<Widget>[
-              ...feedback.improvements.map(
+              ...feedback.shownImprovements.map(
                 (Improvement improvement) => Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: _ImprovementCard(improvement: improvement),

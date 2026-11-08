@@ -521,8 +521,11 @@ void _resultsScreenTests() {
               await tester.tap(toggle);
               await tester.pumpAndSettle();
               expect(tester.takeException(), isNull);
-              expect(find.text('Shoulder hip separation'), findsOneWidget);
+              expect(find.textContaining('Elbow angle at contact'),
+                  findsWidgets);
               // Never a scored row, whichever backend sent the response.
+              expect(find.text('Hip-shoulder separation'), findsNothing);
+              expect(find.text('Shoulder hip separation'), findsNothing);
               expect(find.text('Shoulder turn'), findsNothing);
               expect(find.text('Hip rotation'), findsNothing);
               expect(find.text('Wrist lag'), findsNothing);
