@@ -83,6 +83,7 @@ __all__ = [
     "BallEventKind",
     "PoseHit",
     "classify_event",
+    "hitter_ground_point",
     "detect_ball_events",
     "find_break_points",
     "resolve_event_grammar",
@@ -181,6 +182,9 @@ class PoseHit:
     end: CourtEnd | None
     confidence: float
     shot_type: str | None = None
+    #: Midpoint of the hitter's ankles in the image. Feet are on the ground,
+    #: so this is the one pose point the court homography may map to metres.
+    feet_xy_px: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -200,6 +204,9 @@ class BallEvent:
     end: CourtEnd | None = None
     #: The matched pose hit's shot type, for HITs made from pose.
     shot_type: str | None = None
+    #: The matched pose hit's feet in the image, for HITs made from pose.
+    #: Pixels only: court metres are made from it in ``court_session``.
+    hitter_feet_xy_px: tuple[float, float] | None = None
 
 
 # ----------------------------------------------------------------- fitting
@@ -660,6 +667,28 @@ def _matching_pose_hit(
     return min(matches, key=lambda h: (abs(h.time_s - event.time_s), -h.confidence, h.time_s))
 
 
+#: How far outside the doubles court a player may stand and still be mapped:
+#: deep behind a baseline or wide of a sideline, not in the stands.
+HITTER_RUNOFF_ALONG_M: Final[float] = 8.0
+HITTER_RUNOFF_ACROSS_M: Final[float] = 4.0
+
+
+def hitter_ground_point(
+    calibration: CourtCalibration, feet_xy_px: tuple[float, float] | None
+) -> tuple[float, float] | None:
+    """The hitter's court position from the pose feet, or None when not
+    measured. Only the feet: a wrist or the ball at contact is in the air,
+    and the homography maps only ground points."""
+    if feet_xy_px is None:
+        return None
+    ground = _ground_point(calibration, feet_xy_px)
+    if ground is None:
+        return None
+    if abs(ground[0]) > DOUBLES_HALF_WIDTH_M + HITTER_RUNOFF_ACROSS_M or abs(ground[1]) > HALF_LENGTH_M + HITTER_RUNOFF_ALONG_M:
+        return None
+    return ground
+
+
 def classify_event(
     event: BallEvent, calibration: CourtCalibration, pose_hits: Sequence[PoseHit] = ()
 ) -> BallEvent:
@@ -679,6 +708,7 @@ def classify_event(
             kind=BallEventKind.HIT,
             end=hit.end,
             shot_type=hit.shot_type,
+            hitter_feet_xy_px=hit.feet_xy_px,
             flags=_with_flag(event.flags, POSE_HIT_FLAG),
         )
     j_row = event.velocity_after_px_s[1] - event.velocity_before_px_s[1]
@@ -817,7 +847,15 @@ def _flight_start_hits(
         )
         hit = _matching_pose_hit(probe, pose_hits, _scale_at(calibration, uv))
         if hit is not None:
-            events.append(replace(probe, end=hit.end, shot_type=hit.shot_type, confidence=hit.confidence))
+            events.append(
+                replace(
+                    probe,
+                    end=hit.end,
+                    shot_type=hit.shot_type,
+                    confidence=hit.confidence,
+                    hitter_feet_xy_px=hit.feet_xy_px,
+                )
+            )
     return events
 
 

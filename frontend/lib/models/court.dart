@@ -313,6 +313,7 @@ class ShotLanding {
     required this.rallyId,
     required this.shotIndexInRally,
     required this.flags,
+    this.hitXy,
   });
 
   final String bounceId;
@@ -336,6 +337,10 @@ class ShotLanding {
   final String? rallyId;
   final int? shotIndexInRally;
   final List<String> flags;
+
+  /// Where the hitter stood, from the pose feet. Null = not measured; the
+  /// map then draws no path, and never guesses one from the hitter's end.
+  final CourtPoint? hitXy;
 
   /// The verdict, or null when no call was made.
   LineVerdict? get verdict => lineCall?.verdict;
@@ -366,6 +371,7 @@ class ShotLanding {
       rallyId: asStringOrNull(json, 'rally_id'),
       shotIndexInRally: asIntOrNull(json, 'shot_index_in_rally'),
       flags: asStringList(json, 'flags'),
+      hitXy: CourtPoint.fromJsonOrNull(json['hit_xy_m']),
     );
   }
 }

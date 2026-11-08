@@ -9,7 +9,7 @@ import '../theme/app_theme.dart';
 enum CourtMapSide { all, yours, opponent }
 
 class CourtMapFilter {
-  const CourtMapFilter({this.side = CourtMapSide.all, this.verdict, this.servesOnly = false});
+  const CourtMapFilter({this.side = CourtMapSide.all, this.verdict, this.servesOnly = false, this.shotType});
 
   final CourtMapSide side;
 
@@ -17,11 +17,23 @@ class CourtMapFilter {
   final LineVerdict? verdict;
   final bool servesOnly;
 
-  CourtMapFilter copyWith({CourtMapSide? side, LineVerdict? verdict, bool clearVerdict = false, bool? servesOnly}) =>
+  /// A wire shot type such as `forehand`; null shows every shot. A landing
+  /// with no shot type is shown only when this is null.
+  final String? shotType;
+
+  CourtMapFilter copyWith({
+    CourtMapSide? side,
+    LineVerdict? verdict,
+    bool clearVerdict = false,
+    bool? servesOnly,
+    String? shotType,
+    bool clearShotType = false,
+  }) =>
       CourtMapFilter(
         side: side ?? this.side,
         verdict: clearVerdict ? null : (verdict ?? this.verdict),
         servesOnly: servesOnly ?? this.servesOnly,
+        shotType: clearShotType ? null : (shotType ?? this.shotType),
       );
 
   /// "Your shots" are the near player's until a score config names players
@@ -37,11 +49,86 @@ class CourtMapFilter {
     }
     if (verdict != null && landing.verdict != verdict) return false;
     if (servesOnly && !landing.isServe) return false;
+    if (shotType != null && landing.shotType != shotType) return false;
     return true;
   }
 
   List<ShotLanding> apply(List<ShotLanding> landings) =>
       <ShotLanding>[for (final ShotLanding l in landings) if (accepts(l)) l];
+}
+
+/// "forehand" -> "Forehand", "two_handed_backhand" -> "Two handed backhand".
+String shotTypeLabel(String wire) {
+  final String words = wire.replaceAll('_', ' ').trim();
+  if (words.isEmpty) return 'Other';
+  return words[0].toUpperCase() + words.substring(1);
+}
+
+/// The shot types present, for the filter chips: serves have their own chip,
+/// and a landing with no shot type adds none.
+List<String> shotTypesIn(List<ShotLanding> landings) {
+  final Set<String> types = <String>{
+    for (final ShotLanding l in landings)
+      if (l.shotType != null && !l.isServe && l.shotType != 'serve') l.shotType!,
+  };
+  return types.toList()..sort();
+}
+
+/// Zone grid edges, mirrored from `backend/app/analysis/court_model.py`.
+const double kServiceLineFromNetM = 6.40;
+const double kHalfLengthM = 11.885;
+const double kMidDeepEdgeM = (kServiceLineFromNetM + kHalfLengthM) / 2;
+const double kSinglesHalfWidthM = 4.115;
+const double kWidthThirdM = 2 * kSinglesHalfWidthM / 3;
+
+/// One cell of the placement grid: a half, a depth band, a width third.
+typedef ZoneCell = (CourtEnd half, DepthZone depth, WidthZone width);
+
+/// The cell a landing's point estimate falls in, or null outside the singles
+/// court. Edges belong to the zone nearer the net and to the centre third,
+/// as in the backend, so a ball on a line counts inside.
+ZoneCell? zoneCellOf(CourtPoint p) {
+  final double along = p.y.abs();
+  if (along > kHalfLengthM || p.x.abs() > kSinglesHalfWidthM) return null;
+  final DepthZone depth = along <= kServiceLineFromNetM
+      ? DepthZone.short
+      : along <= kMidDeepEdgeM
+          ? DepthZone.mid
+          : DepthZone.deep;
+  final WidthZone width = p.x < -kWidthThirdM / 2
+      ? WidthZone.left
+      : p.x > kWidthThirdM / 2
+          ? WidthZone.right
+          : WidthZone.centre;
+  return (p.y >= 0 ? CourtEnd.far : CourtEnd.near, depth, width);
+}
+
+/// Whole-percent share of each half's landings in each cell. The share is
+/// of EVERY landing in that half, out ones included, so a half's cells add
+/// up to at most 100 and long or wide balls are not hidden. Empty cells are
+/// left out.
+Map<ZoneCell, int> zonePercents(List<ShotLanding> landings) {
+  final Map<CourtEnd, int> perHalf = <CourtEnd, int>{};
+  final Map<ZoneCell, int> counts = <ZoneCell, int>{};
+  for (final ShotLanding l in landings) {
+    final CourtEnd half = l.courtXy.y >= 0 ? CourtEnd.far : CourtEnd.near;
+    perHalf[half] = (perHalf[half] ?? 0) + 1;
+    final ZoneCell? cell = zoneCellOf(l.courtXy);
+    if (cell != null) counts[cell] = (counts[cell] ?? 0) + 1;
+  }
+  return <ZoneCell, int>{
+    for (final MapEntry<ZoneCell, int> e in counts.entries)
+      e.key: (e.value / perHalf[e.key.$1]! * 100).round(),
+  };
+}
+
+/// How many shown landings have a measured path, for the copy under the map.
+String pathsLine(List<ShotLanding> landings) {
+  final int withPath = landings.where((ShotLanding l) => l.hitXy != null).length;
+  if (withPath == 0) return 'No shot paths: where the hitter stood was not measured.';
+  if (withPath == landings.length) return 'Lines run from where the hitter stood to where the ball landed.';
+  return 'Lines run from where the hitter stood to where the ball landed '
+      '($withPath of ${landings.length} shots measured).';
 }
 
 const String kCourtMapTitle = 'Where your shots landed';
@@ -111,6 +198,8 @@ class CourtMap extends StatefulWidget {
 class _CourtMapState extends State<CourtMap> {
   late CourtMapFilter _filter = widget.filter;
   String? _selected;
+  bool _paths = true;
+  bool _zones = false;
 
   @override
   void didUpdateWidget(CourtMap old) {
@@ -130,6 +219,7 @@ class _CourtMapState extends State<CourtMap> {
     final ThemeData theme = Theme.of(context);
     final List<ShotLanding> shown = _filter.apply(widget.landings);
     final AppPalette palette = context.palette;
+    final List<String> shotTypes = shotTypesIn(widget.landings);
 
     Widget chip(String label, bool selected, VoidCallback onTap) => FilterChip(
           label: Text(label),
@@ -173,6 +263,29 @@ class _CourtMapState extends State<CourtMap> {
                   () => setState(() => _filter = _filter.copyWith(servesOnly: !_filter.servesOnly))),
             ],
           ),
+          if (shotTypes.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppSpacing.xs),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.xs,
+              children: <Widget>[
+                for (final String type in shotTypes)
+                  chip(shotTypeLabel(type), _filter.shotType == type,
+                      () => setState(() => _filter = _filter.shotType == type
+                          ? _filter.copyWith(clearShotType: true)
+                          : _filter.copyWith(shotType: type))),
+              ],
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xs,
+            children: <Widget>[
+              chip('Paths', _paths, () => setState(() => _paths = !_paths)),
+              chip('Zones', _zones, () => setState(() => _zones = !_zones)),
+            ],
+          ),
         ],
         const SizedBox(height: AppSpacing.md),
         Center(
@@ -200,6 +313,10 @@ class _CourtMapState extends State<CourtMap> {
                           outColor: palette.errorFill,
                           neutralColor: palette.onSurfaceVariant,
                           selectColor: theme.colorScheme.onSurface,
+                          showPaths: _paths,
+                          zones: _zones ? zonePercents(shown) : null,
+                          zoneColor: palette.primaryFill,
+                          zoneTextStyle: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface),
                         ),
                       ),
                     ),
@@ -213,6 +330,10 @@ class _CourtMapState extends State<CourtMap> {
         Text(courtMapSummary(shown), style: theme.textTheme.bodyMedium),
         const SizedBox(height: AppSpacing.xs),
         Text(depthLine(shown), style: theme.textTheme.bodyMedium),
+        if (_paths) ...<Widget>[
+          const SizedBox(height: AppSpacing.xs),
+          Text(pathsLine(shown), style: theme.textTheme.bodyMedium),
+        ],
         const SizedBox(height: AppSpacing.xs),
         Text(kCourtMapFootnote,
             style: theme.textTheme.bodySmall?.copyWith(color: palette.onSurfaceVariant)),
@@ -233,6 +354,10 @@ class CourtMapPainter extends CustomPainter {
     required this.neutralColor,
     required this.selectColor,
     this.selectedId,
+    this.showPaths = true,
+    this.zones,
+    this.zoneColor,
+    this.zoneTextStyle,
   });
 
   final List<ShotLanding> landings;
@@ -243,6 +368,14 @@ class CourtMapPainter extends CustomPainter {
   final Color outColor;
   final Color neutralColor;
   final Color selectColor;
+
+  /// Draw each measured shot path, hitter's feet to landing.
+  final bool showPaths;
+
+  /// Placement grid percents to shade, or null for no grid.
+  final Map<ZoneCell, int>? zones;
+  final Color? zoneColor;
+  final TextStyle? zoneTextStyle;
 
   /// Court metres shown: the doubles court plus run-off on every side.
   static const double halfWidthM = 6.5;
@@ -301,12 +434,36 @@ class CourtMapPainter extends CustomPainter {
     canvas.drawLine(at(0, _serviceY), at(0, -_serviceY), line);
     canvas.drawLine(at(-_doublesX - 0.9, 0), at(_doublesX + 0.9, 0), line..strokeWidth = line.strokeWidth * 2.5);
 
+    final Map<ZoneCell, int>? grid = zones;
+    if (grid != null) _paintZones(canvas, size, grid);
+
+    if (showPaths) {
+      for (final ShotLanding l in landings) {
+        final CourtPoint? from = l.hitXy;
+        if (from == null) continue;
+        final Color colour = _colourOf(l);
+        final Offset a = toCanvas(from, size);
+        final Offset b = toCanvas(l.courtXy, size);
+        canvas.drawLine(
+            a,
+            b,
+            Paint()
+              ..color = colour.withValues(alpha: 0.5)
+              ..strokeWidth = 1.5
+              ..strokeCap = StrokeCap.round);
+        // Where the hitter stood: a small hollow mark, never a landing shape.
+        canvas.drawCircle(
+            a,
+            2.5,
+            Paint()
+              ..color = neutralColor
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1);
+      }
+    }
+
     for (final ShotLanding l in landings) {
-      final Color colour = switch (l.verdict) {
-        LineVerdict.inside => inColor,
-        LineVerdict.out => outColor,
-        _ => neutralColor,
-      };
+      final Color colour = _colourOf(l);
       final Offset c = toCanvas(l.courtXy, size);
       // Uncertainty, to scale: a far-baseline ellipse is visibly long.
       canvas.save();
@@ -366,8 +523,54 @@ class CourtMapPainter extends CustomPainter {
     }
   }
 
+  Color _colourOf(ShotLanding l) => switch (l.verdict) {
+        LineVerdict.inside => inColor,
+        LineVerdict.out => outColor,
+        _ => neutralColor,
+      };
+
+  /// The singles-court rectangle of one cell, in court metres.
+  static Rect cellRectM(ZoneCell cell) {
+    final (CourtEnd half, DepthZone depth, WidthZone width) = cell;
+    final (double near, double far) = switch (depth) {
+      DepthZone.short => (0, kServiceLineFromNetM),
+      DepthZone.mid => (kServiceLineFromNetM, kMidDeepEdgeM),
+      _ => (kMidDeepEdgeM, kHalfLengthM),
+    };
+    final (double left, double right) = switch (width) {
+      WidthZone.left => (-kSinglesHalfWidthM, -kWidthThirdM / 2),
+      WidthZone.right => (kWidthThirdM / 2, kSinglesHalfWidthM),
+      _ => (-kWidthThirdM / 2, kWidthThirdM / 2),
+    };
+    final double sign = half == CourtEnd.near ? -1 : 1;
+    return Rect.fromLTRB(left, sign * near, right, sign * far);
+  }
+
+  void _paintZones(Canvas canvas, Size size, Map<ZoneCell, int> grid) {
+    final Color fill = zoneColor ?? inColor;
+    for (final MapEntry<ZoneCell, int> e in grid.entries) {
+      final Rect m = cellRectM(e.key);
+      final Rect r = Rect.fromPoints(
+        toCanvas(CourtPoint(m.left, m.top), size),
+        toCanvas(CourtPoint(m.right, m.bottom), size),
+      ).deflate(1);
+      canvas.drawRect(r, Paint()..color = fill.withValues(alpha: 0.08 + 0.5 * e.value / 100));
+      final TextPainter text = TextPainter(
+        text: TextSpan(text: '${e.value}%', style: zoneTextStyle),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout(maxWidth: r.width);
+      if (text.height <= r.height) {
+        text.paint(canvas, r.center - Offset(text.width / 2, text.height / 2));
+      }
+      text.dispose();
+    }
+  }
+
   @override
   bool shouldRepaint(CourtMapPainter old) =>
+      old.showPaths != showPaths ||
+      old.zones != zones ||
       old.landings != landings ||
       old.selectedId != selectedId ||
       old.courtFill != courtFill ||

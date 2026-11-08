@@ -41,8 +41,10 @@ Branch `worktree-phase-2-ball-court`. Everything below is pure or offline code w
 
 **Phase 2 batches I and J (2026-11-08)**
 - **I, T0 and T2 full-chain evaluation:** results table in `SESSION_MODE_PHASE2.md` 11.2.1. T0 meets its targets on 100 distinct seeds (0 confident wrong calls, rally exact 0.99). T2 at 1080p makes no confident wrong call and its landings are real (precision 1.00), but bounce recall (0.50) and rally exactness (0.50) miss the targets; that is a strict xfail. `SIGMA_INFLATION` is frozen at 1.0 (coverage above the band at both tiers).
-- **J, real-clip smoke:** `backend/tests/eval/test_real_clips_smoke.py` with a filenames-only manifest; camera tags were measured, not viewed. 12 of 16 clips are in the manifest (the measuring run was stopped for low memory before tennis_forehand_8224596, tennis_serve_10340710, tennis_serve_4902145 and tennis_serve_8224610). All 12 decode with monotonic PTS and are refused without calibration: 11 moving or unknown, serve_04 shaky. Step 19 court fit is built (`ball/court_lines.py`, `analysis/court_fit.py`): synthetic courts on three surfaces fit with median tap error 1.6-2.0 px and calibrate with calls allowed; all 13 named real clips give zero fits on their first frame (the design asks zero for 6, at most 3 for 7). The collinear-support rule that removed false fits also removed a 0.98 fit on serve_05_from_baseline, which may be a real court; taps stay primary.
+- **J, real-clip smoke:** `backend/tests/eval/test_real_clips_smoke.py` with a filenames-only manifest; camera tags were measured, not viewed. All 16 clips are measured (the last four, run one at a time on 2026-11-08, are all `moving`). All 16 decode with monotonic PTS and are refused without calibration: 15 moving or unknown, serve_04 shaky. Step 19 court fit is built (`ball/court_lines.py`, `analysis/court_fit.py`): synthetic courts on three surfaces fit with median tap error 1.6-2.0 px and calibrate with calls allowed; all 13 named real clips give zero fits on their first frame (the design asks zero for 6, at most 3 for 7). The collinear-support rule that removed false fits also removed a 0.98 fit on serve_05_from_baseline, which may be a real court; taps stay primary.
 - The evaluation found and fixed bugs in `flight_track`, `court_session`, `rally` (now `rally_v2`; this fixed the seed 20261102 miscount) and `flight_detector`, each with a test.
+
+**Shot map paths and zones (2026-11-08).** Each landing may carry `hit_xy_m`, where the hitter stood: the pose feet (`PoseHit.feet_xy_px`, ankle midpoint) mapped by the court homography in `court_session.build_landings`. Feet are the only pose point on the ground, so the only one the homography may map; the wrist and the ball at contact are in the air. Null when not measured, and never guessed from the hitter's end. `CourtMap` draws a line from there to the landing, adds stroke filters from the shot types present, and a `Zones` grid of each half's landings by depth band and width third. No producer fills `feet_xy_px` yet: the court Job has no pose pass until Phase 1 lands, so on real sessions the map shows dots and zones only until then.
 
 **Known gaps**
 - T2 bounce recall and rally exactness (above). Event-layer work that real footage, not the synthetic renderer, should drive.
@@ -774,12 +776,17 @@ create trigger trg_sessions_updated_at before update on public.sessions
 
 | Data | Lifetime |
 |---|---|
-| Raw video | `finished_at + 30 days` by default, or user-deleted earlier |
+| Raw video | **Deleted when the job reaches a terminal state** (complete, partial, refused or failed), owner Decision 3 of 2026-11-08. The worker deletes the object, then sets `video_deleted_at`. |
 | `awaiting_upload` and its partial upload | Expires at 48 hours |
 | Numeric results | Until the user deletes the session or the account |
 | Landmark time series | **Never persisted** |
 
-Enforced by a daily Cloud Scheduler trigger of the worker with a `sweep` argument. It deletes objects and sets `video_deleted_at`. The result screens handle a missing video.
+The worker deletes the video itself at the end of each job. A daily Cloud Scheduler trigger of the worker with a `sweep` argument stays as the backstop: it deletes any object whose session is terminal or whose upload expired, and sets `video_deleted_at`. The result screens never assume a video exists.
+
+What deleting at once gives up, accepted with the decision:
+- No "View in video" or replay after processing. `LineCallCard.onViewVideo` and similar callbacks stay null, which already hides the buttons.
+- No re-analysis when an engine version changes. Old sessions keep the numbers of the version that made them; the stored `*_version` fields say which.
+- A failed job cannot be retried from the same upload. The user records or picks the clip again.
 
 **Account deletion change.** `delete_user_rows` must delete `session_swings`, then `sessions`, before `analyses`, explicitly, keeping the policy of not relying on cascades (`repository.py:342-364`). The storage step already recurses. Update `test_account_deletion_clients.py`.
 
@@ -1345,7 +1352,7 @@ New module `backend/app/feedback/session_summary.py`. New input model `SessionFe
 ### 11.5 Phase 1 privacy design
 
 - **Acknowledgement at each session:** "Anyone else in frame knows they are being filmed." Stored as a timestamp. It is a prompt, not a legal consent mechanism.
-- **Retention:** raw video auto-deleted after 30 days by default. "Delete video, keep stats" and "Delete session" are always available.
+- **Retention:** raw video is deleted as soon as processing ends (owner Decision 3, 2026-11-08). Only numbers are kept. "Delete session" is always available.
 - **No face data:** no face recognition, no face detection and no biometric templates. Nothing identifies a person across sessions. BlazePose's face landmarks (indices 0-10) are used only as the existing head metrics and are not persisted.
 - **No stored landmark time series.** Per-swing payloads hold numbers only (`responses.py:453-493`). Landmarks exist in process memory and die with the job. This is a deliberate constraint, and it is why there is no checkpointing.
 - **Gemini gets aggregated numbers only.** Never video, frames, landmarks, user id, timestamps or filenames, enforced by `extra="forbid"`. The Gemini data-use terms for the API tier in use are **[verify]**, though payload content should make this low risk.
@@ -1473,9 +1480,9 @@ The riskiest assumption is in section 1 and is not repeated here.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | Move Supabase to a paid plan. Session Mode cannot run on the free per-file and project storage limits. | **Yes,** before slice 2, once pricing is verified. |
+| 1 | Move Supabase to a paid plan. Session Mode cannot run on the free per-file and project storage limits. | **Partly settled by Decision 3 (2026-11-08).** Deleting each video after processing removes most of the project-storage pressure, though the free 1 GB still holds only about three 10-minute uploads in flight at once. The free plan's 50 MB per-file cap is still far below a 10-minute file (about 300 MB), so slice 2 still needs one of: the paid plan, uploading to a Cloud Storage bucket in the Cloud Run project instead, or splitting the upload into parts. Owner to choose. |
 | 2 | Launch duration limit. | **10 minutes,** raise to 20 only with measured processing at or below 1.5× real time. |
-| 3 | Default raw-video retention. | **30 days,** with delete-video always available. |
+| 3 | Default raw-video retention. | **Owner decided (2026-11-08): delete the video as soon as processing ends.** Only the derived numbers are kept. See Retention below for what this removes. |
 | 4 | Age policy and legal review before public release. | **Add an age step and privacy policy, and get legal review.** Keep Session Mode allowlisted until then. Decide explicitly whether under-13s are allowed, and treat the `school` flavour separately. |
 | 5 | Shadow swings. Pose cannot tell them from hits. Ball-evidence gating would make detection depend on the ball, against the one-way rule in `contact.py:5`. | **Stay pose-only in Phase 1,** say so plainly, and let users exclude. Revisit with experiment data. |
 | 6 | Call the numbers "shots" or "swings"? | **"Swings".** It is what is actually detected, and avoids implying a ball was hit. |

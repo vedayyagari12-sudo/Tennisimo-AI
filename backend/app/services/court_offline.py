@@ -273,6 +273,9 @@ def landing_response(
         rally_id=None if rally is None else rally[0],
         shot_index_in_rally=None if rally is None else rally[1],
         flags=list(bounce.flags),
+        hit_xy_m=None
+        if landing.hit_xy_m is None
+        else (float(landing.hit_xy_m[0]), float(landing.hit_xy_m[1])),
     )
 
 

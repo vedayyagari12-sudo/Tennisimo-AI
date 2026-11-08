@@ -104,6 +104,84 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    test('hit position is parsed, and null stays null', () {
+      expect(_landing('b_000001').hitXy?.y, -12.2);
+      expect(_landing('b_000004').hitXy, isNull);
+    });
+
+    testWidgets('shot type chips filter by stroke', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));
+      expect(find.text('Backhand'), findsOneWidget);
+      await tester.tap(find.text('Forehand'));
+      await tester.pump();
+      expect(find.text('1 landing, 0 in, 1 out, 0 too close to call'), findsOneWidget);
+      await tester.tap(find.text('Forehand'));
+      await tester.pump();
+      expect(find.text('5 landings, 2 in, 1 out, 1 too close to call, 1 not called'), findsOneWidget);
+    });
+
+    test('shot types skip serves and unknowns; labels read as words', () {
+      expect(shotTypesIn(_session.landings), <String>['backhand', 'forehand']);
+      expect(shotTypeLabel('two_handed_backhand'), 'Two handed backhand');
+      expect(shotTypeLabel(''), 'Other');
+    });
+
+    testWidgets('paths are on by default and say how many were measured', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));
+      expect(find.text(pathsLine(_session.landings)), findsOneWidget);
+      expect(pathsLine(_session.landings), endsWith('(3 of 5 shots measured).'));
+      await tester.tap(find.text('Paths'));
+      await tester.pump();
+      expect(find.text(pathsLine(_session.landings)), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    test('no measured origin means no path is claimed', () {
+      expect(pathsLine(<ShotLanding>[_landing('b_000004')]), startsWith('No shot paths'));
+      expect(pathsLine(<ShotLanding>[_landing('b_000001')]),
+          'Lines run from where the hitter stood to where the ball landed.');
+    });
+
+    test('zone shares are of every landing in that half, out ones included', () {
+      final Map<ZoneCell, int> z = zonePercents(_session.landings);
+      expect(z, <ZoneCell, int>{
+        (CourtEnd.far, DepthZone.mid, WidthZone.centre): 25,
+        (CourtEnd.far, DepthZone.deep, WidthZone.centre): 25,
+        (CourtEnd.far, DepthZone.short, WidthZone.centre): 25,
+        (CourtEnd.near, DepthZone.mid, WidthZone.left): 100,
+      });
+      expect(zonePercents(const <ShotLanding>[]), isEmpty);
+    });
+
+    test('zone edges count a ball on the line inside, as the backend does', () {
+      expect(zoneCellOf(const CourtPoint(0, kServiceLineFromNetM))?.$2, DepthZone.short);
+      expect(zoneCellOf(const CourtPoint(kWidthThirdM / 2, 1))?.$3, WidthZone.centre);
+      expect(zoneCellOf(const CourtPoint(0, -kHalfLengthM))?.$2, DepthZone.deep);
+      expect(zoneCellOf(const CourtPoint(4.2, 1)), isNull);
+      expect(zoneCellOf(const CourtPoint(0, 12)), isNull);
+      final Rect r = CourtMapPainter.cellRectM((CourtEnd.near, DepthZone.short, WidthZone.left));
+      expect(r.left, -kSinglesHalfWidthM);
+      expect(r.bottom, closeTo(-kServiceLineFromNetM, 1e-9));
+    });
+
+    testWidgets('zones grid paints on every palette and at large text', (WidgetTester tester) async {
+      for (final AppPalette palette in <AppPalette>[...kAllPalettes, ...kAllDarkPalettes]) {
+        // A fresh state per palette, so every palette paints the grid.
+        await tester.pumpWidget(_host(CourtMap(key: ValueKey<AppPalette>(palette), landings: _session.landings),
+            palette: palette));
+        await tester.tap(find.text('Zones'));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      }
+      await tester.pumpWidget(_host(CourtMap(landings: _session.landings), textScale: 2.0, width: 320));
+      await tester.ensureVisible(find.text('Zones'));
+      await tester.tap(find.text('Zones'));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      final CustomPaint paint = tester.widget(find.byKey(const Key('court-map-canvas')));
+      expect((paint.painter! as CourtMapPainter).zones, isNotEmpty);
+    });
+
     testWidgets('has a semantic summary', (WidgetTester tester) async {
       final SemanticsHandle handle = tester.ensureSemantics();
       await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));

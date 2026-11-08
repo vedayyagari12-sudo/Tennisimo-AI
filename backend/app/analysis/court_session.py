@@ -34,7 +34,13 @@ import math
 import numpy as np
 import numpy.typing as npt
 
-from app.analysis.ball_events import BALL_EVENTS_VERSION, BallEvent, PoseHit, detect_ball_events
+from app.analysis.ball_events import (
+    BALL_EVENTS_VERSION,
+    BallEvent,
+    PoseHit,
+    detect_ball_events,
+    hitter_ground_point,
+)
 from app.analysis.camera_stability import CameraStability
 from app.analysis.court_calibration import CALIBRATION_VERSION, CourtCalibration
 from app.analysis.court_model import COURT_MODEL_VERSION, half_region
@@ -210,6 +216,7 @@ def build_landings(
                     shot_type,
                     shot_type == SERVE_SHOT_TYPE,
                     target=target,
+                    hit_xy_m=None if hit is None else hitter_ground_point(calibration, hit.hitter_feet_xy_px),
                 )
             )
     return tuple(sorted(landings, key=lambda landing: (landing.bounce.time_s, landing.bounce.event_id)))

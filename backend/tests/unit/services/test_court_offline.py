@@ -32,7 +32,7 @@ from app.services.court_offline import (
 )
 from tests.unit.analysis.synthetic_court import RECOMMENDED_SIX
 from tests.unit.analysis.test_ball_events import CALIBRATION, CAMERA
-from tests.unit.analysis.test_court_session import SEEDS, run
+from tests.unit.analysis.test_court_session import SEEDS, feet_pose_hits, run
 
 CLIP = Path(__file__).resolve().parents[2] / "fixtures" / "clips" / "serve_vertical_10340710.mp4"
 
@@ -60,6 +60,21 @@ def test_every_landing_in_a_rally_has_an_index() -> None:
             assert landing.rally_id is None and landing.shot_index_in_rally is None
     in_rally = [l.shot_index_in_rally for l in wire.landings if l.rally_id == "r_0000"]
     assert in_rally == list(range(1, len(in_rally) + 1))
+
+
+def test_hit_position_reaches_the_wire_and_stays_null_when_unmeasured() -> None:
+    from tests.unit.court_synth.scene import generate_rally
+
+    _, result = run(SEEDS[0], pose_hits=feet_pose_hits(generate_rally(SEEDS[0])))
+    wire = project_court_result(result, frame_size=CAMERA.frame_size)
+    assert any(l.hit_xy_m is not None for l in wire.landings)
+    for landing, internal in zip(wire.landings, result.landings, strict=True):
+        assert landing.hit_xy_m == internal.hit_xy_m
+    again = CourtAnalysisResponse.model_validate_json(wire.model_dump_json())
+    assert again == wire
+    _, plain = run(SEEDS[0])
+    body = project_court_result(plain, frame_size=CAMERA.frame_size).model_dump(mode="json")
+    assert all(l["hit_xy_m"] is None for l in body["landings"])
 
 
 def test_sigma_is_one_sigma_and_ordered() -> None:

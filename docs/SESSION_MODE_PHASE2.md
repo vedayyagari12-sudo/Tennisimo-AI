@@ -960,7 +960,8 @@ Deterministic and independent of ball math. Covers:
       "confidence": 0.72,
       "rally_id": "r_0017",
       "shot_index_in_rally": 3,
-      "flags": []
+      "flags": [],
+      "hit_xy_m": null
     }
   ],
   "rallies": [
@@ -1124,6 +1125,8 @@ Size estimate: 500 landings × about 500 B = 250 KB per 10-minute session. Measu
 |  |                            |  |
 |  |      near baseline         |  |
 |  +----------------------------+  |
+| (Forehand)(Backhand)             |
+| (Paths)(Zones)                   |
 |  Depth: Short 19% Mid 42%        |
 |         Deep 34% Beyond 6%       |
 |  Estimates. Far-end landings     |
@@ -1183,7 +1186,7 @@ Correcting a point calls `onCorrect(eventId, winner)`. The panel shows the suppl
 
 | Widget | Key API | Notes |
 |---|---|---|
-| `CourtMap` | `landings`, `filter`, `onSelect` | `CourtMapPainter` is public. Static hit test `CourtMapPainter.landingAt(Offset, Size, landings)`, like `DonutPainter.sliceAt` (`shot_mix_chart.dart:308-326`). |
+| `CourtMap` | `landings`, `filter`, `onSelect` | `CourtMapPainter` is public. Static hit test `CourtMapPainter.landingAt(Offset, Size, landings)`, like `DonutPainter.sliceAt` (`shot_mix_chart.dart:308-326`). **Paths** (on by default): a line from `hit_xy_m` to the landing, only where `hit_xy_m` was measured, with a line under the map saying how many were. **Zones** (off by default): each half's landings by depth band and width third, as a share of EVERY landing in that half so out balls are not hidden. Stroke chips come from the shot types present. |
 | `LineCallCard` | `landing`, `onViewVideo` | `too_close_to_call` is a calm neutral state, not a failure |
 | `RallyTimeline` | `rallies`, `onSelect` | Shows the range when `length_min != length_max` |
 | `ScorePanel` | `score`, `onCorrect` | Header always says "estimate" until the user has confirmed every point |
@@ -1288,7 +1291,7 @@ New model `CourtFeedbackInput`, `extra="forbid"`. No court coordinates, no sigma
 - **Owner filming.** Consenting adults only, no neighbouring players identifiable if avoidable, and deleted when validation ends.
 - **Line calls and scores.** A call can start a dispute, and a scorecard is a statement about someone else's match. No sharing, export, public links or leaderboard in Phase 2. Any later share is opt-in per item, shows the estimate label and the band, and warns about others visible.
 - **Gemini.** Never receives names, video, coordinates or times (section 9.1).
-- **Retention and deletion.** Court results follow numeric results' lifetime. Account deletion covers new tables (section 7.5).
+- **Retention and deletion.** The video is deleted as soon as processing ends (owner decision, 2026-11-08; `SESSION_MODE.md` Decision 3). Court results follow numeric results' lifetime. Account deletion covers new tables (section 7.5).
 
 ---
 

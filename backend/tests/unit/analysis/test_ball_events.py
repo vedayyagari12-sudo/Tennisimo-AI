@@ -200,6 +200,28 @@ def test_pose_hit_outside_the_window_or_far_from_the_wrist_is_ignored() -> None:
     assert matched.kind is BallEventKind.HIT and matched.end is CourtEnd.NEAR
 
 
+def test_hitter_ground_point_maps_the_feet_and_nothing_else() -> None:
+    from app.analysis.ball_events import hitter_ground_point
+
+    behind_baseline = (1.2, -13.5)
+    u, v = CAMERA.project(np.array([[*behind_baseline, 0.0]]))[0]
+    ground = hitter_ground_point(CALIBRATION, (float(u), float(v)))
+    assert ground is not None
+    assert math.dist(ground, behind_baseline) < 0.01
+    assert hitter_ground_point(CALIBRATION, None) is None
+    # In the stands: mapped by the homography, but not a place a hitter stands.
+    u, v = CAMERA.project(np.array([[14.0, 0.0, 0.0]]))[0]
+    assert hitter_ground_point(CALIBRATION, (float(u), float(v))) is None
+
+
+def test_a_pose_hit_passes_its_feet_on_in_pixels() -> None:
+    event = BallEvent("e", 0, BallEventKind.UNKNOWN_KINK, 2.0, 0.003, (900.0, 700.0), np.eye(2),
+                      (0.0, 100.0), (0.0, -100.0), 0.9, ())
+    hit = PoseHit(2.0, None, CourtEnd.NEAR, 0.9, "forehand", feet_xy_px=(880.0, 760.0))
+    assert classify_event(event, CALIBRATION, [hit]).hitter_feet_xy_px == (880.0, 760.0)
+    assert classify_event(event, CALIBRATION, [PoseHit(2.0, None, CourtEnd.NEAR, 0.9)]).hitter_feet_xy_px is None
+
+
 # ------------------------------------------- no ground point for a flight
 
 

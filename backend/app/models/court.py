@@ -353,6 +353,9 @@ class ShotLandingResponse(BaseModel):
     rally_id: str | None
     shot_index_in_rally: int | None = Field(ge=1)
     flags: list[str]
+    #: Where the hitter stood, from the pose feet; null when not measured.
+    #: The shot map draws a path only when this is set.
+    hit_xy_m: tuple[float, float] | None = None
 
 
 class ShotMapSummaryResponse(BaseModel):

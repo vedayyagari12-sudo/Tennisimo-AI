@@ -83,20 +83,32 @@
       "max_fits": 3
     },
     "tennis_serve_10340710.mp4": {
-      "note": "court fit measured on the first frame only; camera not measured (run stopped for low memory)",
-      "max_fits": 0
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 0,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0
     },
     "tennis_forehand_8224596_pexels.mp4": {
-      "note": "court fit measured on the first frame only; camera not measured (run stopped for low memory)",
-      "max_fits": 3
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 3,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0
     },
     "tennis_serve_8224610_pexels.mp4": {
-      "note": "court fit measured on the first frame only; camera not measured (run stopped for low memory)",
-      "max_fits": 3
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 3,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0
     },
     "tennis_serve_4902145_pexels.mp4": {
-      "note": "court fit measured on the first frame only; camera not measured (run stopped for low memory)",
-      "max_fits": 3
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 3,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0
     }
   }
 }

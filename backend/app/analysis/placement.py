@@ -72,6 +72,9 @@ class ShotLanding:
     depth_confident: bool
     depth_probabilities: Mapping[DepthZone, float]
     width_zone: WidthZone
+    #: Where the hitter stood (court metres), the start of the shot's path on
+    #: the map. None when not measured; never guessed from the hitter's end.
+    hit_xy_m: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,7 @@ def classify_landing(
     is_serve: bool,
     *,
     target: LineCallTarget,
+    hit_xy_m: tuple[float, float] | None = None,
 ) -> ShotLanding:
     """Zones for one landing. Width is in thirds of the singles width in the
     camera's x frame."""
@@ -148,6 +152,7 @@ def classify_landing(
         depth_confident=confident,
         depth_probabilities=depth_zone_probabilities(distance, sigma),
         width_zone=width_zone_at(x),
+        hit_xy_m=hit_xy_m,
     )
 
 

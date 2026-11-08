@@ -103,6 +103,8 @@ Map<String, dynamic> landingJson({
   double minor = 0.05,
   String? rallyId = 'r_0000',
   int? index = 1,
+  String? shotType,
+  List<double>? hit,
 }) =>
     <String, dynamic>{
       'bounce_id': id,
@@ -112,7 +114,7 @@ Map<String, dynamic> landingJson({
       'sigma_m': <String, dynamic>{'major': major, 'minor': minor, 'angle_deg': 90.0},
       'half': y >= 0 ? 'far' : 'near',
       'hitter_end': hitterEnd,
-      'shot_type': isServe ? 'serve' : null,
+      'shot_type': isServe ? 'serve' : shotType,
       'is_serve': isServe,
       'target': hitterEnd == null ? 'half_only' : 'singles_half',
       'line_call': verdict == null
@@ -133,6 +135,7 @@ Map<String, dynamic> landingJson({
       'rally_id': rallyId,
       'shot_index_in_rally': index,
       'flags': <String>[],
+      'hit_xy_m': hit,
     };
 
 /// One landing of every kind on known spots, plus two rallies.
@@ -156,9 +159,11 @@ Map<String, dynamic> courtSessionJson() => <String, dynamic>{
         'median_sigma_along_m': 0.2,
       },
       'landings': <Map<String, dynamic>>[
-        landingJson(id: 'b_000001', x: 0.5, y: 9.0, isServe: true),
-        landingJson(id: 'b_000002', x: -2.0, y: -8.0, hitterEnd: 'far', index: 2),
-        landingJson(id: 'b_000003', x: 4.6, y: 10.0, verdict: 'out', index: 3),
+        landingJson(id: 'b_000001', x: 0.5, y: 9.0, isServe: true, hit: <double>[0.8, -12.2]),
+        landingJson(id: 'b_000002', x: -2.0, y: -8.0, hitterEnd: 'far', index: 2,
+            shotType: 'backhand', hit: <double>[-1.0, 12.4]),
+        landingJson(id: 'b_000003', x: 4.6, y: 10.0, verdict: 'out', index: 3,
+            shotType: 'forehand', hit: <double>[1.5, -11.0]),
         landingJson(id: 'b_000004', x: 1.0, y: 11.6, verdict: 'too_close_to_call', major: 0.5),
         landingJson(id: 'b_000005', x: -1.0, y: 5.0, verdict: null, hitterEnd: null, rallyId: null, index: null),
       ],

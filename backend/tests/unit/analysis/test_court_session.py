@@ -148,6 +148,52 @@ def test_pose_hits_mark_the_serve_landing() -> None:
     assert not any(l.is_serve for l in result.landings[1:])
 
 
+def feet_pose_hits(scene: SceneTruth) -> tuple[PoseHit, ...]:
+    """Pose hits whose feet are the hitter's true ground position, projected."""
+    hits = []
+    for rally in scene.rallies:
+        for h in rally.hits:
+            track = next(p for p in scene.players if p.end is h.end)
+            x, y = track.position_at(h.time_s)
+            u, v = CAMERA.project(np.array([[x, y, 0.0]]))[0]
+            shot = "serve" if h.is_serve else "forehand"
+            hits.append(PoseHit(h.time_s, None, h.end, 0.9, shot, feet_xy_px=(float(u), float(v))))
+    return tuple(hits)
+
+
+def test_a_landing_carries_where_its_hitter_stood() -> None:
+    """The shot map's path starts at the hitter's feet, mapped by the court
+    homography, and only for a landing whose hit came from pose."""
+    scene = generate_rally(SEEDS[0])
+    pose = feet_pose_hits(scene)
+    _, result = run(SEEDS[0], pose_hits=pose)
+    with_origin = [l for l in result.landings if l.hit_xy_m is not None]
+    assert with_origin
+    for landing in with_origin:
+        assert landing.hitter_end is not None
+        x, y = landing.hit_xy_m
+        # On the hitter's own side of the net, and near a true hitter position.
+        assert (y < 0) == (landing.hitter_end is CourtEnd.NEAR)
+        nearest = min(
+            float(np.hypot(x - px, y - py))
+            for p in scene.players
+            for px, py in [p.position_at(h.time_s) for r in scene.rallies for h in r.hits if h.end is p.end]
+        )
+        assert nearest < 0.05
+    for landing in result.landings:
+        if landing.hitter_end is None:
+            assert landing.hit_xy_m is None
+
+
+def test_no_feet_means_no_path() -> None:
+    scene = generate_rally(SEEDS[0])
+    pose = tuple(PoseHit(h.time_s, None, h.end, 0.9, "forehand") for h in scene.rallies[0].hits)
+    _, result = run(SEEDS[0], pose_hits=pose)
+    assert all(l.hit_xy_m is None for l in result.landings)
+    _, without = run(SEEDS[0])
+    assert all(l.hit_xy_m is None for l in without.landings)
+
+
 def test_rallies_are_found() -> None:
     scene, result = run(SEEDS[2])
     assert len(result.rallies) == len(scene.rallies)
