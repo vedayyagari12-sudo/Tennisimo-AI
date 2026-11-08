@@ -1,0 +1,77 @@
+{
+  "about": "File names and measured expectations only. Clips stay outside the repo (TENNIS_CLIPS_DIRS). Only clips measured so far are listed; the rest were not reached (the run was stopped for low memory).",
+  "clips": {
+    "serve_01_baseline_4902773.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_02_4902143.mp4": {
+      "camera": "unknown",
+      "stability_verdict": "unknown",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_03_practice_4902165.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_04_practice_4902161.mp4": {
+      "camera": "fixed",
+      "stability_verdict": "shaky",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_05_from_baseline_4902164.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_06_vertical_10340710.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_07_10340707.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "tennis_forehand_10340703.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "tennis_forehand_34449204.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 60.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "tennis_forehand_34449247.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 60.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "tennis_forehand_8224254_pexels.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "tennis_forehand_8224589_pexels.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    }
+  }
+}

@@ -39,14 +39,18 @@ Branch `worktree-phase-2-ball-court`. Everything below is pure or offline code w
 - Section 4.2 step 6: `< 0.35` is rejected with a new reason, `confidence_below_floor`, which the step 5 list omitted.
 - Phase 2 step 16: a bounce on the hitter's own side with no net contact between drops the hitter (a missed opponent hit) and is called `half_only`. Before this, the far-half region (which has no net edge) called such a ball IN. With net contact between, the landing carries no call.
 
-**Known gaps found while building**
-- `rally.py` produced a range of 6-7 hits for one synthetic rally whose true length is 5 (seed 20261102). Not investigated.
+**Phase 2 batches I and J (2026-11-08)**
+- **I, T0 and T2 full-chain evaluation:** results table in `SESSION_MODE_PHASE2.md` 11.2.1. T0 meets its targets on 100 distinct seeds (0 confident wrong calls, rally exact 0.99). T2 at 1080p makes no confident wrong call and its landings are real (precision 1.00), but bounce recall (0.50) and rally exactness (0.50) miss the targets; that is a strict xfail. `SIGMA_INFLATION` is frozen at 1.0 (coverage above the band at both tiers).
+- **J, real-clip smoke:** `backend/tests/eval/test_real_clips_smoke.py` with a filenames-only manifest; camera tags were measured, not viewed. 12 of 16 clips are in the manifest (the measuring run was stopped for low memory before tennis_forehand_8224596, tennis_serve_10340710, tennis_serve_4902145 and tennis_serve_8224610). All 12 decode with monotonic PTS and are refused without calibration: 11 moving or unknown, serve_04 shaky. `court_fit` (step 19) was time-boxed out.
+- The evaluation found and fixed bugs in `flight_track`, `court_session`, `rally` (now `rally_v2`; this fixed the seed 20261102 miscount) and `flight_detector`, each with a test.
+
+**Known gaps**
+- T2 bounce recall and rally exactness (above). Event-layer work that real footage, not the synthetic renderer, should drive.
 - The numeric guard checks numbers, not meaning: a payload number reused with another meaning (median rally length 5 written as "5 rallies") passes.
 
 **Still to do, blocked on owner decisions or footage**
-- Slice 0 experiment and Phase 2 footage (accuracy, `SIGMA_INFLATION`, Decision 2).
+- Slice 0 experiment and Phase 2 footage (real accuracy, Decision 2).
 - Slices 2-8: Part 9 SQL, routes, Job, upload, screens. Needs Decision 1 (paid Supabase plan) and Decision 2 (launch limit).
-- Phase 2 batches I (T2 pixel e2e) and J (real-clip smoke).
 
 ---
 
