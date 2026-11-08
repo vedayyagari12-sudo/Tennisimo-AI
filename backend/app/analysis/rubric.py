@@ -32,12 +32,15 @@ Only ``forehand_topspin`` and ``forehand_slice`` have authored bands.
 back to :data:`BASE_BANDS`, which contains ONLY the metrics whose bands already
 agreed across the three original archetypes -- so applying them to an unbanded
 shot type asserts nothing that the existing tables did not already assert. The
-cost is stated rather than hidden: an unbanded shot type scores ``preparation``,
-``swing_path`` (2 of 3) and ``balance``, and scores ``contact`` and
-``follow_through`` as ``None``, because nobody has yet written down what a good
-one-handed-backhand contact height is. **Authoring real bands for those four
-shot types is the committed follow-up; this fallback is the launch position, not
-the answer.**
+cost is stated rather than hidden: an unbanded shot type scores ``swing_path``
+(2 of 3) and ``balance``, and scores ``contact`` and ``follow_through`` as
+``None``, because nobody has yet written down what a good one-handed-backhand
+contact height is. ``preparation`` has no scored metric for ANY shot type since
+``rubric_v0.2_placeholder`` (see UNSCORED_DIAGNOSTIC_METRICS), so an unbanded
+shot type scores at most two categories and never reaches
+``MIN_SCORED_CATEGORIES``: its ``overall_score`` is always ``None``.
+**Authoring real bands for those four shot types is the committed follow-up;
+this fallback is the launch position, not the answer.**
 """
 
 from __future__ import annotations
@@ -70,7 +73,13 @@ from app.models.enums import MetricUnit, ScoreCategory, ShotType
 #: and `overall_score` are computed from. No band was retuned. Nothing
 #: constrains the stored string (DATABASE_SETUP.md: the incident-2 CHECK on
 #: `analyses.rubric_version` was dropped and every value is accepted).
-RUBRIC_VERSION: Final[str] = "rubric_v0.1_placeholder"
+#:
+#: `rubric_v0.2_placeholder`: shoulder_hip_separation_deg was withdrawn the same
+#: way (see UNSCORED_DIAGNOSTIC_METRICS), which leaves `preparation` with no
+#: scored metric, so that category is `None` on every clip and `overall_score`
+#: is computed from at most the other four. No band, weight or
+#: MIN_SCORED_CATEGORIES was changed.
+RUBRIC_VERSION: Final[str] = "rubric_v0.2_placeholder"
 
 # Emitted only when at least this many of the five categories have a real score.
 # A clip where only `contact` is measurable otherwise produces an "overall swing
@@ -132,15 +141,12 @@ class MetricBand(BaseModel):
 # --- what each metric IS -----------------------------------------------------
 
 METRIC_SPECS: Final[dict[str, MetricSpec]] = {
-    # preparation
-    # The ONLY preparation metric since shoulder_turn_deg / hip_rotation_deg
-    # were withdrawn (see UNSCORED_DIAGNOSTIC_METRICS). Its weight is left at
-    # 0.40: weights are pre-renormalization and score_category renormalizes
-    # over the category's available members, so a lone member carries the
-    # whole category whatever its weight.
-    "shoulder_hip_separation_deg": MetricSpec(
-        category=ScoreCategory.PREPARATION, weight=0.40, unit=MetricUnit.DEGREES
-    ),
+    # preparation -- NO scored metric: shoulder_hip_separation_deg,
+    # shoulder_turn_deg and hip_rotation_deg were all withdrawn (see
+    # UNSCORED_DIAGNOSTIC_METRICS). The category stays in CATEGORY_WEIGHTS and
+    # in every Scorecard, with score_0_100 None and metrics_total 0
+    # (score_category branches on "no available member" before any division),
+    # and overall_from_categories renormalizes over the categories that scored.
     # contact -- weights sum to 0.85 since wrist_lag_deg (0.15) was withdrawn;
     # left unchanged for the same reason (renormalized, so scores are identical
     # to rescaling them, and the Stage 16 tie-break ranks stay as they were).
@@ -224,6 +230,14 @@ UNSCORED_DIAGNOSTIC_METRICS: Final[dict[str, str]] = {
         "to the hand: a straight arm swinging about a fixed shoulder reads 90.0 "
         "at every frame and bending the elbow only lowers it; its 15-45 / 5-25 "
         "bands had no source"
+    ),
+    "shoulder_hip_separation_deg": (
+        "a difference of two in-plane line angles, so it shares their defect: "
+        "a true 45 deg X-factor about the vertical axis seen by a level camera "
+        "reads 0.0, a left/right swap of the shoulder landmarks reads 180, and "
+        "foreshortened lines read near +-180 on real clips "
+        "(tennis_forehand_8224254); its sign is arbitrary, so negative readings "
+        "scored preparation 0 on most of the corpus"
     ),
 }
 
@@ -334,7 +348,6 @@ def _table(ranges: dict[str, tuple[float, float]]) -> dict[str, MetricBand]:
 
 # Carried over verbatim from the original `topspin` archetype.
 _FOREHAND_TOPSPIN: Final[dict[str, tuple[float, float]]] = {
-    "shoulder_hip_separation_deg": (40.0, 65.0),
     "elbow_angle_at_contact_deg": (120.0, 160.0),
     "contact_height_ratio": (0.75, 1.05),
     "contact_point_forward_tu": (0.25, 0.60),
@@ -349,7 +362,6 @@ _FOREHAND_TOPSPIN: Final[dict[str, tuple[float, float]]] = {
 
 # Carried over verbatim from the original `slice` archetype.
 _FOREHAND_SLICE: Final[dict[str, tuple[float, float]]] = {
-    "shoulder_hip_separation_deg": (30.0, 50.0),
     "elbow_angle_at_contact_deg": (140.0, 175.0),
     "contact_height_ratio": (0.55, 0.95),
     "contact_point_forward_tu": (0.20, 0.55),
@@ -369,7 +381,6 @@ _FOREHAND_SLICE: Final[dict[str, tuple[float, float]]] = {
 # (15..35) and slice (-30..-8) are disjoint and any "compromise" band would
 # score both a good topspin and a good slice as wrong.
 _BASE: Final[dict[str, tuple[float, float]]] = {
-    "shoulder_hip_separation_deg": (30.0, 65.0),
     "swing_plane_deviation_tu": (0.0, 0.08),
     "tempo_ratio": (1.5, 3.0),
     "knee_flexion_min_deg": (130.0, 165.0),

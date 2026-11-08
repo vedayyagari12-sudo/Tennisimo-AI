@@ -1793,7 +1793,8 @@ to mislabel a row written by v3.
 **A16 — `analyses.rubric_version DEFAULT 'rubric_v1'`.** Undocumented default,
 and the most pointed one. *Fix direction: **DROP the default**.* The code
 deliberately writes `rubric_v0_placeholder` (since the withdrawal of three
-unscorable metrics, `rubric_v0.1_placeholder`)
+unscorable metrics, `rubric_v0.1_placeholder`; since the withdrawal of a
+fourth, `rubric_v0.2_placeholder`)
 (`backend/app/analysis/rubric.py:66`), and that file's own comment explains why
 in terms that apply verbatim to the default:
 
@@ -2011,8 +2012,10 @@ CREATE TRIGGER trg_analysis_jobs_updated_at
   `rubric.py:66` and `pipeline.py:121`, where it is visible to the person
   changing it. **Flagging this as the user's call, not a settled matter** — if
   a CHECK is wanted, it must list every value the code has written --
-  `'rubric_v0_placeholder'` and `'rubric_v0.1_placeholder'` (written since
-  three unscorable metrics were withdrawn from the rubric) -- not `'rubric_v1'`.
+  `'rubric_v0_placeholder'`, `'rubric_v0.1_placeholder'` (written since
+  three unscorable metrics were withdrawn from the rubric) and
+  `'rubric_v0.2_placeholder'` (since `shoulder_hip_separation_deg` was
+  withdrawn too) -- not `'rubric_v1'`.
 - **No drop of the undocumented-but-correct constraints** (`path_prefix_chk`
   ×2, `path_depth_chk`, `payload_object_chk`, `eta_chk`,
   `ball_speed_reason_chk`, `ball_speed_reason_pairing_chk`). They are good

@@ -66,22 +66,22 @@ def test_in_range_metrics_produce_no_deviations() -> None:
 
 
 def test_boundary_values_are_in_range() -> None:
-    band = REFERENCE_RANGES[ShotType.FOREHAND_TOPSPIN.value]["shoulder_hip_separation_deg"]
-    metrics = {"shoulder_hip_separation_deg": band.minimum}
+    band = REFERENCE_RANGES[ShotType.FOREHAND_TOPSPIN.value]["elbow_angle_at_contact_deg"]
+    metrics = {"elbow_angle_at_contact_deg": band.minimum}
     assert compare_to_reference(metrics, ShotType.FOREHAND_TOPSPIN.value) == []
-    metrics = {"shoulder_hip_separation_deg": band.maximum}
+    metrics = {"elbow_angle_at_contact_deg": band.maximum}
     assert compare_to_reference(metrics, ShotType.FOREHAND_TOPSPIN.value) == []
 
 
 def test_below_range_metric_is_reported_low_with_magnitude() -> None:
-    band = REFERENCE_RANGES[ShotType.FOREHAND_TOPSPIN.value]["shoulder_hip_separation_deg"]
+    band = REFERENCE_RANGES[ShotType.FOREHAND_TOPSPIN.value]["elbow_angle_at_contact_deg"]
     value = band.minimum - 6.5
     deviations = compare_to_reference(
-        {"shoulder_hip_separation_deg": value}, ShotType.FOREHAND_TOPSPIN.value
+        {"elbow_angle_at_contact_deg": value}, ShotType.FOREHAND_TOPSPIN.value
     )
     assert len(deviations) == 1
     dev = deviations[0]
-    assert dev.name == "shoulder_hip_separation_deg"
+    assert dev.name == "elbow_angle_at_contact_deg"
     assert dev.value == pytest.approx(value)
     assert dev.direction is DeviationDirection.LOW
     assert dev.magnitude == pytest.approx(6.5)
@@ -117,7 +117,7 @@ def test_negative_range_slice_path_angle() -> None:
 def test_none_valued_metric_is_skipped_and_never_treated_as_zero() -> None:
     # 0.0 would be below every one of these bands; None must not behave that way.
     metrics: dict[str, float | None] = {
-        "shoulder_hip_separation_deg": None,
+        "elbow_angle_at_contact_deg": None,
         "knee_flexion_min_deg": None,
         "peak_hand_speed_tu_s": None,
     }
@@ -145,7 +145,7 @@ def test_unknown_shot_type_degrades_to_empty_list() -> None:
 
 
 def test_shot_type_enum_member_is_accepted() -> None:
-    metrics = {"shoulder_hip_separation_deg": 5.0}
+    metrics = {"elbow_angle_at_contact_deg": 5.0}
     assert len(compare_to_reference(metrics, ShotType.FOREHAND_TOPSPIN)) == 1
 
 

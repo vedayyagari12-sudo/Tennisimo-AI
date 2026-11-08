@@ -1,7 +1,9 @@
-"""shoulder_turn_deg, hip_rotation_deg and wrist_lag_deg: computed, never scored.
+"""shoulder_turn_deg, hip_rotation_deg, wrist_lag_deg and shoulder_hip_separation_deg:
+computed, never scored.
 
 Each measures something other than what its name says (in-plane tilt, not
-turn; a forearm angle blind to the hand), so none may reach a user as a scored
+turn; a forearm angle blind to the hand; a difference of two in-plane line
+angles that reads 0 for a real X-factor), so none may reach a user as a scored
 or coachable measurement: not in a band table, not in a category or the overall
 score, not in ``Scorecard.metrics``, not in the Gemini payload, and its Stage 13
 warnings neither show nor make an analysis ``partial``.
@@ -21,12 +23,16 @@ from app.analysis.metrics import (
     SHOULDER_LINE_FORESHORTENED,
     SHOULDER_LINE_TOO_FEW_FRAMES,
     compute_swing_metrics,
+    shoulder_hip_separation_deg,
     turn_flag_warning,
 )
+from app.analysis.normalize import LEFT_HIP, LEFT_SHOULDER, RIGHT_HIP, RIGHT_SHOULDER
 from app.analysis.phases import segment_swing_phases
 from app.analysis.rubric import (
+    CATEGORY_WEIGHTS,
     EXCLUDED_METRICS,
     METRIC_SPECS,
+    MIN_SCORED_CATEGORIES,
     UNSCORED_DIAGNOSTIC_METRICS,
     bands_for,
     is_unscored_metric_warning,
@@ -45,12 +51,17 @@ from app.models.enums import (
 from app.models.responses import (
     AnalysisResponse,
     BallSpeedResult,
+    CategoryScore,
     MetricScore,
     Scorecard,
     ShotTypeInference,
     SwingMetrics,
 )
-from app.services.pipeline import Accumulator, record_metric_warnings
+from app.services.pipeline import (
+    Accumulator,
+    record_metric_warnings,
+    scorecard_coverage_message,
+)
 
 from tests.unit.analysis.synthetic_swing import (
     RIGHT_HANDED,
@@ -58,7 +69,12 @@ from tests.unit.analysis.synthetic_swing import (
     build_sequence,
 )
 
-UNSCORED: tuple[str, ...] = ("shoulder_turn_deg", "hip_rotation_deg", "wrist_lag_deg")
+UNSCORED: tuple[str, ...] = (
+    "shoulder_turn_deg",
+    "hip_rotation_deg",
+    "wrist_lag_deg",
+    "shoulder_hip_separation_deg",
+)
 
 #: A real v4 payload persisted at HEAD before the withdrawal (serve_01, rubric
 #: ``rubric_v0_placeholder``): its scorecard still scores shoulder_turn_deg and
@@ -68,11 +84,12 @@ OLD_PAYLOAD_PATH: Path = (
     / "v4_rubric_v0_placeholder_serve.json"
 )
 
-# Every metric inside the forehand_topspin band, AND the three unscored ones
-# set to values that would have scored badly under the old bands (0.0 is far
-# below 80-110 / 35-60 / 15-45): if any still scored, the overall would drop.
+# Every metric inside the forehand_topspin band, AND the unscored ones set to
+# values that would have scored badly under the old bands (0.0 is far below
+# 80-110 / 35-60 / 15-45, -45.0 far below 40-65): if any still scored, the
+# overall would drop.
 IN_BAND_PLUS_UNSCORED: dict[str, float] = {
-    "shoulder_hip_separation_deg": 52.0,
+    "shoulder_hip_separation_deg": -45.0,
     "elbow_angle_at_contact_deg": 140.0,
     "contact_height_ratio": 0.90,
     "contact_point_forward_tu": 0.42,
@@ -127,7 +144,7 @@ def load_old_payload() -> dict[str, Any]:
 # --- rubric ------------------------------------------------------------------
 
 
-def test_the_three_are_unscored_diagnostics_with_a_reason_each() -> None:
+def test_the_four_are_unscored_diagnostics_with_a_reason_each() -> None:
     assert set(UNSCORED_DIAGNOSTIC_METRICS) == set(UNSCORED)
     for name in UNSCORED:
         assert UNSCORED_DIAGNOSTIC_METRICS[name].strip()
@@ -166,11 +183,59 @@ def test_their_values_never_move_any_score(shot_type: ShotType) -> None:
     ]
 
 
-def test_preparation_is_separation_alone() -> None:
-    card = build_scorecard(SwingMetrics(**IN_BAND_PLUS_UNSCORED), ShotType.FOREHAND_TOPSPIN)
+@pytest.mark.parametrize("shot_type", list(ShotType))
+def test_preparation_has_no_scored_metric_and_is_none_never_zero(shot_type: ShotType) -> None:
+    card = build_scorecard(SwingMetrics(**IN_BAND_PLUS_UNSCORED), shot_type)
     preparation = next(c for c in card.categories if c.category == ScoreCategory.PREPARATION)
-    assert preparation.metric_names == ["shoulder_hip_separation_deg"]
-    assert preparation.score_0_100 == pytest.approx(100.0)
+    assert preparation.metric_names == []
+    assert preparation.score_0_100 is None
+    assert preparation.metrics_available == 0
+    assert preparation.metrics_total == 0
+    # The category is still reported (all five always are), with its weight.
+    assert len(card.categories) == len(ScoreCategory)
+
+
+def test_a_full_forehand_still_gets_an_overall_score_from_the_other_four() -> None:
+    card = build_scorecard(SwingMetrics(**IN_BAND_PLUS_UNSCORED), ShotType.FOREHAND_TOPSPIN)
+    scored = [c for c in card.categories if c.score_0_100 is not None]
+    assert len(scored) == 4
+    assert card.overall_score == pytest.approx(100.0)
+
+
+# --- why shoulder_hip_separation_deg is withdrawn (synthetic) -----------------
+
+
+def _with_trunk(shoulder_half_width: float, *, swap_shoulders: bool = False) -> float | None:
+    """Separation on the canonical swing with level hips and level shoulders."""
+    seq = build_sequence()
+    contact = build_contact()
+    phases, _ = segment_swing_phases(seq, RIGHT_HANDED, contact)
+    seq.points[:, LEFT_HIP] = (-0.15, 0.0)
+    seq.points[:, RIGHT_HIP] = (0.15, 0.0)
+    left, right = (-shoulder_half_width, 1.0), (shoulder_half_width, 1.0)
+    if swap_shoulders:
+        left, right = right, left
+    seq.points[:, LEFT_SHOULDER] = left
+    seq.points[:, RIGHT_SHOULDER] = right
+    return shoulder_hip_separation_deg(seq, phases)
+
+
+def test_a_true_45_degree_x_factor_about_the_vertical_axis_reads_zero() -> None:
+    """Shoulders turned 45 deg further than the hips, seen by a level camera.
+
+    About the vertical axis the turn only shortens the projected shoulder line
+    (0.2 * cos 45 deg); both lines stay horizontal, so the in-plane difference
+    is 0.0 whatever the real X-factor is.
+    """
+    import math
+
+    assert _with_trunk(0.2 * math.cos(math.radians(45.0))) == pytest.approx(0.0)
+
+
+def test_a_shoulder_landmark_swap_reads_180() -> None:
+    reading = _with_trunk(0.2, swap_shoulders=True)
+    assert reading is not None
+    assert abs(reading) == pytest.approx(180.0)
 
 
 def test_stage_13_still_computes_them_as_diagnostics() -> None:
@@ -178,6 +243,7 @@ def test_stage_13_still_computes_them_as_diagnostics() -> None:
     contact = build_contact()
     phases, _ = segment_swing_phases(seq, RIGHT_HANDED, contact)
     metrics, _ = compute_swing_metrics(seq, RIGHT_HANDED, contact, phases)
+    assert metrics.shoulder_hip_separation_deg is not None
     assert metrics.wrist_lag_deg is not None
     assert metrics.shoulder_turn_deg is not None
     assert metrics.hip_rotation_deg is not None
@@ -210,6 +276,7 @@ def test_an_old_scorecard_that_still_scores_them_cannot_steer_gemini() -> None:
                 old_metric_row("shoulder_turn_deg", ScoreCategory.PREPARATION),
                 old_metric_row("hip_rotation_deg", ScoreCategory.PREPARATION),
                 old_metric_row("wrist_lag_deg", ScoreCategory.CONTACT),
+                old_metric_row("shoulder_hip_separation_deg", ScoreCategory.PREPARATION),
             ]
         }
     )
@@ -229,7 +296,7 @@ def test_an_old_scorecard_that_still_scores_them_cannot_steer_gemini() -> None:
 
 def test_the_stored_old_payload_cannot_steer_gemini() -> None:
     response = AnalysisResponse.model_validate(load_old_payload())
-    assert {"shoulder_turn_deg", "hip_rotation_deg"} <= {
+    assert {"shoulder_turn_deg", "hip_rotation_deg", "shoulder_hip_separation_deg"} <= {
         m.name for m in response.scorecard.metrics
     }
     core = build_feedback_input(
@@ -309,5 +376,78 @@ def test_an_old_stored_payload_that_still_scores_them_validates() -> None:
     response = AnalysisResponse.model_validate(payload)
     assert response.scorecard.rubric_version == "rubric_v0_placeholder"
     assert response.metrics.shoulder_turn_deg is not None
+    assert response.metrics.shoulder_hip_separation_deg is not None
+    assert "shoulder_hip_separation_deg" in {m.name for m in response.scorecard.metrics}
     # Round-trips unchanged: nothing in the model rejects or rewrites them.
     assert AnalysisResponse.model_validate(response.model_dump(mode="json")) == response
+
+
+# --- the status message for what the scorecard could not score ---------------
+
+
+def test_coverage_message_when_one_or_two_categories_scored_says_so() -> None:
+    """It used to read "no scoring category had a measurable metric" -- false here."""
+    card = build_scorecard(SwingMetrics(**IN_BAND_PLUS_UNSCORED), ShotType.SERVE)
+    assert card.overall_score is None
+    message = scorecard_coverage_message(card)
+    assert message == (
+        "only 2 of 5 scoring categories could be scored; an overall score needs "
+        f"at least {MIN_SCORED_CATEGORIES}"
+    )
+    assert "no scoring category" not in message
+
+    one = build_scorecard(
+        SwingMetrics(follow_through_height_tu=0.60), ShotType.FOREHAND_TOPSPIN
+    )
+    assert one.overall_score is None
+    assert scorecard_coverage_message(one) == (
+        "only 1 of 5 scoring categories could be scored; an overall score needs "
+        f"at least {MIN_SCORED_CATEGORIES}"
+    )
+
+
+def test_coverage_message_when_nothing_scored() -> None:
+    card = build_scorecard(SwingMetrics(), ShotType.FOREHAND_TOPSPIN)
+    assert scorecard_coverage_message(card) == "no scoring category had a measurable metric"
+
+
+def test_coverage_message_with_an_overall_score_over_four_categories() -> None:
+    card = build_scorecard(SwingMetrics(**IN_BAND_PLUS_UNSCORED), ShotType.FOREHAND_TOPSPIN)
+    assert card.overall_score is not None
+    assert scorecard_coverage_message(card) == "4 of 5 scoring categories were measurable"
+
+
+def _category(category: ScoreCategory, score: float | None) -> CategoryScore:
+    return CategoryScore(
+        category=category,
+        score_0_100=score,
+        weight=CATEGORY_WEIGHTS[category],
+        metric_names=[],
+        metrics_available=0 if score is None else 1,
+        metrics_total=1,
+    )
+
+
+def test_coverage_message_is_none_when_every_category_scored() -> None:
+    card = Scorecard(
+        overall_score=80.0,
+        categories=[_category(category, 80.0) for category in CATEGORY_WEIGHTS],
+        metrics=[],
+    )
+    assert scorecard_coverage_message(card) is None
+
+
+def test_coverage_message_never_claims_too_few_when_enough_scored() -> None:
+    """Unreachable with the shipped weights; still must not say something false."""
+    scores = [80.0, 80.0, 80.0, None, None]
+    card = Scorecard(
+        overall_score=None,
+        categories=[
+            _category(category, score)
+            for category, score in zip(CATEGORY_WEIGHTS, scores, strict=True)
+        ],
+        metrics=[],
+    )
+    assert scorecard_coverage_message(card) == (
+        "no overall score although 3 of 5 scoring categories scored"
+    )

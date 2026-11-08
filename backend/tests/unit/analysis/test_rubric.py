@@ -53,15 +53,19 @@ def test_the_unbanded_allowlist_is_explicit_and_exactly_the_five_expected() -> N
     assert set(RUBRIC_V1) == BANDED_SHOT_TYPES
 
 
-def test_base_bands_cover_exactly_three_categories_which_clears_the_floor() -> None:
-    """The BASE_BANDS product decision, asserted rather than assumed."""
+def test_base_bands_cover_exactly_two_categories_which_is_below_the_floor() -> None:
+    """The BASE_BANDS product decision, asserted rather than assumed.
+
+    Since ``rubric_v0.2_placeholder`` withdrew shoulder_hip_separation_deg,
+    preparation has no scored metric, so an unbanded shot type scores at most
+    two categories and its overall_score is always None.
+    """
     categories = {band.category for band in BASE_BANDS.values()}
     assert categories == {
-        ScoreCategory.PREPARATION,
         ScoreCategory.SWING_PATH,
         ScoreCategory.BALANCE,
     }
-    assert len(categories) >= MIN_SCORED_CATEGORIES
+    assert len(categories) < MIN_SCORED_CATEGORIES
     # contact and follow_through are blank on purpose: nobody has written down
     # what a good one-handed-backhand contact height is.
     assert not metric_names_for(ShotType.SERVE, ScoreCategory.CONTACT)
@@ -105,11 +109,13 @@ def test_category_weights_cover_the_five_categories_and_sum_to_one() -> None:
 
 
 # Weight withdrawn from a category when shoulder_turn_deg / hip_rotation_deg
-# (preparation, 0.30 each) and wrist_lag_deg (contact, 0.15) stopped being
-# scored. The surviving weights were deliberately NOT rescaled: score_category
+# (preparation, 0.30 each), wrist_lag_deg (contact, 0.15) and
+# shoulder_hip_separation_deg (preparation, 0.40) stopped being scored. The
+# surviving weights were deliberately NOT rescaled: score_category
 # renormalizes over the available members, so the scores are identical.
+# Preparation has no member left at all, so the loop below skips it.
 WITHDRAWN_WEIGHT: dict[ScoreCategory, float] = {
-    ScoreCategory.PREPARATION: 0.60,
+    ScoreCategory.PREPARATION: 1.00,
     ScoreCategory.CONTACT: 0.15,
 }
 
@@ -138,8 +144,8 @@ def test_hard_bounds_are_one_band_width_out_and_clamp_at_physical_limits() -> No
     assert hard_bounds(120.0, 160.0, elbow) == (80.0, 180.0)  # 200 clamped to 180
     speed = METRIC_SPECS["peak_hand_speed_tu_s"]
     assert hard_bounds(4.0, 9.0, speed) == (0.0, 14.0)  # -1 clamped to 0
-    separation = METRIC_SPECS["shoulder_hip_separation_deg"]
-    assert hard_bounds(40.0, 65.0, separation) == (15.0, 90.0)  # unclamped
+    path_angle = METRIC_SPECS["swing_path_angle_deg"]
+    assert hard_bounds(15.0, 35.0, path_angle) == (-5.0, 55.0)  # unclamped
 
 
 def test_lower_is_better_is_set_exactly_where_zero_is_perfect() -> None:
@@ -152,12 +158,12 @@ def test_lower_is_better_is_set_exactly_where_zero_is_perfect() -> None:
 
 
 def test_make_band_inherits_category_weight_and_unit_from_the_spec() -> None:
-    band = make_band("shoulder_hip_separation_deg", 30.0, 50.0)
-    spec = METRIC_SPECS["shoulder_hip_separation_deg"]
+    band = make_band("swing_path_angle_deg", -30.0, -8.0)
+    spec = METRIC_SPECS["swing_path_angle_deg"]
     assert band.category == spec.category
     assert band.weight == spec.weight
     assert band.unit == spec.unit
-    assert (band.hard_min, band.hard_max) == (10.0, 70.0)
+    assert (band.hard_min, band.hard_max) == (-52.0, 14.0)
 
 
 def test_view_sensitivity_is_read_from_stage_thirteen_not_redeclared() -> None:
@@ -182,4 +188,4 @@ def test_rubric_version_names_itself_a_placeholder() -> None:
     Deliberately contradicts PIPELINE.md:1013 ("rubric_version stays
     rubric_v1"); the divergence is recorded in PIPELINE.md's change log.
     """
-    assert RUBRIC_VERSION == "rubric_v0.1_placeholder"
+    assert RUBRIC_VERSION == "rubric_v0.2_placeholder"

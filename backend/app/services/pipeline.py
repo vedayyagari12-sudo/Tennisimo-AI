@@ -49,7 +49,11 @@ from app.analysis.handedness import detect_handedness, racket_wrist_index
 from app.analysis.metrics import compute_swing_metrics
 from app.analysis.normalize import normalize_sequence
 from app.analysis.phases import segment_swing_phases
-from app.analysis.rubric import RUBRIC_VERSION, is_unscored_metric_warning
+from app.analysis.rubric import (
+    MIN_SCORED_CATEGORIES,
+    RUBRIC_VERSION,
+    is_unscored_metric_warning,
+)
 from app.analysis.scoring import build_scorecard
 from app.analysis.shot_type import infer_shot_type, resolve_shot_type
 from app.analysis.speed import compute_ball_speed
@@ -78,6 +82,7 @@ from app.models.responses import (
     Improvement,
     NumericGuardReport,
     PoseQuality,
+    Scorecard,
     ShotTypeInference,
     StageTimings,
     SwingPhases,
@@ -172,6 +177,13 @@ TRUNCATION_MARGIN_FRAMES: Final[int] = 2
 #: analysis window (``MOTION_SCAN_THRESHOLD_S`` defaults to the window, 8 s,
 #: not 10 s), so an 8-10 s clip's window is placed on the motion instead of on
 #: its first 8 s. Window placement only; no gate changed.
+#: Also v4: ``shoulder_hip_separation_deg`` is no longer SCORED either (rubric
+#: ``rubric_v0.2_placeholder``): a difference of two in-plane line angles, it
+#: reads 0.0 for a real X-factor and 180 on a shoulder swap. Handled exactly as
+#: the three above. Preparation now has NO scored metric: it is ``None`` on every
+#: clip, so ``overall_score`` comes from the other four categories at most and an
+#: unbanded shot type (2 categories) never gets one. The status message for a
+#: missing overall score now says how many categories scored (``scorecard_coverage_message``).
 PIPELINE_VERSION: Final[str] = "v4"
 
 #: The one plain-language warning added when the user's declared shot type and
@@ -298,6 +310,34 @@ def record_metric_warnings(accumulator: Accumulator, warnings: list[str]) -> Non
     accumulator.low_confidence.extend(kept)
     if kept:
         accumulator.partial = True
+
+
+def scorecard_coverage_message(scorecard: Scorecard) -> str | None:
+    """Stage 15's contribution to the status: what the scorecard could not score.
+
+    None when every category scored. Otherwise one message that is TRUE of this
+    scorecard -- the caller degrades the analysis to ``partial`` with it:
+
+    * no overall score and no category scored at all;
+    * no overall score because fewer than ``MIN_SCORED_CATEGORIES`` scored (it
+      used to say "no scoring category had a measurable metric" here too, which
+      was false whenever one or two categories had a score);
+    * an overall score over only some of the categories.
+    """
+    total = len(scorecard.categories)
+    scored = sum(1 for item in scorecard.categories if item.score_0_100 is not None)
+    if scorecard.overall_score is None:
+        if scored == 0:
+            return "no scoring category had a measurable metric"
+        if scored < MIN_SCORED_CATEGORIES:
+            return (
+                f"only {scored} of {total} scoring categories could be scored; an "
+                f"overall score needs at least {MIN_SCORED_CATEGORIES}"
+            )
+        return f"no overall score although {scored} of {total} scoring categories scored"
+    if scored < total:
+        return f"{scored} of {total} scoring categories were measurable"
+    return None
 
 
 def unavailable_speed(reason: BallSpeedUnavailableReason) -> BallSpeedResult:
@@ -600,16 +640,9 @@ def run_analysis_job(
 
             # Rubric selection follows the PRIMARY type.
             scorecard = build_scorecard(metrics, shot_type.shot_type)
-            scored_categories = sum(
-                1 for c in scorecard.categories if c.score_0_100 is not None
-            )
-            if scorecard.overall_score is None:
-                accumulator.degrade("no scoring category had a measurable metric")
-            elif scored_categories < len(scorecard.categories):
-                accumulator.degrade(
-                    f"{scored_categories} of {len(scorecard.categories)} scoring "
-                    "categories were measurable"
-                )
+            coverage = scorecard_coverage_message(scorecard)
+            if coverage is not None:
+                accumulator.degrade(coverage)
         context.heartbeat()
 
         # -- Stages 10-11: ball speed. Never fails the job ---------------
@@ -722,6 +755,7 @@ __all__ = [
     "record_metric_warnings",
     "record_shot_type",
     "run_analysis_job",
+    "scorecard_coverage_message",
     "stage_timings",
     "to_wire_feedback",
     "unavailable_speed",

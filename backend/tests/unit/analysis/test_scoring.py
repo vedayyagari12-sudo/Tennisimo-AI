@@ -37,9 +37,9 @@ from tests.unit.analysis.synthetic_swing import (
     build_sequence,
 )
 
-# Every metric set to a value comfortably inside the forehand_topspin band.
+# Every SCORED metric set to a value comfortably inside the forehand_topspin
+# band. (Preparation has no scored metric since rubric_v0.2_placeholder.)
 IN_BAND_TOPSPIN: dict[str, float] = {
-    "shoulder_hip_separation_deg": 52.0,
     "elbow_angle_at_contact_deg": 140.0,
     "contact_height_ratio": 0.90,
     "contact_point_forward_tu": 0.42,
@@ -240,20 +240,35 @@ def test_a_fully_populated_metric_set_produces_a_full_scorecard() -> None:
     assert card.overall_score == pytest.approx(100.0)
     assert len(card.categories) == len(ScoreCategory)
     for category in card.categories:
+        if category.category == ScoreCategory.PREPARATION:
+            # No scored metric at all: None, never 0, and no fabricated total.
+            assert category.score_0_100 is None
+            assert category.metrics_available == 0
+            assert category.metrics_total == 0
+            continue
         assert category.score_0_100 is not None, category.category
         assert category.metrics_available == category.metrics_total
     assert len(card.metrics) == len(METRIC_SPECS)
     assert card.rubric_version == RUBRIC_VERSION
 
 
-def test_an_unbanded_shot_type_still_scores_three_categories() -> None:
-    """The BASE_BANDS product decision, end to end."""
+def test_an_unbanded_shot_type_scores_two_categories_and_no_overall() -> None:
+    """The BASE_BANDS product decision, end to end.
+
+    Since preparation lost its only scored metric, an unbanded shot type scores
+    swing_path and balance only -- below MIN_SCORED_CATEGORIES -- so its overall
+    score is None, never a two-category number.
+    """
     card = build_scorecard(in_band_metrics(), ShotType.BACKHAND_TWO_HANDED)
     scored = [item for item in card.categories if item.score_0_100 is not None]
-    assert len(scored) == MIN_SCORED_CATEGORIES
-    assert card.overall_score is not None
+    assert len(scored) == 2 < MIN_SCORED_CATEGORIES
+    assert card.overall_score is None
     blank = {item.category for item in card.categories if item.score_0_100 is None}
-    assert blank == {ScoreCategory.CONTACT, ScoreCategory.FOLLOW_THROUGH}
+    assert blank == {
+        ScoreCategory.PREPARATION,
+        ScoreCategory.CONTACT,
+        ScoreCategory.FOLLOW_THROUGH,
+    }
     for item in card.categories:
         if item.category in blank:
             assert item.metrics_total == 0  # honest: there are no bands, not 5 missing
@@ -283,9 +298,11 @@ def test_one_missing_metric_only_changes_its_category_by_renormalization(
     else:
         assert by_category[category].score_0_100 is None
         assert by_category[category].metrics_available == 0
-    # Other categories are untouched.
+    # Other categories are untouched (preparation has no scored metric).
     for item in card.categories:
-        if item.category != category:
+        if item.category == ScoreCategory.PREPARATION:
+            assert item.score_0_100 is None
+        elif item.category != category:
             assert item.score_0_100 == pytest.approx(100.0)
 
 
