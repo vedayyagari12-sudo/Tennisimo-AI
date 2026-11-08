@@ -9,8 +9,9 @@ fixed full-court camera or a whole rally. They prove the decode and PTS path,
 the camera-motion verdict, and that nothing is called or counted without a
 calibration. Do NOT add accuracy assertions here.
 
-Not asserted: the design's "zero auto court fits" rows. ``court_fit`` (step 19)
-was time-boxed out, so there is no automatic fit to count.
+Court fit (step 19) is checked on each clip's FIRST frame against the
+manifest's ``max_fits``: zero on padel and courtless clips, at most 3 (each
+needing confirmation) on the others.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def test_manifest_holds_file_names_only() -> None:
     for name, expectation in manifest().items():
         assert "/" not in name and "\\" not in name
         assert name.endswith(".mp4")
-        assert set(expectation) <= {"camera", "stability_verdict", "fps", "note"}
+        assert set(expectation) <= {"camera", "stability_verdict", "fps", "note", "max_fits"}
 
 
 @pytest.mark.real_clips
@@ -64,6 +65,18 @@ def test_real_clip_smoke(name: str) -> None:
     from app.services.court_offline import analyze_court_video, project_court_result
 
     expectation = manifest()[name]
+    if "max_fits" in expectation:
+        from app.analysis.court_fit import fit_court_candidates
+        from app.ball.court_lines import detect_line_segments
+        from app.ball.flight_frames import iter_track_frames, probe_court_clip
+
+        frames = iter_track_frames(path, probe_court_clip(path))
+        _, first = next(frames)
+        frames.close()
+        fits = fit_court_candidates(detect_line_segments(first), (first.shape[1], first.shape[0]))
+        assert len(fits) <= int(expectation["max_fits"])  # type: ignore[call-overload]
+    if "camera" not in expectation:
+        return  # camera not measured for this clip yet
     inputs, result = analyze_court_video(path, None)
     times = inputs.frame_times_s
 

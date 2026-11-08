@@ -1366,6 +1366,12 @@ Read with care:
 
 Bugs this evaluation found and fixed, each with a test: whole flights rejected by a first-to-last displacement check and by one rough window; net balls called IN on the far half; a far player's hit read as an OUT bounce; dead-ball, split, own-side and impossible-crossing hits miscounted in rallies; ~50 noise candidates per T2 frame; airborne balls dropped by a ground-plane size gate; far-player clutter passing because colour was judged only by expected size.
 
+### 11.2.2 Court fit (step 19), measured 2026-11-08
+
+- Synthetic static courts, 1280x720, hard blue / hard green / clay: support 1.0, 9 lines visible, 12 taps, median tap error 2.0 / 1.6 / 1.8 px, worst 4.7 / 4.4 / 6.0 px; every proposed tap set calibrates with calls allowed.
+- Real clips, first frame: 0 fits on all 13 named in 11.3.
+- Deviations from 4.2's sketch, each measured: support requires a COLLINEAR, parallel segment (300 random long lines otherwise scored 0.97, then 0.73 with direction alone); `MIN_SUPPORT` 0.72, not 0.6 (a busy courtless frame fitted at 0.67); only the 400 longest segments are scored; collapsed fits are rejected (both edges of one painted line otherwise paired into a degenerate fit at support 1.0). Taps proposed by intersecting matched image lines were measured worse than projected keypoints and were not kept.
+
 ### 11.3 Real-clip smoke run
 
 The 16 clips cannot validate in/out, depth, rally or scoring. None has a rally, a whole-flight ball, or a fixed camera on a full court.
