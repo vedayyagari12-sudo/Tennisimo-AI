@@ -21,7 +21,7 @@ import os
 import re
 import time
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -456,13 +456,19 @@ def validate_text_field(
     text: str,
     allowlist: frozenset[str],
     ball_speed_mph: int | None,
+    *,
+    banned_finder: Callable[[str], list[str]] = find_banned_units,
 ) -> list[str]:
-    """Return every violation found in one model-authored text field."""
+    """Return every violation found in one model-authored text field.
+
+    ``banned_finder`` lets court mode swap in its own unit list (it permits
+    "rally"); the default is the single-swing guard, unchanged.
+    """
     violations: list[str] = []
     for token in extract_numeric_tokens(text):
         if token not in allowlist:
             violations.append(token)
-    violations.extend(find_banned_units(text))
+    violations.extend(banned_finder(text))
     violations.extend(check_mph_binding(text, ball_speed_mph))
     return violations
 
@@ -475,6 +481,8 @@ def enforce(
     draft: GeminiFeedbackDraft,
     allowlist: frozenset[str],
     ball_speed_mph: int | None,
+    *,
+    banned_finder: Callable[[str], list[str]] = find_banned_units,
 ) -> tuple[GeminiFeedbackDraft | None, NumericGuardReport]:
     """Discard every field containing a violation. Never rewrites, never raises.
 
@@ -484,14 +492,18 @@ def enforce(
     rejected: list[str] = []
     discarded: list[str] = []
 
-    summary_violations = validate_text_field(draft.summary, allowlist, ball_speed_mph)
+    summary_violations = validate_text_field(
+        draft.summary, allowlist, ball_speed_mph, banned_finder=banned_finder
+    )
     if summary_violations:
         rejected.extend(summary_violations)
         discarded.append("summary")
 
     kept_strengths: list[str] = []
     for index, strength in enumerate(draft.strengths):
-        found = validate_text_field(strength, allowlist, ball_speed_mph)
+        found = validate_text_field(
+            strength, allowlist, ball_speed_mph, banned_finder=banned_finder
+        )
         if found:
             rejected.extend(found)
             discarded.append(f"strengths[{index}]")
@@ -504,7 +516,10 @@ def enforce(
         for field_name in ("title", "why", "cue", "drill"):
             improvement_violations.extend(
                 validate_text_field(
-                    getattr(improvement, field_name), allowlist, ball_speed_mph
+                    getattr(improvement, field_name),
+                    allowlist,
+                    ball_speed_mph,
+                    banned_finder=banned_finder,
                 )
             )
         if improvement_violations:
