@@ -279,3 +279,76 @@ def test_rally_version_is_bumped() -> None:
     from app.analysis.rally import RALLY_VERSION
 
     assert RALLY_VERSION == "rally_v2"
+
+
+def test_a_hit_followed_by_a_bounce_on_its_own_side_is_dropped() -> None:
+    """A stroke goes over the net; without a net contact, an own-side bounce
+    after a 'hit' means the hit was a dying ball's bounce."""
+    hit = event("h0", H, 1.0, NEAR)
+    far_bounce = event("b1", B, 1.6)
+    ghost = event("h2", H, 2.4, FAR)
+    far_again = event("b3", B, 2.9)
+    landings = [land(far_bounce, FAR, hitter=NEAR), land(far_again, FAR, hitter=NEAR)]
+    rally = only([hit, far_bounce, ghost, far_again], landings, [flight(1.0, 3.0)])
+    assert rally.hits_observed == 1
+    assert "implausible_hit_dropped" in rally.flags
+
+
+def test_one_stroke_split_into_two_hits_counts_once() -> None:
+    bounce = event("b0", B, 1.0)
+    first = event("h1", H, 1.4, NEAR)
+    second = event("h2", H, 1.5, NEAR)
+    far_bounce = event("b3", B, 2.2)
+    landings = [land(bounce, NEAR), land(far_bounce, FAR, hitter=NEAR)]
+    rally = only([bounce, first, second, far_bounce], landings, [flight(0.5, 2.4)])
+    assert rally.hits_observed == 1
+
+
+def test_play_on_after_an_out_call_cancels_the_point_end() -> None:
+    """A hit behind the baseline read as an OUT bounce: the next bounce lands
+    over the net, so the point was not over."""
+    serve = event("h0", H, 1.0, NEAR)
+    far_in = event("b1", B, 1.6)
+    false_out = event("b2", B, 2.0)
+    near_in = event("b3", B, 2.9)
+    landings = [
+        land(far_in, FAR, hitter=NEAR),
+        land(false_out, FAR, LineVerdict.OUT, NEAR),
+        land(near_in, NEAR),
+    ]
+    rally = only([serve, far_in, false_out, near_in], landings, [flight(1.0, 3.2)])
+    assert "b3" in rally.event_ids
+    assert "contacts_after_point_end" not in rally.flags
+
+
+def test_kinks_inside_a_rally_widen_the_range() -> None:
+    hit = event("h0", H, 1.0, NEAR)
+    bounce = event("b1", B, 1.6)
+    kink = event("k2", BallEventKind.UNKNOWN_KINK, 2.0)
+    bounce_2 = event("b3", B, 2.6)
+    landings = [land(bounce, FAR, hitter=NEAR), land(bounce_2, FAR, hitter=NEAR)]
+    rally = only([hit, bounce, kink, bounce_2], landings, [flight(1.0, 2.8)])
+    assert rally.length_max > rally.length_min
+
+
+def test_a_final_hit_carried_over_the_net_is_confirmed() -> None:
+    bounce = event("b0", B, 1.0)
+    last = event("h1", H, 1.4, NEAR)
+    landings = [land(bounce, NEAR)]
+    tracked = flight(0.5, 2.2)
+    (rally,) = segment_rallies(
+        [bounce, last], landings, flights=[tracked], flight_end_halves={tracked.flight_id: FAR}
+    )
+    assert "last_hit_unconfirmed" not in rally.flags
+    assert rally.hits_observed == 1
+
+
+def test_a_far_bounce_followed_by_a_flight_ending_over_the_near_half_infers_a_hit() -> None:
+    hit = event("h0", H, 1.0, NEAR)
+    far_bounce = event("b1", B, 1.6)
+    tracked = flight(1.0, 2.6)
+    (rally,) = segment_rallies(
+        [hit, far_bounce], [land(far_bounce, FAR, hitter=NEAR)], flights=[tracked],
+        flight_end_halves={tracked.flight_id: NEAR},
+    )
+    assert rally.length_min == 2

@@ -150,6 +150,15 @@ SMOOTH_WINDOW_S: Final[float] = 0.25
 SMOOTH_MAX_RMS_PX: Final[float] = 3.0
 #: A window needs this many detections before its fit means anything.
 SMOOTH_MIN_POINTS: Final[int] = 5
+#: A flight lasting at least this long is a ball even if a few windows are
+#: rough: one fast near-court hit (image speed 14 -> 90 px/frame, then a
+#: perspective decay no quadratic fits) rejected a whole 8.6 s rally (T0 seed
+#: 20270045). Junk tracks are short, so short flights stay strict.
+LONG_FLIGHT_S: Final[float] = 1.0
+#: ...but only ONE rough window: the fast hit gave one (RMS 15.8 px); two
+#: stray points spliced in by a bad stitch give three (RMS 19.4 px), so a count
+#: separates them where the RMS cannot. Synthetic-tuned placeholder.
+LONG_FLIGHT_MAX_ROUGH_WINDOWS: Final[int] = 1
 #: The projected-parabola fit has 8 degrees of freedom; from 6 points it has
 #: 4 spare equations.
 PROJECTED_FIT_MIN_POINTS: Final[int] = 6
@@ -326,9 +335,30 @@ def _kink_explains(times: Float64Array, xy: Float64Array) -> bool:
     return False
 
 
+def _rough_window_count(times: Float64Array, xy: Float64Array) -> int:
+    """How many 0.25 s windows fail step 7 (rough and no single kink)."""
+    count = len(times)
+    rough = 0
+    for start in range(count):
+        stop = start
+        while stop < count and times[stop] - times[start] <= SMOOTH_WINDOW_S + _TIME_EPSILON_S:
+            stop += 1
+        if stop - start < SMOOTH_MIN_POINTS:
+            continue
+        window_t, window_xy = times[start:stop], xy[start:stop]
+        if _smooth_rms(window_t, window_xy) > SMOOTH_MAX_RMS_PX and not _kink_explains(
+            window_t, window_xy
+        ):
+            rough += 1
+    return rough
+
+
 def _is_smooth(times: Float64Array, xy: Float64Array) -> bool:
     """4.4 step 7: no 0.25 s stretch fits a quadratic worse than 3 px RMS
-    unless a single kink explains it."""
+    unless a single kink explains it. A flight of ``LONG_FLIGHT_S`` or more
+    may have up to ``LONG_FLIGHT_MAX_ROUGH_WINDOWS`` rough windows."""
+    if len(times) and float(times[-1] - times[0]) >= LONG_FLIGHT_S:
+        return _rough_window_count(times, xy) <= LONG_FLIGHT_MAX_ROUGH_WINDOWS
     count = len(times)
     for start in range(count):
         stop = start
@@ -515,8 +545,12 @@ def _accept(flight: BallFlight, min_detections: int) -> bool:
     found = np.flatnonzero(flight.detected)
     if found.size < min_detections:
         return False
-    first, last = flight.xy_px[found[0]], flight.xy_px[found[-1]]
-    if float(np.hypot(*(last - first))) < MIN_NET_DISPLACEMENT_PX:
+    # The EXTENT of the path, not first-to-last: a long flight through hits and
+    # bounces can end where it began (T0 seed 20270045: a whole 516-sample
+    # rally rejected). A stationary speck still has a tiny extent.
+    points = flight.xy_px[found]
+    extent = float(np.hypot(*(points.max(axis=0) - points.min(axis=0))))
+    if extent < MIN_NET_DISPLACEMENT_PX:
         return False
     return _is_smooth(flight.times_s[found], flight.xy_px[found])
 

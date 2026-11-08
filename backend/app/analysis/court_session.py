@@ -28,6 +28,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+import dataclasses
+import math
+
 import numpy as np
 import numpy.typing as npt
 
@@ -36,8 +39,8 @@ from app.analysis.camera_stability import CameraStability
 from app.analysis.court_calibration import CALIBRATION_VERSION, CourtCalibration
 from app.analysis.court_model import COURT_MODEL_VERSION, half_region
 from app.analysis.flight_track import BallFlight, link_flights
-from app.analysis.homography import image_scale_px_per_m
-from app.analysis.line_calls import LINE_CALLS_VERSION, bounce_to_court, call_bounce
+from app.analysis.homography import apply_homography, image_scale_px_per_m
+from app.analysis.line_calls import LINE_CALL_Z, LINE_CALLS_VERSION, bounce_to_court, call_bounce
 from app.analysis.placement import (
     PLACEMENT_VERSION,
     ShotLanding,
@@ -53,6 +56,7 @@ from app.models.court import (
     CourtRefusalReason,
     CourtSessionStatus,
     LineCallTarget,
+    LineVerdict,
     StabilityVerdict,
 )
 
@@ -62,6 +66,15 @@ COURT_ENGINE_VERSION: Final[str] = "court_engine_v1"
 MIN_FPS: Final[float] = 24.0
 #: The shot type a pose hit reports for a serve (``ShotType.SERVE``).
 SERVE_SHOT_TYPE: Final[str] = "serve"
+#: A bounce this close to the net (or within its own 1.96-sigma along the
+#: court, if wider) cannot be put on a side of it. A half has no net edge to
+#: call against, so without this a net ball dropping on the hitter's side was
+#: called IN on the far half (4 of 80 judged T0 calls, all net balls).
+NET_BAND_M: Final[float] = 0.25
+AT_NET_FLAG: Final[str] = "at_net"
+#: See ``out_bounces_that_were_hits``.
+PLAY_ON_WITHIN_S: Final[float] = 1.5
+RELABELLED_HIT_FLAG: Final[str] = "out_bounce_relabelled_hit"
 
 
 @dataclass(frozen=True, eq=False)
@@ -178,10 +191,14 @@ def build_landings(
             else:
                 region = half_region(bounce.half, court_format)
                 target = LineCallTarget.HALF_ONLY
-            if hitter_end is bounce.half:
-                # Net contact, then the ball fell back: it never crossed, and
-                # no line decides that. Not measured as in/out; the rally's
-                # end reason carries the net.
+            sigma_along = math.sqrt(max(float(bounce.cov_m2[1, 1]), 0.0))
+            at_net = abs(bounce.court_xy_m[1]) <= max(NET_BAND_M, LINE_CALL_Z * sigma_along)
+            if at_net:
+                bounce = dataclasses.replace(bounce, flags=(*bounce.flags, AT_NET_FLAG))
+            if at_net or hitter_end is bounce.half:
+                # At the net, or a net contact then the ball fell back: which
+                # side of the net is not measurable, and no line decides it.
+                # Not called; the rally's end reason carries the net.
                 call = None
             else:
                 call = call_bounce(bounce, region, calibration, target=target)
@@ -196,6 +213,57 @@ def build_landings(
                 )
             )
     return tuple(sorted(landings, key=lambda landing: (landing.bounce.time_s, landing.bounce.event_id)))
+
+
+def out_bounces_that_were_hits(
+    events: Sequence[BallEvent],
+    landings: Sequence[ShotLanding],
+    *,
+    within_s: float = PLAY_ON_WITHIN_S,
+) -> Mapping[str, CourtEnd]:
+    """Bounce id -> hitter end, for 'bounces' called OUT after which play went on.
+
+    A ball that bounces in one half cannot reach the other half without a hit.
+    When an OUT-called bounce is followed, within ``within_s`` and with no HIT
+    between, by a bounce in the OTHER half, the kink was the player striking
+    the ball behind their baseline, not a landing (T0: 2 false OUT landings in
+    100 rallies). It becomes that player's HIT; its landing disappears.
+    """
+    by_id = {l.bounce.event_id: l for l in landings}
+    ordered = sorted(events, key=lambda e: (e.time_s, e.event_id))
+    out: dict[str, CourtEnd] = {}
+    for index, event in enumerate(ordered):
+        landing = by_id.get(event.event_id)
+        if landing is None or landing.call is None or landing.call.verdict is not LineVerdict.OUT:
+            continue
+        for later in ordered[index + 1 :]:
+            if later.time_s - event.time_s > within_s or later.kind is BallEventKind.HIT:
+                break
+            if later.kind is not BallEventKind.BOUNCE:
+                continue
+            next_landing = by_id.get(later.event_id)
+            if next_landing is not None and next_landing.bounce.half is not landing.bounce.half:
+                out[event.event_id] = landing.bounce.half
+            break
+    return out
+
+
+def flight_end_halves(
+    flights: Sequence[BallFlight], calibration: CourtCalibration
+) -> Mapping[int, CourtEnd]:
+    """Each flight's last detected sample mapped to the ground, as a half.
+
+    Only the side of the net is used (see ``rally._crossed_after_last_bounce``).
+    """
+    out: dict[int, CourtEnd] = {}
+    for flight in flights:
+        found = np.flatnonzero(flight.detected)
+        if found.size == 0:
+            continue
+        ground = apply_homography(calibration.h_image_to_court, flight.xy_px[found[-1:]])[0]
+        if np.all(np.isfinite(ground)):
+            out[flight.flight_id] = CourtEnd.NEAR if ground[1] < 0.0 else CourtEnd.FAR
+    return out
 
 
 def _refused(
@@ -261,7 +329,23 @@ def analyze_court_session(
     flights = link_flights(candidates, times, scale) if times.size else ()
     events = detect_ball_events(flights, calibration, pose_hits)
     landings = build_landings(events, flights, calibration, stability, court_format=court_format)
-    rallies = segment_rallies(events, landings, flights=flights)
+    relabelled = out_bounces_that_were_hits(events, landings)
+    if relabelled:
+        events = tuple(
+            dataclasses.replace(
+                e,
+                kind=BallEventKind.HIT,
+                end=relabelled[e.event_id],
+                flags=(*e.flags, RELABELLED_HIT_FLAG),
+            )
+            if e.event_id in relabelled
+            else e
+            for e in events
+        )
+        landings = build_landings(events, flights, calibration, stability, court_format=court_format)
+    rallies = segment_rallies(
+        events, landings, flights=flights, flight_end_halves=flight_end_halves(flights, calibration)
+    )
     return CourtSessionResult(
         status=status,
         refusal_reason=None,

@@ -88,6 +88,9 @@ NEAR_NET_FLAG: Final[str] = "bounce_at_net"
 MIN_CROSS_S: Final[float] = 0.3
 IMPLAUSIBLE_HIT_FLAG: Final[str] = "implausible_hit_dropped"
 UNCONFIRMED_LAST_HIT_FLAG: Final[str] = "last_hit_unconfirmed"
+#: A hit with no landing after it is still confirmed when the ball is tracked
+#: this long after it and ends over the opposite half: a stroke went over.
+CONFIRM_TRACK_S: Final[float] = 0.4
 
 
 def _other_end(end: CourtEnd) -> CourtEnd:
@@ -95,35 +98,86 @@ def _other_end(end: CourtEnd) -> CourtEnd:
 
 
 def implausible_hits(
-    contacts: Sequence[BallEvent], halves: Mapping[str, CourtEnd], *, min_cross_s: float = MIN_CROSS_S
+    contacts: Sequence[BallEvent],
+    halves: Mapping[str, CourtEnd],
+    *,
+    min_cross_s: float = MIN_CROSS_S,
+    net_times_s: Sequence[float] = (),
 ) -> frozenset[str]:
-    """HIT ids whose next contact is a bounce on the far side too soon to reach."""
+    """HIT ids no stroke could produce, judged by the next bounce:
+
+    * in the half opposite the hitter, sooner than any shot can cross; or
+    * in the hitter's OWN half with no net contact between: a stroke goes over
+      the net. These are bounces of a dying ball read as hits (T0 seed
+      20270089: the third bounce of a double-bounced ball).
+    """
     out: set[str] = set()
     for hit, following in zip(contacts, contacts[1:], strict=False):
         if hit.kind is not BallEventKind.HIT or hit.end is None:
             continue
         if following.kind is not BallEventKind.BOUNCE:
             continue
-        if following.time_s - hit.time_s < min_cross_s and halves.get(following.event_id) is _other_end(hit.end):
+        half = halves.get(following.event_id)
+        if following.time_s - hit.time_s < min_cross_s and half is _other_end(hit.end):
+            out.add(hit.event_id)
+        elif half is hit.end and not any(hit.time_s < t < following.time_s for t in net_times_s):
             out.add(hit.event_id)
     return frozenset(out)
 
 
-def unconfirmed_last_hit(contacts: Sequence[BallEvent], events: Sequence[BallEvent]) -> str | None:
-    """The last HIT when nothing (no bounce, no net contact) follows it.
+def split_strokes(contacts: Sequence[BallEvent], *, min_gap_s: float = MIN_CROSS_S) -> frozenset[str]:
+    """HIT ids that repeat the HIT just before them: same end, no contact in
+    between, within ``min_gap_s``. One stroke's kink sometimes splits in two
+    (T0 seed 20270054: 6.72 s and 6.83 s); nobody strikes twice that fast."""
+    out: set[str] = set()
+    for first, second in zip(contacts, contacts[1:], strict=False):
+        if (
+            first.kind is BallEventKind.HIT
+            and second.kind is BallEventKind.HIT
+            and first.end is second.end
+            and second.time_s - first.time_s < min_gap_s
+        ):
+            out.add(second.event_id)
+    return frozenset(out)
 
-    Either the ball's next bounce went unseen, or the 'hit' was a misread
-    dead-ball kink. It may count, so it widens the range, never the minimum.
+
+def _carried_over(
+    contacts: Sequence[BallEvent],
+    flights: Sequence[BallFlight],
+    flight_end_halves: Mapping[int, CourtEnd],
+) -> frozenset[str]:
+    """HITs after which the ball was tracked ``CONFIRM_TRACK_S`` or more and
+    was last seen over the half opposite the hitter: real strokes whose
+    landing left the frame (T0: 11 of 12 inexact rallies were these)."""
+    out: set[str] = set()
+    for hit in contacts:
+        if hit.kind is not BallEventKind.HIT or hit.end is None:
+            continue
+        later = [
+            f for f in flights
+            if np.any(f.detected) and f.flight_id in flight_end_halves
+            and _flight_span(f)[1] >= hit.time_s + CONFIRM_TRACK_S
+            and _flight_span(f)[0] <= hit.time_s + JOIN_EVENT_TOLERANCE_S
+        ]
+        if any(flight_end_halves[f.flight_id] is _other_end(hit.end) for f in later):
+            out.add(hit.event_id)
+    return frozenset(out)
+
+
+def unconfirmed_hits(contacts: Sequence[BallEvent], events: Sequence[BallEvent]) -> frozenset[str]:
+    """HITs after the run's last bounce or net contact: nothing confirms them.
+
+    Either the ball's next bounce went unseen, or each 'hit' was a misread
+    dead-ball kink (T0 seed 20270053: two). They may count, so they widen the
+    range, never the minimum.
     """
-    hits = [e for e in contacts if e.kind is BallEventKind.HIT]
-    if not hits:
-        return None
-    last = hits[-1]
-    after = [
-        e for e in events
-        if e.time_s > last.time_s and e.kind in (BallEventKind.BOUNCE, BallEventKind.NET_CONTACT)
+    landed = [
+        e.time_s for e in events if e.kind in (BallEventKind.BOUNCE, BallEventKind.NET_CONTACT)
     ]
-    return None if after else last.event_id
+    last_landed = max(landed) if landed else float("-inf")
+    return frozenset(
+        e.event_id for e in contacts if e.kind is BallEventKind.HIT and e.time_s > last_landed
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -236,6 +290,40 @@ def rally_length(
     return length_min, length_min, length_min + gaps, _confidence(gaps)
 
 
+def _crossed_after_last_bounce(
+    contacts: Sequence[BallEvent],
+    halves: Mapping[str, CourtEnd],
+    flights: Sequence[BallFlight],
+    flight_end_halves: Mapping[int, CourtEnd],
+) -> CourtEnd | None:
+    """The half the ball was last seen over, when the run's last contact is a
+    bounce in the OTHER half and the ball was tracked on after it.
+
+    A bounce cannot carry the ball back over the net, so a crossing means an
+    unseen hit. ``flight_end_halves`` holds each flight's last sample mapped to
+    the ground. For a camera behind the near baseline an airborne ball's ground
+    projection lies FARTHER from the camera than the ball: a NEAR projection
+    proves the ball was over the near half (certain), a FAR one does not
+    (it may be high over the near half), so the caller widens the range only.
+    """
+    if not contacts or contacts[-1].kind is not BallEventKind.BOUNCE:
+        return None
+    bounce = contacts[-1]
+    half = halves.get(bounce.event_id)
+    if half is None:
+        return None
+    later = [
+        f for f in flights
+        if np.any(f.detected) and _flight_span(f)[1] > bounce.time_s + JOIN_EVENT_TOLERANCE_S
+        and f.flight_id in flight_end_halves
+    ]
+    if not later:
+        return None
+    last = max(later, key=lambda f: (_flight_span(f)[1], f.flight_id))
+    end = flight_end_halves[last.flight_id]
+    return end if end is not half else None
+
+
 def _halves(landings: Sequence[ShotLanding]) -> dict[str, CourtEnd]:
     return {landing.bounce.event_id: landing.bounce.half for landing in landings}
 
@@ -251,16 +339,34 @@ def _counts(
     halves: Mapping[str, CourtEnd],
     flights: Sequence[BallFlight],
     near_net: frozenset[str] = frozenset(),
+    flight_end_halves: Mapping[int, CourtEnd] | None = None,
 ) -> tuple[int, int, int]:
     """(observed hits, inferred hits, extra possible hits for length_max)."""
     ordered = sorted(events, key=lambda e: (e.time_s, e.event_id))
     contacts = [e for e in ordered if e.kind in (BallEventKind.HIT, BallEventKind.BOUNCE)]
-    dropped = implausible_hits(contacts, halves)
+    nets = [e.time_s for e in ordered if e.kind is BallEventKind.NET_CONTACT]
+    dropped = implausible_hits(contacts, halves, net_times_s=nets)
     contacts = [e for e in contacts if e.event_id not in dropped]
-    unconfirmed = unconfirmed_last_hit(contacts, ordered)
-    observed = sum(1 for e in contacts if e.kind is BallEventKind.HIT and e.event_id != unconfirmed)
+    repeats = split_strokes(contacts)
+    contacts = [e for e in contacts if e.event_id not in repeats]
+    unconfirmed = unconfirmed_hits(contacts, ordered) - _carried_over(
+        contacts, flights, flight_end_halves or {}
+    )
+    observed = sum(1 for e in contacts if e.kind is BallEventKind.HIT and e.event_id not in unconfirmed)
     inferred = 0
-    ambiguous = 0 if unconfirmed is None else 1
+    ambiguous = len(unconfirmed)
+    last_ended = _crossed_after_last_bounce(contacts, halves, flights, flight_end_halves or {})
+    if last_ended is CourtEnd.NEAR:
+        inferred += 1  # certain: see _crossed_after_last_bounce
+    elif last_ended is CourtEnd.FAR:
+        ambiguous += 1
+    if contacts:
+        # Kinks between contacts may be hits the classifier could not name.
+        ambiguous += sum(
+            1
+            for e in ordered
+            if e.kind is BallEventKind.UNKNOWN_KINK and contacts[0].time_s < e.time_s < contacts[-1].time_s
+        )
     if contacts and any(
         e.kind is BallEventKind.UNKNOWN_KINK and e.time_s > contacts[-1].time_s for e in ordered
     ):
@@ -353,7 +459,19 @@ def split_at_point_ends(
     previous_contact: BallEvent | None = None
     ended_at: float | None = None
     dropped = False
+    ended_half: CourtEnd | None = None
     for event in ordered:
+        if (
+            ended_at is not None
+            and event.kind is BallEventKind.BOUNCE
+            and event.time_s - ended_at < restart_min_s
+            and ended_half is not None
+            and halves.get(event.event_id) is _other_end(ended_half)
+        ):
+            # A dead ball stays in its half. A bounce over the net within the
+            # restart window means play went on: the 'end' was a misread hit
+            # (T0 seed 20270061: a hit near the far baseline read as OUT).
+            ended_at = None
         if ended_at is not None:
             if event.time_s - ended_at < restart_min_s or event.kind is not BallEventKind.HIT:
                 if event.kind is not BallEventKind.UNKNOWN_KINK:
@@ -364,6 +482,7 @@ def split_at_point_ends(
         current.append(event)
         if _ends_point(event, previous_contact, landings, halves):
             ended_at = event.time_s
+            ended_half = halves.get(event.event_id)
         if event.kind in (BallEventKind.HIT, BallEventKind.BOUNCE):
             previous_contact = event
     if current:
@@ -387,6 +506,7 @@ def segment_rallies(
     *,
     flights: Sequence[BallFlight] = (),
     max_quiet_s: float = MAX_QUIET_S,
+    flight_end_halves: Mapping[int, CourtEnd] | None = None,
 ) -> tuple[Rally, ...]:
     """Rallies in time order, ids ``r_{index:04d}`` (brief G9). A run of
     activity with no ball contact event is not a rally."""
@@ -410,7 +530,7 @@ def segment_rallies(
     for start, end, run_events, run_flights, dropped in points:
         if not any(e.kind in (BallEventKind.HIT, BallEventKind.BOUNCE) for e in run_events):
             continue
-        observed, inferred, gaps = _counts(run_events, halves, run_flights, near_net)
+        observed, inferred, gaps = _counts(run_events, halves, run_flights, near_net, flight_end_halves)
         length_min = observed + inferred
         flags: list[str] = []
         if dropped:
@@ -421,10 +541,13 @@ def segment_rallies(
             e for e in sorted(run_events, key=lambda e: (e.time_s, e.event_id))
             if e.kind in (BallEventKind.HIT, BallEventKind.BOUNCE)
         ]
-        dropped_hits = implausible_hits(contacts, halves)
+        nets = [e.time_s for e in run_events if e.kind is BallEventKind.NET_CONTACT]
+        dropped_hits = implausible_hits(contacts, halves, net_times_s=nets) | split_strokes(contacts)
         if dropped_hits:
             flags.append(IMPLAUSIBLE_HIT_FLAG)
-        if unconfirmed_last_hit([e for e in contacts if e.event_id not in dropped_hits], run_events):
+        if unconfirmed_hits(
+            [e for e in contacts if e.event_id not in dropped_hits], run_events
+        ) - _carried_over(contacts, run_flights, flight_end_halves or {}):
             flags.append(UNCONFIRMED_LAST_HIT_FLAG)
         if _lost_track_gaps(sorted(run_events, key=lambda e: (e.time_s, e.event_id)), run_flights):
             flags.append(LOST_TRACK_GAP_FLAG)

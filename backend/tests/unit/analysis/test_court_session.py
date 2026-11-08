@@ -268,3 +268,46 @@ def test_same_input_gives_identical_output() -> None:
 def test_hitter_end_is_only_near_or_far() -> None:
     _, result = run(SEEDS[3])
     assert {l.hitter_end for l in result.landings} <= {CourtEnd.NEAR, CourtEnd.FAR, None}
+
+
+# ---------------------------------------------- net band and play-on (T0 fixes)
+
+
+def test_a_bounce_at_the_net_is_never_called() -> None:
+    from app.analysis.court_session import AT_NET_FLAG
+
+    for seed in SEEDS:
+        _, result = run(seed)
+        for landing in result.landings:
+            if abs(landing.bounce.court_xy_m[1]) <= 0.25:
+                assert landing.call is None
+                assert AT_NET_FLAG in landing.bounce.flags
+
+
+def test_an_out_bounce_after_which_play_goes_on_becomes_a_hit() -> None:
+    from app.analysis.ball_events import BallEvent
+    from app.analysis.court_session import out_bounces_that_were_hits
+    from app.analysis.line_calls import LINE_CALLS_VERSION, BouncePoint, LineCall
+    from app.analysis.placement import classify_landing
+    from app.models.court import BallEventKind, CourtLine
+
+    def ev(name: str, t: float) -> BallEvent:
+        return BallEvent(name, 0, BallEventKind.BOUNCE, t, 0.004, (900.0, 500.0), np.eye(2),
+                         (0.0, 1.0), (0.0, -1.0), 0.9, ())
+
+    def landing(e: BallEvent, half: CourtEnd, verdict: LineVerdict) -> object:
+        y = 12.5 if half is CourtEnd.FAR else -6.0
+        point = BouncePoint(e.event_id, e.time_s, 0.004, (0.0, y), np.eye(2) * 0.01, half, 0.9, ())
+        call = LineCall(verdict, CourtLine.FAR_BASELINE, -0.5, 0.1, 0.2, (), LINE_CALLS_VERSION,
+                        LineCallTarget.SINGLES_HALF)
+        return classify_landing(point, call, CourtEnd.NEAR, None, False, target=LineCallTarget.SINGLES_HALF)
+
+    out, near = ev("b0", 2.0), ev("b1", 2.9)
+    found = out_bounces_that_were_hits(
+        [out, near], [landing(out, CourtEnd.FAR, LineVerdict.OUT), landing(near, CourtEnd.NEAR, LineVerdict.IN)]
+    )
+    assert found == {"b0": CourtEnd.FAR}
+    same_half = ev("b2", 2.6)
+    assert out_bounces_that_were_hits(
+        [out, same_half], [landing(out, CourtEnd.FAR, LineVerdict.OUT), landing(same_half, CourtEnd.FAR, LineVerdict.OUT)]
+    ) == {}

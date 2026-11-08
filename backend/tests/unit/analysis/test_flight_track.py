@@ -392,3 +392,40 @@ def test_invalid_inputs_raise() -> None:
 def test_empty_input_gives_no_flights() -> None:
     times = frame_times(10)
     assert link_flights(np.zeros(0, dtype=FLIGHT_CANDIDATE_DTYPE), times, constant_scale) == ()
+
+
+# ---------------------------------------------- acceptance fixes (2026-11-08)
+
+
+def test_a_flight_ending_where_it_began_is_still_a_flight() -> None:
+    """Regression: acceptance used first-to-last displacement, so a long
+    out-and-back flight (a whole rally, T0 seed 20270045) was rejected."""
+    from app.analysis.flight_track import _accept
+
+    times = np.arange(120) / 60.0
+    x = 400.0 + 300.0 * np.sin(np.pi * times / times[-1])  # out and back
+    y = 300.0 + 40.0 * times
+    flight = BallFlight(0, times, np.column_stack([x, y]), np.ones(120, dtype=bool), np.full(120, 2.0), 1.0)
+    assert _accept(flight, 6)
+
+
+def test_a_stationary_speck_is_still_rejected() -> None:
+    from app.analysis.flight_track import _accept
+
+    times = np.arange(30) / 60.0
+    xy = np.column_stack([np.full(30, 500.0), np.full(30, 300.0)]) + np.random.default_rng(1).normal(0, 0.5, (30, 2))
+    flight = BallFlight(0, times, xy, np.ones(30, dtype=bool), np.full(30, 2.0), 1.0)
+    assert not _accept(flight, 6)
+
+
+def test_a_whole_rally_with_one_fast_near_hit_links_into_flights() -> None:
+    """Regression (T0 seed 20270045): one fast near-court hit left a single
+    rough window, and the strict rule rejected the whole 8.6 s rally."""
+    from tests.unit.analysis.test_ball_events import CAMERA, scale
+    from tests.unit.court_synth.scene import generate_rally
+
+    scene = generate_rally(20270045)
+    candidates, times, _ = t0_records(scene, CAMERA, 20270045)
+    flights = link_flights(candidates, times, scale)
+    assert flights
+    assert sum(int(f.detected.sum()) for f in flights) >= 0.9 * len(candidates)
