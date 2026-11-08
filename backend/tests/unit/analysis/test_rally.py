@@ -200,3 +200,82 @@ def test_rallies_satisfy_the_wire_invariants() -> None:
         hits_observed=rally.hits_observed, hits_inferred=rally.hits_inferred, end_reason=rally.end_reason,
         bounce_ids=[landing.bounce.event_id for landing in rally.landings], flags=list(rally.flags),
     )
+
+
+# ------------------------------------------- rally_v2 counting rules (2026-11-08)
+
+
+def land_at(bounce: BallEvent, half: CourtEnd, y: float, verdict: LineVerdict | None = LineVerdict.IN,
+            hitter: CourtEnd | None = None) -> ShotLanding:
+    point = BouncePoint(bounce.event_id, bounce.time_s, 0.004, (0.0, y), np.eye(2) * 0.01, half, 0.9, ())
+    call = None if verdict is None else LineCall(verdict, CourtLine.FAR_BASELINE, 0.3, 0.1, 0.2, (),
+                                                 LINE_CALLS_VERSION, LineCallTarget.SINGLES_HALF)
+    return classify_landing(point, call, hitter, None, False, target=LineCallTarget.SINGLES_HALF)
+
+
+def test_dead_ball_after_an_out_bounce_is_not_a_shot() -> None:
+    """Regression (seed 20261102): an out ball's second bounce, misread as a
+    HIT 0.8 s later, was counted as a sixth shot."""
+    serve = event("h0", H, 1.0, NEAR)
+    out = event("b1", B, 1.6)
+    dead = event("h2", H, 2.4, FAR)
+    rally = only([serve, out, dead], [land(out, FAR, LineVerdict.OUT, NEAR)], [flight(1.0, 2.6)])
+    assert rally.length_hits == 1
+    assert "contacts_after_point_end" in rally.flags
+    assert "h2" not in rally.event_ids
+
+
+def test_a_later_serve_after_a_point_starts_a_new_rally() -> None:
+    serve = event("h0", H, 1.0, NEAR)
+    out = event("b1", B, 1.6)
+    second = event("h2", H, 3.6, NEAR)
+    back = event("b3", B, 4.2)
+    landings = [land(out, FAR, LineVerdict.OUT, NEAR), land(back, FAR, LineVerdict.IN, NEAR)]
+    rallies = segment_rallies([serve, out, second, back], landings, flights=[flight(1.0, 4.5)])
+    assert [r.length_hits for r in rallies] == [1, 1]
+
+
+def test_a_hit_too_soon_before_a_far_side_bounce_is_dropped() -> None:
+    """A near HIT 0.06 s before a FAR bounce cannot have sent it there."""
+    hit = event("h0", H, 1.0, NEAR)
+    bounce_far = event("b1", B, 1.6)
+    ghost = event("h2", H, 2.4, NEAR)
+    bounce_far_2 = event("b3", B, 2.46)
+    landings = [land(bounce_far, FAR, hitter=NEAR), land(bounce_far_2, FAR, hitter=NEAR)]
+    rally = only([hit, bounce_far, ghost, bounce_far_2], landings, [flight(1.0, 2.6)])
+    assert "implausible_hit_dropped" in rally.flags
+    assert rally.hits_observed == 1
+
+
+def test_a_bounce_reaching_the_net_implies_a_hit_and_the_drop_is_only_possible() -> None:
+    first = event("b0", B, 1.0)
+    at_net = event("b1", B, 2.0)
+    dropped = event("b2", B, 2.6)
+    landings = [land_at(first, NEAR, -8.0), land_at(at_net, FAR, 0.3), land_at(dropped, NEAR, -2.0)]
+    rally = only([first, at_net, dropped], landings, [flight(0.5, 2.8)])
+    # launch + the shot that reached the net; the drop back adds to max only
+    assert (rally.length_min, rally.length_max) == (2, 3)
+    assert "bounce_at_net" in rally.flags
+
+
+def test_a_last_hit_with_nothing_after_it_widens_the_range() -> None:
+    hit = event("h0", H, 1.0, NEAR)
+    bounce = event("b1", B, 1.6)
+    last = event("h2", H, 2.4, FAR)
+    rally = only([hit, bounce, last], [land(bounce, FAR, hitter=NEAR)], [flight(1.0, 2.6)])
+    assert (rally.length_min, rally.length_max) == (1, 2)
+    assert "last_hit_unconfirmed" in rally.flags
+
+
+def test_a_trailing_kink_widens_the_range() -> None:
+    hit = event("h0", H, 1.0, NEAR)
+    bounce = event("b1", B, 1.6)
+    kink = event("k2", BallEventKind.UNKNOWN_KINK, 2.4)
+    rally = only([hit, bounce, kink], [land(bounce, FAR, hitter=NEAR)], [flight(1.0, 2.6)])
+    assert (rally.length_min, rally.length_max) == (1, 2)
+
+
+def test_rally_version_is_bumped() -> None:
+    from app.analysis.rally import RALLY_VERSION
+
+    assert RALLY_VERSION == "rally_v2"
