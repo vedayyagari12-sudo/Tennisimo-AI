@@ -1,6 +1,6 @@
 # Session Mode: design for Tennisimo
 
-Status: proposal, designed against `main` at `cf7185a`. No implementation code has been written. Estimates are labelled as estimates, with the arithmetic shown.
+Status: proposal, designed against `main` at `cf7185a`. Pure-core implementation has started; see **Build status** below. Estimates are labelled as estimates, with the arithmetic shown.
 
 Citations use the file name and line. `PIPELINE.md` means `docs/PIPELINE.md`. `camera_controller.dart`, `platform_file.dart` and `camera.dart` are in the Dart pub cache, not this repo.
 
@@ -16,6 +16,37 @@ Citations use the file name and line. `PIPELINE.md` means `docs/PIPELINE.md`. `c
 - There is also a 15 s recording cap (`record_screen.dart:19`).
 - `Settings.max_clip_seconds` is dead config.
 - There are no Supabase migration files; DDL lives in `docs/DATABASE_SETUP.md`.
+
+## Build status (2026-11-07)
+
+Branch `worktree-phase-2-ball-court`. Everything below is pure or offline code with synthetic tests. **Nothing is wired to a route, the database, a Cloud Run Job or a screen**, and no accuracy claim is made: every constant is a placeholder until the section 1 experiment and the Phase 2 owner footage (both baselines in view, at least 8 tapped court points) calibrate it.
+
+**Built**
+
+| Piece | Files | Notes |
+|---|---|---|
+| Phase 1 slice 1, segmentation | `backend/app/analysis/segmentation.py`, `backend/app/models/session.py` | Section 4.2 steps 1-6, `seg_v1`. `contact.py`, `phases.py`, `metrics.py` unchanged. |
+| Phase 1 slice 1, statistics | `backend/app/analysis/session_stats.py` | Section 10.1-10.3. |
+| Phase 2 batches F/G | `rally.py`, `placement.py`, `match_score.py`, `point_inference.py` | As in `SESSION_MODE_PHASE2.md`. |
+| Phase 2 step 16 | `analysis/court_session.py`, `services/court_offline.py`, `scripts/court_eval.py --mode events` | Vendored clip: refused `camera_moving`, no calls. |
+| Phase 2 step 20 | `feedback/court_summary.py`, keyword-only `banned_finder` on `gemini.enforce` | Single-swing guard tests unmodified. |
+| Phase 2 steps 21-22 | `lib/models/court.dart`, `court_map.dart`, `line_call_card.dart`, `rally_timeline.dart`, `score_panel.dart` | No screen imports them. |
+| Step 24 regression | `tests/integration/test_single_swing_unchanged.py` (`slow`) | Matches the d0e4df5 golden. |
+
+**Deviations from this design, each documented in code**
+- Section 4.2 step 3: two accepted peaks are split at the minimum-speed frame **among the frames that leave both windows their minimum length**. The plain minimum is the second swing's takeback turn, which left it no build-up and rejected it as `window_too_short` at one-second spacing.
+- Section 4.2 step 5, `contact_off_peak`: compares the slice's **winning speed peak** with the candidate peak, not the contact frame, because Stage 9's plateau walk legitimately places contact past a hesitating drive.
+- Section 4.2 step 6: `< 0.35` is rejected with a new reason, `confidence_below_floor`, which the step 5 list omitted.
+- Phase 2 step 16: a bounce on the hitter's own side with no net contact between drops the hitter (a missed opponent hit) and is called `half_only`. Before this, the far-half region (which has no net edge) called such a ball IN. With net contact between, the landing carries no call.
+
+**Known gaps found while building**
+- `rally.py` produced a range of 6-7 hits for one synthetic rally whose true length is 5 (seed 20261102). Not investigated.
+- The numeric guard checks numbers, not meaning: a payload number reused with another meaning (median rally length 5 written as "5 rallies") passes.
+
+**Still to do, blocked on owner decisions or footage**
+- Slice 0 experiment and Phase 2 footage (accuracy, `SIGMA_INFLATION`, Decision 2).
+- Slices 2-8: Part 9 SQL, routes, Job, upload, screens. Needs Decision 1 (paid Supabase plan) and Decision 2 (launch limit).
+- Phase 2 batches I (T2 pixel e2e) and J (real-clip smoke).
 
 ---
 
