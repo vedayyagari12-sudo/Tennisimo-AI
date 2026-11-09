@@ -84,6 +84,7 @@ __all__ = [
     "PoseHit",
     "classify_event",
     "hitter_ground_point",
+    "merge_split_bounces",
     "detect_ball_events",
     "find_break_points",
     "resolve_event_grammar",
@@ -163,6 +164,12 @@ WEAK_BOUNCE_FLAG: Final[str] = "weak_bounce"
 POSE_HIT_FLAG: Final[str] = "pose_hit"
 FLIGHT_START_FLAG: Final[str] = "flight_start"
 GRAMMAR_RELABELLED_FLAG: Final[str] = "grammar_relabelled"
+SPLIT_BOUNCE_FLAG: Final[str] = "split_bounce_merged"
+#: A bounce whose break was found twice, a few frames apart: the early break
+#: takes the downward side and reads as a hit (speed up, no reversal), the
+#: late one has no downward side and stays a kink. T2 seed 20270001: a far
+#: bounce split 3 frames apart added a hit that never happened.
+SPLIT_BOUNCE_MAX_GAP_S: Final[float] = 0.1
 
 _ID_PREFIX: Final[dict[BallEventKind, str]] = {
     BallEventKind.BOUNCE: "b",
@@ -891,6 +898,45 @@ def _assign_hit_ends(events: Sequence[BallEvent], calibration: CourtCalibration)
     return out
 
 
+def merge_split_bounces(
+    events: Sequence[BallEvent], calibration: CourtCalibration
+) -> list[BallEvent]:
+    """Within one flight, a HIT not from pose followed within
+    ``SPLIT_BOUNCE_MAX_GAP_S`` by an UNKNOWN_KINK is re-judged as ONE break:
+    the hit's incoming velocity, the kink's outgoing one, at the kink's time
+    and place. Kept merged only when that single break is a BOUNCE; otherwise
+    both events stand. A net contact followed by its bounce is never merged."""
+    ordered = sorted(events, key=lambda e: (e.flight_id, e.time_s, e.event_id))
+    out: list[BallEvent] = []
+    skip = False
+    for index, first in enumerate(ordered):
+        second = ordered[index + 1] if index + 1 < len(ordered) else None
+        if skip:
+            skip = False
+            continue
+        if (
+            second is not None
+            and first.flight_id == second.flight_id
+            and first.kind is BallEventKind.HIT
+            and POSE_HIT_FLAG not in first.flags
+            and second.kind is BallEventKind.UNKNOWN_KINK
+            and second.time_s - first.time_s <= SPLIT_BOUNCE_MAX_GAP_S
+        ):
+            joined = replace(
+                second,
+                velocity_before_px_s=first.velocity_before_px_s,
+                confidence=max(first.confidence, second.confidence),
+                flags=tuple(f for f in (*first.flags, *second.flags) if f != ONE_SIDED_BOUNCE_FLAG),
+            )
+            judged = classify_event(joined, calibration)
+            if judged.kind is BallEventKind.BOUNCE:
+                out.append(replace(judged, flags=_with_flag(judged.flags, SPLIT_BOUNCE_FLAG)))
+                skip = True
+                continue
+        out.append(first)
+    return out
+
+
 def detect_ball_events(
     flights: Sequence[BallFlight],
     calibration: CourtCalibration,
@@ -901,6 +947,7 @@ def detect_ball_events(
     raw: list[BallEvent] = []
     for flight in flights:
         raw.extend(classify_event(e, calibration, pose_hits) for e in find_break_points(flight))
+    raw = merge_split_bounces(raw, calibration)
     raw.extend(_flight_start_hits(flights, calibration, pose_hits))
     resolved = resolve_event_grammar(raw, calibration)
     ordered = sorted(resolved, key=lambda e: (e.time_s, e.flight_id, e.event_id))

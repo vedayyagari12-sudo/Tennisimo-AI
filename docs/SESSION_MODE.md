@@ -46,8 +46,11 @@ Branch `worktree-phase-2-ball-court`. Everything below is pure or offline code w
 
 **Shot map paths and zones (2026-11-08).** Each landing may carry `hit_xy_m`, where the hitter stood: the pose feet (`PoseHit.feet_xy_px`, ankle midpoint) mapped by the court homography in `court_session.build_landings`. Feet are the only pose point on the ground, so the only one the homography may map; the wrist and the ball at contact are in the air. Null when not measured, and never guessed from the hitter's end. `CourtMap` draws a line from there to the landing, adds stroke filters from the shot types present, and a `Zones` grid of each half's landings by depth band and width third. No producer fills `feet_xy_px` yet: the court Job has no pose pass until Phase 1 lands, so on real sessions the map shows dots and zones only until then.
 
+**Real footage (2026-11-09).** First labelled real test: 56 TrackNet broadcast rally clips from 7 matches, calibrated by the court fit alone (`SESSION_MODE_PHASE2.md` 11.2.3, `backend/scripts/tracknet_eval.py`; the dataset stays outside the repo). Bounce recall 0.27 to 0.64 and precision 0.38 to 0.84, with no matched bounce more than 3 m off, after two changes this data drove: a brightness-lift gate in place of the colour gates, and merging bounces found twice.
+
 **Known gaps**
-- T2 bounce recall and rally exactness (above). Event-layer work that real footage, not the synthetic renderer, should drive.
+- Bounce recall (0.64 real, 0.75 T2) is below the 0.90 target; Doha's purple court is weakest (0.19). The court fit finds no court on clay or dark green.
+- Line-call accuracy is not measured on real footage yet: TrackNet has no in/out labels.
 - The numeric guard checks numbers, not meaning: a payload number reused with another meaning (median rally length 5 written as "5 rallies") passes.
 
 **Still to do, blocked on owner decisions or footage**

@@ -5,25 +5,25 @@ illumination drift, motion blur, players drawn (``RenderOptions.degraded``).
 Synthetic pixels are not real footage: JPEG is not H.264, and the scene shares
 the design's model of how a ball looks (design 11.1).
 
-Measured 2026-11-08, clean-rally seeds 20270001-04:
+Measured on clean-rally seeds 20270001-04. "Before" is 2026-11-08 (colour
+gates). "Now" is 2026-11-09, after real footage drove two changes: the lift gate
+in ``flight_detector`` and ``ball_events.merge_split_bounces``.
 
-| Measure | 1080p60 | 720p60 | 11.2 T2 target (1080p) |
+| Measure (1080p60) | Before | Now | 11.2 T2 target |
 |---|---|---|---|
 | Confident wrong calls per 1000 | 0 | 0 | <= 10 |
-| Bounce precision | 1.00 | 0.62 | >= 0.90 |
-| Bounce recall (in frame) | 0.50 | 0.40 | >= 0.90 |
-| Point-deciding bounce recall | 0.63 | 0.50 | (>= 0.90) |
-| Median bounce error, near | 0.012 m | 0.018 m | <= 0.10 m |
-| Median along-court error, far | 0.087 m | 0.027 m | <= 0.35 m |
+| Bounce precision | 1.00 | 1.00 | >= 0.90 |
+| Bounce recall (in frame) | 0.50 | 0.75 | >= 0.90 |
+| Point-deciding bounce recall | 0.63 | 0.94 | (>= 0.90) |
+| Median bounce error, near | 0.012 m | 0.012 m | <= 0.10 m |
+| Median along-court error, far | 0.087 m | 0.111 m | <= 0.35 m |
 | Rally range contains truth | 1.00 | 1.00 | >= 0.97 |
-| Rally length exact | 0.50 | 0.33 | >= 0.85 |
+| Rally length exact | 0.50 | 0.75 | >= 0.85 |
 
-Found and fixed by this tier (``flight_detector``): ~50 noise candidates per
-frame (contrast gate), an airborne ball dropped by a ground-plane size gate
-(``max_diameter_fn``), and far-player clutter let through because colour was
-only judged by expected size. NOT met: bounce recall and rally exactness. The
-misses are bounces at flight joins and tracks fragmented near the far player.
-That is event-layer work, and real footage, not this renderer, should drive it.
+Real footage (``SESSION_MODE_PHASE2.md`` 11.2.3, TrackNet broadcast clips)
+is now the reference for detector changes; this renderer only guards against
+regressions. Bounce recall is still under target; the remaining misses are
+bounces at flight joins near the far player.
 """
 
 from __future__ import annotations
@@ -77,6 +77,6 @@ def test_t2_rally_ranges_contain_the_truth(t2_1080p: dict[str, float | int | Non
 
 
 @pytest.mark.court_pixels
-@pytest.mark.xfail(strict=True, reason="T2 bounce recall 0.50 vs 0.90 target; see module docstring")
+@pytest.mark.xfail(strict=True, reason="T2 bounce recall 0.75 vs 0.90 target; see module docstring")
 def test_t2_bounce_recall_meets_the_design_target(t2_1080p: dict[str, float | int | None]) -> None:
     assert t2_1080p["bounce_recall"] >= 0.90

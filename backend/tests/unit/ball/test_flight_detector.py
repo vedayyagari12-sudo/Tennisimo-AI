@@ -20,11 +20,13 @@ from app.analysis.court_model import CourtKeypoint
 from app.ball import flight_detector
 from app.ball.detector import contour_features, find_candidates
 from app.ball.flight_detector import (
-    COLOUR_GATE_DIAMETER_PX,
     FLIGHT_CANDIDATE_DTYPE,
+    MIN_LIFT,
     MOTION_DIFF_FLOOR,
     court_roi_mask,
+    blob_lift,
     double_difference_mask,
+    lifted,
     expected_diameter_fn,
     find_flight_candidates,
 )
@@ -266,18 +268,38 @@ def test_size_gate_rejects_blobs_far_larger_than_expected() -> None:
     assert nearest(kept, truth) <= 0.5
 
 
-def test_colour_is_a_score_below_4_px_and_a_gate_above() -> None:
-    small, _ = moving_ball_frames(3.0, bgr=GREY_BGR, step=16.0)
-    below = detect_middle(small, expected_diameter_px=lambda x, y: COLOUR_GATE_DIAMETER_PX - 1.0)
-    assert len(below) == 1 and below[0]["colour_score"] == 0.0
-    frames, truth = moving_ball_frames(8.0, bgr=GREY_BGR, step=16.0)
-    assert len(detect_middle(frames, expected_diameter_px=lambda x, y: 8.0)) == 0
-    # The blob's OWN size triggers the gate too (T2: far-court clutter 4+ px
-    # across where the ground estimate said 2 px).
-    assert len(detect_middle(frames, expected_diameter_px=lambda x, y: COLOUR_GATE_DIAMETER_PX - 1.0)) == 0
-    yellow, _ = moving_ball_frames(8.0, step=16.0)
+def test_colour_is_only_a_score_and_lift_is_the_gate() -> None:
+    """Real broadcast balls are blurred into the court and fail an optic-yellow
+    gate (TrackNet: median colour score 0.10). A blob brighter than the court
+    behind it is kept whatever its colour; its colour is still recorded."""
+    grey_ball, truth = moving_ball_frames(8.0, bgr=GREY_BGR, step=16.0)
+    kept = detect_middle(grey_ball, expected_diameter_px=lambda x, y: 8.0)
+    assert nearest(kept, truth) <= 0.75 and kept[0]["colour_score"] == 0.0
+    yellow, truth = moving_ball_frames(8.0, step=16.0)
     above = detect_middle(yellow, expected_diameter_px=lambda x, y: 8.0)
-    assert len(above) == 1 and above[0]["colour_score"] > 0.5
+    assert nearest(above, truth) <= 0.75 and above[0]["colour_score"] > 0.5
+
+
+def test_a_blob_darker_than_the_court_is_dropped() -> None:
+    """A shadow, dark clothing or a racket frame moving over the court."""
+    dark, _ = moving_ball_frames(8.0, bgr=(20, 20, 20), step=16.0)
+    assert len(detect_middle(dark, expected_diameter_px=lambda x, y: 8.0)) == 0
+    assert len(detect_middle(dark)) == 0
+
+
+def test_blob_lift_is_the_mean_added_grey_level() -> None:
+    prev = np.full((4, 4), 100, dtype=np.uint8)
+    nxt = np.full((4, 4), 110, dtype=np.uint8)
+    cur = prev.copy()
+    cur[1:3, 1:3] = 145
+    component = np.ones((2, 2), dtype=bool)
+    assert blob_lift(prev, cur, nxt, (1, 1, 3, 3), component) == (40.0, 40.0)
+    assert blob_lift(prev, prev, prev, (1, 1, 3, 3), component) == (0.0, 0.0)
+    assert not lifted(0.0, 0.0) and lifted(MIN_LIFT, 0.0)
+    # A ball crossing a white line: dark over the line, bright elsewhere.
+    cur[1, 1:3] = 0  # lifts -105, -105, 40, 40: mean -32.5, p75 40
+    mean, p75 = blob_lift(prev, cur, nxt, (1, 1, 3, 3), component)
+    assert mean < MIN_LIFT and lifted(mean, p75)
 
 
 def test_rejects_shapes_the_existing_tiers_reject() -> None:

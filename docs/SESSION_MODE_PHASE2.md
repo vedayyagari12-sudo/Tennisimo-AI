@@ -1375,6 +1375,54 @@ Bugs this evaluation found and fixed, each with a test: whole flights rejected b
 - Real clips, first frame: 0 fits on all 13 named in 11.3.
 - Deviations from 4.2's sketch, each measured: support requires a COLLINEAR, parallel segment (300 random long lines otherwise scored 0.97, then 0.73 with direction alone); `MIN_SUPPORT` 0.72, not 0.6 (a busy courtless frame fitted at 0.67); only the 400 longest segments are scored; collapsed fits are rejected (both edges of one painted line otherwise paired into a degenerate fit at support 1.0). Taps proposed by intersecting matched image lines were measured worse than projected keypoints and were not kept.
 
+### 11.2.3 Real broadcast footage: TrackNet (measured 2026-11-09)
+
+The first real, labelled test of the court engine. **TrackNet tennis dataset**
+(Huang et al. 2019, `arxiv.org/abs/1907.03698`): 95 rally clips from 10
+broadcast matches, 1280x720 at 30 fps, every frame labelled with the ball's
+position and whether it is in flight, a hit or a bounce (523 bounces, 516
+hits). It is broadcast footage, not a phone on a fence, and it states no
+licence, so it is used locally only and **never committed**: the zip lives
+outside the repo, each clip becomes a temporary mp4 that is deleted after
+analysis, and only numbers are kept. Script: `backend/scripts/tracknet_eval.py`.
+
+Calibration is the step 19 court fit with no human taps. It fits the first
+frame of 7 of the 10 matches (all 7 checked by eye: every keypoint on its
+line) and none of the clay and dark-green ones (games 4, 5, 6). Ten clips are
+under the 2 s decode minimum. 56 clips from 7 matches are scored; a found
+event matches a label within +/- 2 frames.
+
+| Measure | Before | After |
+|---|---|---|
+| Bounce recall | 0.27 | **0.64** |
+| Bounce precision | 0.38 | **0.84** |
+| Hit recall / precision | 0.20 / 0.22 | 0.50 / 0.74 |
+| Median bounce position error (matched) | 0.17 m | 0.16 m |
+| Matched bounces more than 3 m off | 14 of 88 | **0 of 223** |
+
+Per match after: bounce recall 0.60-0.85 at precision 0.82-0.97 on six of
+seven; Doha (game 3, purple court) 0.19 / 0.37.
+
+What changed, both found on this data:
+
+1. **Lift gate replaces the colour gates** (`flight_detector.MIN_LIFT`,
+   `MIN_LIFT_P75`). Tagging every missed labelled ball with the gate that
+   dropped it showed the optic-yellow colour gates dropping 404 real balls
+   against 337 kept: a blurred broadcast ball keeps its HSV colour in a
+   median 10 % of its pixels. Its brightness over the court behind it does
+   separate it (94-96 % of balls kept, 15-17 % of other moving blobs).
+2. **Split bounces are merged** (`ball_events.merge_split_bounces`). A bounce
+   whose break was found twice a few frames apart read as a false hit plus a
+   kink, adding a hit to the rally (T2 seed 20270001).
+
+T2 after the same changes: bounce recall 0.50 to 0.75, point-deciding bounce
+recall 0.63 to 0.94, rally exact 0.50 to 0.75, precision 1.00 and no
+confident wrong call. The design targets (bounce recall 0.90) are still not
+met, so the strict xfail stays.
+
+Not yet measured on this data: line-call accuracy (TrackNet labels no in/out),
+and rally length against truth.
+
 ### 11.3 Real-clip smoke run
 
 The 16 clips cannot validate in/out, depth, rally or scoring. None has a rally, a whole-flight ball, or a fixed camera on a full court.

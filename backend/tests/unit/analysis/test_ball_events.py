@@ -222,6 +222,57 @@ def test_a_pose_hit_passes_its_feet_on_in_pixels() -> None:
     assert classify_event(event, CALIBRATION, [PoseHit(2.0, None, CourtEnd.NEAR, 0.9)]).hitter_feet_xy_px is None
 
 
+def split_pair(gap_s: float, *, pose: bool = False) -> tuple[BallEvent, BallEvent, BallEvent]:
+    """A real T0 bounce, re-found as an early HIT (its downward side only)
+    and a late kink (its upward side only), ``gap_s`` apart."""
+    _, events, _ = scene_events(SEEDS[0])
+    bounce = next(e for e in events if e.kind is BallEventKind.BOUNCE and ONE_SIDED_BOUNCE_FLAG not in e.flags)
+    down = bounce.velocity_before_px_s
+    early = dataclasses.replace(
+        bounce, event_id="tmp_a", kind=BallEventKind.HIT, time_s=bounce.time_s - gap_s,
+        velocity_after_px_s=(down[0] * 1.5, down[1] * 2.0),
+        flags=(POSE_HIT_FLAG,) if pose else (),
+    )
+    late = dataclasses.replace(
+        bounce, event_id="tmp_b", kind=BallEventKind.UNKNOWN_KINK,
+        velocity_before_px_s=(down[0] * 0.2, -abs(down[1])), flags=(),
+    )
+    return bounce, early, late
+
+
+def test_a_bounce_found_twice_is_merged_back_into_one_bounce() -> None:
+    from app.analysis.ball_events import SPLIT_BOUNCE_FLAG, merge_split_bounces
+
+    bounce, early, late = split_pair(0.05)
+    merged = merge_split_bounces([early, late], CALIBRATION)
+    assert len(merged) == 1
+    assert merged[0].kind is BallEventKind.BOUNCE and SPLIT_BOUNCE_FLAG in merged[0].flags
+    assert merged[0].time_s == bounce.time_s
+    assert merged[0].velocity_before_px_s == early.velocity_before_px_s
+    assert merge_split_bounces([], CALIBRATION) == []
+    assert merge_split_bounces([late], CALIBRATION) == [late]
+
+
+@pytest.mark.parametrize(("gap_s", "pose"), [(0.2, False), (0.05, True)])
+def test_a_real_hit_or_a_distant_kink_is_not_merged(gap_s: float, pose: bool) -> None:
+    from app.analysis.ball_events import merge_split_bounces
+
+    _, early, late = split_pair(gap_s, pose=pose)
+    assert [e.kind for e in merge_split_bounces([early, late], CALIBRATION)] == [
+        BallEventKind.HIT, BallEventKind.UNKNOWN_KINK,
+    ]
+
+
+def test_a_net_contact_then_its_bounce_is_never_merged() -> None:
+    from app.analysis.ball_events import merge_split_bounces
+
+    _, early, late = split_pair(0.05)
+    net = dataclasses.replace(early, kind=BallEventKind.NET_CONTACT)
+    assert [e.kind for e in merge_split_bounces([net, late], CALIBRATION)] == [
+        BallEventKind.NET_CONTACT, BallEventKind.UNKNOWN_KINK,
+    ]
+
+
 # ------------------------------------------- no ground point for a flight
 
 

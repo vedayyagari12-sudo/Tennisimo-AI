@@ -21,8 +21,12 @@ background, 18-level threshold, 12 px^2 floor and 3x3 open all erase a
   diameter, or with the size unknown and at most ``TINY_UNKNOWN_MAX_AREA_PX``
   pixels, features come from ``connectedComponentsWithStats`` and the second
   moments of the pixel coordinates. Above it, the existing round/streak tiers.
-* **Colour is a score** below ``COLOUR_GATE_DIAMETER_PX`` (chroma subsampling
-  erases it), and a gate at or above it when the expected size is known.
+* **Colour is a score, never a gate.** On real broadcast footage a moving
+  ball is blurred into the court behind it and keeps the optic-yellow HSV
+  colour in under half its pixels (median score 0.10 on 841 labelled TrackNet
+  balls). The gate is **lift** instead: how much brighter the blob is than the
+  same pixels in the frames before and after. A ball is brighter than any
+  court; a moving limb, shadow or racket edge averages near zero.
 * **Size.** Rejected when the minor axis exceeds 2.5 x expected + 2 px.
 
 Pixel units are TRACK_SPACE (``flight_frames.TRACK_SPACE_LONG_EDGE_PX``), y
@@ -53,6 +57,7 @@ from app.ball.track import TIER_REJECTED
 
 __all__ = [
     "FLIGHT_CANDIDATE_DTYPE",
+    "blob_lift",
     "court_roi_mask",
     "double_difference_mask",
     "expected_diameter_fn",
@@ -87,17 +92,17 @@ TINY_UNKNOWN_MAX_AREA_PX: Final[int] = 30
 #: nearer than the ground point behind it, hence the loose factor).
 SIZE_GATE_FACTOR: Final[float] = 2.5
 SIZE_GATE_MARGIN_PX: Final[float] = 2.0
-#: Design 4.3: colour is only a score below this expected diameter.
-COLOUR_GATE_DIAMETER_PX: Final[float] = 4.0
-#: At or above COLOUR_GATE_DIAMETER_PX, at least this fraction of the moving
-#: pixels must pass ``colour_mask``. Starting value; tune on T1/T2 only.
-COLOUR_GATE_MIN_SCORE: Final[float] = 0.2
-#: Precision first: a false landing on the shot map misleads; a missed one is
-#: only absent. T2 1080p, 4 seeds: this setting gave bounce precision 1.00 /
-#: recall 0.50; the looser (5 px, 0.1) gave 0.69 / 0.55. Neither meets the
-#: design 11.2 T2 targets; real footage decides (synthetic-tuned placeholder).
-OWN_SIZE_COLOUR_GATE_PX: Final[float] = 4.0
-OWN_SIZE_COLOUR_MIN_SCORE: Final[float] = 0.2
+#: Minimum mean grey-level lift of a blob over the mean of the previous and
+#: next frame at the same pixels. Measured on 7 TrackNet broadcast clips
+#: (1280x720, 6 surfaces, 841 labelled balls, 8,873 other moving blobs that
+#: pass every other gate): at 10 it keeps 94 % of balls and 15 % of clutter;
+#: the colour gates it replaces kept about 44 % of balls.
+MIN_LIFT: Final[float] = 10.0
+#: ... or this lift at the blob's 75th percentile: a ball crossing a white
+#: line, or merged with a little other motion, is darker than what is behind
+#: it in part of the blob and fails on the mean alone. Same data: mean OR
+#: p75 keeps 96 % of balls and 17 % of clutter.
+MIN_LIFT_P75: Final[float] = 30.0
 
 #: Brief Constants / design 4.3: court polygon plus 4 m run-off ...
 RUNOFF_M: Final[float] = 4.0
@@ -187,6 +192,31 @@ def _contour_shape(component: npt.NDArray[np.bool_]) -> tuple[float, float, floa
     return features.major_axis_px, features.minor_axis_px, features.orientation_deg
 
 
+def blob_lift(
+    prev_gray: U8Array,
+    cur_gray: U8Array,
+    next_gray: U8Array,
+    box: tuple[int, int, int, int],
+    component: npt.NDArray[np.bool_],
+) -> tuple[float, float]:
+    """Grey level the blob adds over the mean of the previous and next frame
+    at the same pixels (positive: brighter than what is behind it), as
+    (mean, 75th percentile) over the blob's pixels."""
+    x0, y0, x1, y1 = box
+    cur = cur_gray[y0:y1, x0:x1][component].astype(np.float64)
+    behind = (
+        prev_gray[y0:y1, x0:x1][component].astype(np.float64)
+        + next_gray[y0:y1, x0:x1][component].astype(np.float64)
+    ) / 2.0
+    lift = cur - behind
+    return float(np.mean(lift)), float(np.percentile(lift, 75))
+
+
+def lifted(mean_lift: float, p75_lift: float) -> bool:
+    """The blob is brighter than the court behind it: the ball gate."""
+    return mean_lift >= MIN_LIFT or p75_lift >= MIN_LIFT_P75
+
+
 def find_flight_candidates(
     prev_gray: U8Array,
     cur_gray: U8Array,
@@ -245,20 +275,10 @@ def find_flight_candidates(
         if ceiling is not None and minor > SIZE_GATE_FACTOR * ceiling + SIZE_GATE_MARGIN_PX:
             continue
 
+        if not lifted(*blob_lift(prev_gray, cur_gray, next_gray, (x0, y0, x1, y1), component)):
+            continue
         colour = colour_mask(np.ascontiguousarray(cur_bgr[y0:y1, x0:x1]))
         colour_score = float(np.count_nonzero(colour[component])) / float(area)
-        if (
-            diameter is not None
-            and diameter >= COLOUR_GATE_DIAMETER_PX
-            and colour_score < COLOUR_GATE_MIN_SCORE
-        ):
-            continue
-        # Also judge colour once the blob ITSELF is big enough to have one:
-        # far-court clutter from a player's edges is 5+ px across where the
-        # ground-plane estimate says 2, and passed (82 % of such clutter scores
-        # under 0.2 against 6 % of ball blobs, T2 seed 20270001).
-        if minor >= OWN_SIZE_COLOUR_GATE_PX and colour_score < OWN_SIZE_COLOUR_MIN_SCORE:
-            continue
         contrast = float(np.max(strength[y0:y1, x0:x1][component]))
         if contrast < min_contrast:
             continue
