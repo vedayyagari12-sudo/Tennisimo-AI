@@ -66,14 +66,13 @@ def test_real_clip_smoke(name: str) -> None:
 
     expectation = manifest()[name]
     if "max_fits" in expectation:
-        from app.analysis.court_fit import fit_court_candidates
-        from app.ball.court_lines import detect_line_segments
+        from app.ball.court_lines import fit_court_from_frame
         from app.ball.flight_frames import iter_track_frames, probe_court_clip
 
         frames = iter_track_frames(path, probe_court_clip(path))
         _, first = next(frames)
         frames.close()
-        fits = fit_court_candidates(detect_line_segments(first), (first.shape[1], first.shape[0]))
+        fits = fit_court_from_frame(first)
         assert len(fits) <= int(expectation["max_fits"])  # type: ignore[call-overload]
     if "camera" not in expectation:
         return  # camera not measured for this clip yet

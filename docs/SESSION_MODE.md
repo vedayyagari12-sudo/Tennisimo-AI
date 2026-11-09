@@ -49,7 +49,8 @@ Branch `worktree-phase-2-ball-court`. Everything below is pure or offline code w
 **Real footage (2026-11-09).** First labelled real test: 56 TrackNet broadcast rally clips from 7 matches, calibrated by the court fit alone (`SESSION_MODE_PHASE2.md` 11.2.3, `backend/scripts/tracknet_eval.py`; the dataset stays outside the repo). Bounce recall 0.27 to 0.64 and precision 0.38 to 0.84, with no matched bounce more than 3 m off, after two changes this data drove: a brightness-lift gate in place of the colour gates, and merging bounces found twice.
 
 **Known gaps**
-- Bounce recall (0.64 real, 0.75 T2) is below the 0.90 target; Doha's purple court is weakest (0.19). The court fit finds no court on clay or dark green.
+- Bounce recall (0.64 real, 0.75 T2) is below the 0.90 target; Doha's purple court is weakest (0.19).
+- Court fit: a surface-restricted retry (2026-11-09) added the green and one clay match (9 of 10 now; 71 clips scored, same 0.64 / 0.83). One clay match with an almost invisible far baseline still fails. The retry has not yet been run on a courtless frame (the negative clips were deleted after processing).
 - Line-call accuracy is not measured on real footage yet: TrackNet has no in/out labels.
 - The numeric guard checks numbers, not meaning: a payload number reused with another meaning (median rally length 5 written as "5 rallies") passes.
 

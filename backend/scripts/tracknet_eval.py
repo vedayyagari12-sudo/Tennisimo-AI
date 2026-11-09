@@ -29,9 +29,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from app.analysis.court_fit import fit_court_candidates
 from app.analysis.homography import apply_homography
-from app.ball.court_lines import detect_line_segments
+from app.ball.court_lines import fit_court_from_frame
 from app.models.court import BallEventKind, CourtCalibrationRequest, CourtFormat, CourtTapRequest
 from app.services.court_offline import analyze_court_video
 
@@ -73,7 +72,7 @@ def _image(z: zipfile.ZipFile, name: str) -> np.ndarray:
 
 def fit_request(image: np.ndarray) -> CourtCalibrationRequest | None:
     height, width = image.shape[:2]
-    fits = fit_court_candidates(detect_line_segments(image), (width, height))
+    fits = fit_court_from_frame(image)
     if not fits:
         return None
     taps = [

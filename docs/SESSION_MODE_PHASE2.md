@@ -1386,10 +1386,10 @@ licence, so it is used locally only and **never committed**: the zip lives
 outside the repo, each clip becomes a temporary mp4 that is deleted after
 analysis, and only numbers are kept. Script: `backend/scripts/tracknet_eval.py`.
 
-Calibration is the step 19 court fit with no human taps. It fits the first
-frame of 7 of the 10 matches (all 7 checked by eye: every keypoint on its
-line) and none of the clay and dark-green ones (games 4, 5, 6). Ten clips are
-under the 2 s decode minimum. 56 clips from 7 matches are scored; a found
+Calibration is the step 19 court fit with no human taps. It first fitted the
+first frame of 7 of the 10 matches (all 7 checked by eye: every keypoint on
+its line) and none of the clay and dark-green ones (games 4, 5, 6). Ten clips
+are under the 2 s decode minimum. 56 clips from 7 matches were scored; a found
 event matches a label within +/- 2 frames.
 
 | Measure | Before | After |
@@ -1419,6 +1419,32 @@ T2 after the same changes: bounce recall 0.50 to 0.75, point-deciding bounce
 recall 0.63 to 0.94, rally exact 0.50 to 0.75, precision 1.00 and no
 confident wrong call. The design targets (bounce recall 0.90) are still not
 met, so the strict xfail stays.
+
+**Court fit cascade (2026-11-09).** In games 5 and 6 the lines were found but
+long edges in the stands took the 6-longest-lines slots; game 6's correct fit
+also scored only 0.71 on its dusty far lines. `court_lines.fit_court_from_frame`
+now retries, only when the plain fit finds nothing, with segments restricted to
+the court surface (convex hull of the court colour), then at a fainter line
+threshold, then with the colour mask closed across painted lines. `MIN_SUPPORT`
+is unchanged. A frame that fitted before fits exactly as before (tested).
+
+- First frames: 9 of 10 matches fit (games 5 and 6 added, both checked by eye:
+  every keypoint on its line). Game 4 still fails: its far baseline is almost
+  invisible, and its correct fit scores 0.54.
+- 6 of the 7 clips in games 2 and 8 that had used their match's fallback fit
+  now fit their own first frame; scores unchanged.
+- 71 clips from 9 matches: bounce recall 0.64, precision 0.83, hits 0.51 /
+  0.70, median error 0.17 m, 0 of 289 over 3 m. Game 5 (green): 0.61 / 0.77;
+  game 6 (clay): 0.66 / 0.81.
+- Synthetic courts under rendered stands (all three surfaces): the plain fit
+  finds nothing, the cascade fits; median tap error 1.1 px, worst 9-13 px at
+  the near singles corners 12 px from the frame edge.
+- **Not re-checked:** the 0-fit negatives in 11.2.2 (courtless and padel
+  first frames). Those clips were deleted after processing (Decision 3), so
+  the surface stages have not been run on a courtless frame. They only run
+  when the plain fit finds nothing, which is exactly the courtless case.
+  Re-run `tests/eval` with `TENNIS_CLIPS_DIRS` set when clips are next
+  available.
 
 Not yet measured on this data: line-call accuracy (TrackNet labels no in/out),
 and rally length against truth.
