@@ -21,4 +21,6 @@ addopts = "-q"
 markers = [
     "slow: runs real MediaPipe inference and a real decode. Deselect with -m 'not slow'.",
     "gemini_live: calls the real Gemini API. Opt-in; requires GEMINI_API_KEY in the environment.",
+    "court_pixels: renders synthetic court frames (T1/T2 tiers). Deselect with -m 'not court_pixels'.",
+    "real_clips: runs on local real clips; skipped unless TENNIS_CLIPS_DIRS is set.",
 ]

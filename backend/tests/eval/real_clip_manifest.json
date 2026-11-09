@@ -1,0 +1,114 @@
+{
+  "about": "File names and measured expectations only. Clips stay outside the repo (TENNIS_CLIPS_DIRS). \"camera\" was measured over the whole clip for 12 clips (the run was stopped for low memory before the rest); \"max_fits\" is the design 11.3 court-fit rule, checked on each clip's first frame (all measured at 0 fits on 2026-11-08).",
+  "clips": {
+    "serve_01_baseline_4902773.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_02_4902143.mp4": {
+      "camera": "unknown",
+      "stability_verdict": "unknown",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 0
+    },
+    "serve_03_practice_4902165.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 3
+    },
+    "serve_04_practice_4902161.mp4": {
+      "camera": "fixed",
+      "stability_verdict": "shaky",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "serve_05_from_baseline_4902164.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 3
+    },
+    "serve_06_vertical_10340710.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 0
+    },
+    "serve_07_10340707.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 0
+    },
+    "tennis_forehand_10340703.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed"
+    },
+    "tennis_forehand_34449204.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 60.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 0
+    },
+    "tennis_forehand_34449247.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 60.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 0
+    },
+    "tennis_forehand_8224254_pexels.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 3
+    },
+    "tennis_forehand_8224589_pexels.mp4": {
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0,
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed",
+      "max_fits": 3
+    },
+    "tennis_serve_10340710.mp4": {
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 0,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0
+    },
+    "tennis_forehand_8224596_pexels.mp4": {
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 3,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0
+    },
+    "tennis_serve_8224610_pexels.mp4": {
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 3,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 30.0
+    },
+    "tennis_serve_4902145_pexels.mp4": {
+      "note": "tag measured by camera_motion on 2026-11-08, frames not viewed; court fit on the first frame only",
+      "max_fits": 3,
+      "camera": "moving",
+      "stability_verdict": "moving",
+      "fps": 25.0
+    }
+  }
+}
