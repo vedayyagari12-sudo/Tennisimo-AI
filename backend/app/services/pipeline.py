@@ -28,6 +28,7 @@ fault, and per Part E.4 it is not grounds for ``partial``.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import tempfile
 import time
@@ -72,7 +73,7 @@ from app.models.enums import (
     ShotType,
 )
 from app.models.feedback import CoachingFeedback as FeedbackCoachingFeedback
-from app.models.internal import NormalizedSequence
+from app.models.internal import NormalizedSequence, RawPoseSequence
 from app.models.responses import (
     AnalysisResponse,
     BallSpeedResult,
@@ -95,7 +96,14 @@ from app.pose.extractor import (
     verify_model_asset,
 )
 from app.pose.sequence import build_pose_sequence, detection_rate
-from app.pose.video_io import MOTION_SCAN_COARSE_FLAG, VideoDecodeError, open_pose_stream
+from app.pose.crop import CropBox, landmark_box, motion_box, uncrop_landmarks, worth_cropping
+from app.pose.video_io import (
+    MOTION_SCAN_COARSE_FLAG,
+    PoseStream,
+    VideoDecodeError,
+    open_pose_stream,
+    window_motion_map,
+)
 from app.services.orchestrator import JobContext, JobFailure
 from app.services.repository import AnalysisRow
 
@@ -105,6 +113,19 @@ logger = logging.getLogger("tennisform.pipeline")
 #: ``no_pose_detected``. ``extract_keypoints`` deliberately does NOT apply this
 #: gate itself -- it reports ``detected`` and the orchestrator decides.
 MIN_DETECTION_RATE: Final[float] = 0.40
+#: Flexible capture (2026-11-09, owner: recording yourself kept being
+#: refused). Between this and ``MIN_DETECTION_RATE`` the analysis runs and is
+#: ``partial`` with a warning, instead of failing ``no_pose_detected``.
+MIN_DETECTION_RATE_RELAXED: Final[float] = 0.20
+#: When the strict Stage 7 verdict fails, it is re-judged with these. A
+#: result that passes only here is ``partial``, flagged ``relaxed_pose_gate``.
+#: The gap a stretch is interpolated across stays short (5 frames, 0.17 s):
+#: longer would draw the swing rather than measure it.
+RELAXED_MAX_GAP_FRAMES: Final[int] = 5
+RELAXED_MIN_CORE_COVERAGE: Final[float] = 0.75
+RELAXED_MAX_CORE_GAP_FRAMES: Final[int] = 5
+RELAXED_POSE_FLAG: Final[str] = "relaxed_pose_gate"
+ZOOMED_POSE_FLAG: Final[str] = "zoomed_pose"
 
 #: Part E.4 / PIPELINE.md:553. Below this the technique analysis is ``partial``
 #: -- but it is still produced. Low contact confidence never fails the job.
@@ -501,6 +522,72 @@ def ball_speed_stage(
         )
 
 
+def _pose_pass(
+    context: JobContext, stream: PoseStream, model_path: Path, timer: StageTimer
+) -> RawPoseSequence:
+    """Stage 6 over one pose stream, with a fresh landmarker (VIDEO mode needs
+    increasing timestamps, so a second pass cannot reuse the first's)."""
+    meter = DecodeMeter()
+    with timer.measure("pose"):
+        try:
+            with PoseExtractor(model_path) as extractor:
+                raw = extract_keypoints(
+                    extractor,
+                    meter.wrap(stream.frames),
+                    # Stage 5 yields ABSOLUTE PTS and extract_keypoints
+                    # subtracts the window start ITSELF
+                    # (extractor.py:215-228). Pre-subtracting it here would
+                    # subtract it twice, invisibly on any short clip.
+                    window_start_s=stream.analysis_window_start_s,
+                    width_px=stream.width_px,
+                    height_px=stream.height_px,
+                    max_frames=context.settings.max_analysis_frames,
+                )
+        except VideoDecodeError as exc:
+            raise JobFailure(exc.error_code, str(exc), stage="decode") from exc
+    # Decoding happened inside the loop above: move it to the decode bill.
+    timer.add("decode", meter.seconds)
+    timer.add("pose", -meter.seconds)
+    return raw
+
+
+def _zoomed_pass(
+    context: JobContext,
+    clip: Path,
+    stream: PoseStream,
+    model_path: Path,
+    timer: StageTimer,
+    box: CropBox,
+) -> RawPoseSequence | None:
+    """The same window again, cropped to ``box``, landmarks mapped back to the
+    full frame. None when the retry cannot decode: the first pass stands."""
+    try:
+        zoomed_stream = open_pose_stream(
+            clip,
+            long_edge_px=context.settings.target_long_edge_px,
+            cal_long_edge_px=context.settings.ball_cal_space_long_edge_px,
+            analysis_window_s=context.settings.analysis_window_seconds,
+            analysis_fps=context.settings.analysis_fps,
+            max_frames=context.settings.max_analysis_frames,
+            motion_scan_threshold_s=context.settings.motion_scan_threshold_s,
+            crop=box,
+        )
+        if zoomed_stream.analysis_window_start_s != stream.analysis_window_start_s:
+            return None  # a different window would not be the same swing
+        raw = _pose_pass(context, zoomed_stream, model_path, timer)
+    except JobFailure:
+        return None
+    except VideoDecodeError:
+        return None
+    return dataclasses.replace(raw, landmarks=uncrop_landmarks(raw.landmarks, box))
+
+
+def _pose_rank(raw: RawPoseSequence, quality: PoseQuality) -> tuple[bool, float, float]:
+    """Which of two pose passes to keep: usable first, then more frames with
+    a player, then better core coverage."""
+    return (quality.usable, round(detection_rate(raw.detected), 3), quality.core_coverage_fraction)
+
+
 def run_analysis_job(
     context: JobContext, *, gemini_client: GeminiClient | None = None
 ) -> None:
@@ -550,44 +637,72 @@ def run_analysis_job(
                 ErrorCode.INTERNAL_ERROR, "pose model asset unusable", stage="pose"
             ) from exc
 
-        meter = DecodeMeter()
-        with timer.measure("pose"):
-            try:
-                with PoseExtractor(model_path) as extractor:
-                    raw = extract_keypoints(
-                        extractor,
-                        meter.wrap(stream.frames),
-                        # Stage 5 yields ABSOLUTE PTS and extract_keypoints
-                        # subtracts the window start ITSELF
-                        # (extractor.py:215-228). Pre-subtracting it here would
-                        # subtract it twice, invisibly on any short clip.
-                        window_start_s=stream.analysis_window_start_s,
-                        width_px=stream.width_px,
-                        height_px=stream.height_px,
-                        max_frames=context.settings.max_analysis_frames,
-                    )
-            except VideoDecodeError as exc:
-                raise JobFailure(exc.error_code, str(exc), stage="decode") from exc
-        # Decoding happened inside the loop above: move it to the decode bill.
-        timer.add("decode", meter.seconds)
-        timer.add("pose", -meter.seconds)
+        raw = _pose_pass(context, stream, model_path, timer)
         context.heartbeat()
 
         video = stream.video_meta()
-        if detection_rate(raw.detected) < MIN_DETECTION_RATE:
-            raise JobFailure(ErrorCode.NO_POSE_DETECTED, stage="pose")
-
         pose_sequence = build_pose_sequence(raw, stream.width_px, stream.height_px)
+        seq, quality = normalize_sequence(pose_sequence)
+
+        # -- Zoom-in retry: a small or unclear player (app/pose/crop.py) ---
+        zoomed = False
+        if detection_rate(raw.detected) < MIN_DETECTION_RATE or not quality.usable:
+            box = landmark_box(raw.landmarks, raw.detected)
+            if box is None:
+                with timer.measure("motion_scan"):
+                    motion = window_motion_map(
+                        clip, stream.analysis_window_start_s, stream.analysis_window_end_s
+                    )
+                box = motion_box(motion) if motion is not None else None
+            if worth_cropping(box):
+                assert box is not None
+                retry = _zoomed_pass(context, clip, stream, model_path, timer, box)
+                if retry is not None:
+                    retry_sequence = build_pose_sequence(retry, stream.width_px, stream.height_px)
+                    retry_seq, retry_quality = normalize_sequence(retry_sequence)
+                    if _pose_rank(retry, retry_quality) > _pose_rank(raw, quality):
+                        raw, pose_sequence = retry, retry_sequence
+                        seq, quality = retry_seq, retry_quality
+                        quality.flags.append(ZOOMED_POSE_FLAG)
+                        zoomed = True
+                        accumulator.warn(
+                            "the player was small in the frame, so the analysis "
+                            "zoomed in on them"
+                        )
+            context.heartbeat()
+
+        rate = detection_rate(raw.detected)
+        if rate < MIN_DETECTION_RATE_RELAXED:
+            raise JobFailure(ErrorCode.NO_POSE_DETECTED, stage="pose")
+        if rate < MIN_DETECTION_RATE:
+            accumulator.degrade(
+                f"the player was only tracked in {rate:.0%} of the frames, so these "
+                "numbers are rougher than usual"
+            )
 
         # -- Stages 7-9 and 12-15: the pure core -------------------------
         with timer.measure("analysis"):
-            seq, quality = normalize_sequence(pose_sequence)
+            if not quality.usable:
+                relaxed_seq, relaxed_quality = normalize_sequence(
+                    pose_sequence,
+                    max_gap_frames=RELAXED_MAX_GAP_FRAMES,
+                    min_core_coverage=RELAXED_MIN_CORE_COVERAGE,
+                    max_core_gap_frames=RELAXED_MAX_CORE_GAP_FRAMES,
+                )
+                if not relaxed_quality.usable:
+                    raise JobFailure(ErrorCode.POSE_QUALITY_TOO_LOW, stage="normalize")
+                seq, quality = relaxed_seq, relaxed_quality
+                if zoomed:
+                    quality.flags.append(ZOOMED_POSE_FLAG)
+                quality.flags.append(RELAXED_POSE_FLAG)
+                accumulator.degrade(
+                    "body tracking was patchy through the swing, so these numbers are "
+                    "rougher than usual"
+                )
             if stream.motion_scan_coarse and MOTION_SCAN_COARSE_FLAG not in quality.flags:
                 # A degraded window-location path must cost something visible in
                 # the response, not only in the logs (PIPELINE.md 5.1.1).
                 quality.flags.append(MOTION_SCAN_COARSE_FLAG)
-            if not quality.usable:
-                raise JobFailure(ErrorCode.POSE_QUALITY_TOO_LOW, stage="normalize")
             if SUBJECT_IDENTITY_UNSTABLE in quality.flags:
                 accumulator.degrade("subject identity was unstable across the clip")
 

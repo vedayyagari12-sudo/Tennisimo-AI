@@ -52,7 +52,10 @@ class VideoPickRejected extends VideoPickOutcome {
 ///    defaulted.
 ///
 /// Nothing is uploaded here, and a rejection costs the user no network time.
-Future<VideoPickOutcome> pickVideoClip() async {
+Future<VideoPickOutcome> pickVideoClip({
+  double maxSeconds = kMaxClipSeconds,
+  int maxBytes = kMaxUploadBytes,
+}) async {
   final PlatformFile? file;
   try {
     file = await FilePicker.pickFile(type: FileType.video);
@@ -65,8 +68,10 @@ Future<VideoPickOutcome> pickVideoClip() async {
   // the picker's own stat, so an over-limit file is caught before readAsBytes.
   // It is advisory only — `bytes.length` below is what is actually sent.
   final int? reportedSize = await file.length();
-  if (reportedSize != null && reportedSize > kMaxUploadBytes) {
-    return VideoPickRejected(oversizeMessage(reportedSize));
+  if (reportedSize != null && reportedSize > maxBytes) {
+    return VideoPickRejected(
+      maxBytes == kMaxUploadBytes ? oversizeMessage(reportedSize) : matchOversizeMessage(reportedSize),
+    );
   }
 
   final Uint8List bytes;
@@ -94,6 +99,8 @@ Future<VideoPickOutcome> pickVideoClip() async {
     contentType: contentType,
     sizeBytes: bytes.length,
     durationSeconds: durationSeconds,
+    maxSeconds: maxSeconds,
+    maxBytes: maxBytes,
   );
   if (reason != null) return VideoPickRejected(reason);
 

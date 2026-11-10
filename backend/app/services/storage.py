@@ -242,6 +242,69 @@ class SupabaseStorageClient:
                 raise ApiError(ErrorCode.STORAGE_UNAVAILABLE)
         return len(keys)
 
+    # ------------------------------------------------ match records (JSON)
+
+    async def put_bytes(self, storage_path: str, body: bytes, content_type: str) -> None:
+        """Create or overwrite one object (match records)."""
+        bucket, key = split_bucket_path(storage_path)
+        try:
+            response = await self._client.post(
+                f"{self._base}/object/{bucket}/{key}",
+                headers={**self._headers, "x-upsert": "true", "content-type": content_type},
+                content=body,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("storage put failed: %s", type(exc).__name__)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
+        if response.status_code >= 400:
+            logger.warning("storage put returned %s", response.status_code)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE)
+
+    async def get_bytes(self, storage_path: str) -> bytes | None:
+        """One object's bytes, or None when it does not exist."""
+        bucket, key = split_bucket_path(storage_path)
+        try:
+            response = await self._client.get(f"{self._base}/object/{bucket}/{key}", headers=self._headers)
+        except httpx.HTTPError as exc:
+            logger.warning("storage get failed: %s", type(exc).__name__)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
+        if response.status_code in (400, 404):
+            return None
+        if response.status_code >= 400:
+            logger.warning("storage get returned %s", response.status_code)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE)
+        return response.content
+
+    async def list_names(self, folder_path: str) -> list[str]:
+        """Object names directly inside ``folder_path`` (one level, no folders)."""
+        bucket, folder = split_bucket_path(folder_path.rstrip("/"))
+        if not bucket or not folder:
+            raise ValueError("list_names needs '<bucket>/<folder>', got an empty part")
+        names: list[str] = []
+        offset = 0
+        while True:
+            entries = await self._list_page(bucket, folder, offset)
+            names.extend(e.name for e in entries if e.id is not None)
+            if len(entries) < STORAGE_BATCH_SIZE:
+                return names
+            offset += len(entries)
+
+    async def delete_object(self, storage_path: str) -> None:
+        """Delete one object; a missing one is not an error."""
+        bucket, key = split_bucket_path(storage_path)
+        if not bucket or not key:
+            raise ValueError("delete_object needs '<bucket>/<key>'")
+        try:
+            response = await self._client.request(
+                "DELETE", f"{self._base}/object/{bucket}", headers=self._headers, json={"prefixes": [key]}
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("storage delete failed: %s", type(exc).__name__)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE) from exc
+        if response.status_code >= 400:
+            logger.warning("storage delete returned %s", response.status_code)
+            raise ApiError(ErrorCode.STORAGE_UNAVAILABLE)
+
     async def _list_keys_recursive(self, bucket: str, folder: str) -> list[str]:
         """Full object keys under ``folder``, descending into sub-folders."""
         keys: list[str] = []

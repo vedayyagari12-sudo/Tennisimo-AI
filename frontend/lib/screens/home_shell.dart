@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/match.dart';
 import '../services/haptics.dart';
 import '../services/last_seen.dart';
 import '../theme/app_theme.dart';
 import 'dashboard_screen.dart';
 import 'history_screen.dart';
+import 'matches_screen.dart';
 import 'record_screen.dart';
 
 /// The signed-in shell: Dashboard · Record · History.
@@ -31,6 +33,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   static const int _dashboardTab = 0;
   static const int _recordTab = 1;
   static const int _historyTab = 2;
+  static const int _matchesTab = 3;
+  static const int _ralliesTab = 4;
 
   int _selected = _dashboardTab;
 
@@ -93,13 +97,21 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       // IndexedStack keeps each tab's state and scroll position alive across
       // switches. Only the two real tabs live in it.
       body: IndexedStack(
-        index: _selected == _historyTab ? 1 : 0,
+        index: _selected == _historyTab
+            ? 1
+            : _selected == _matchesTab
+                ? 2
+                : _selected == _ralliesTab
+                    ? 3
+                    : 0,
         children: <Widget>[
           DashboardScreen(
             key: _dashboardKey,
             onSeeAllHistory: () => setState(() => _selected = _historyTab),
           ),
           const HistoryScreen(),
+          const MatchesScreen(),
+          const MatchesScreen(kind: SessionKind.rally),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -132,6 +144,16 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             icon: Icon(Icons.timeline_outlined),
             selectedIcon: Icon(Icons.timeline),
             label: 'History',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.sports_tennis_outlined),
+            selectedIcon: Icon(Icons.sports_tennis),
+            label: 'Matches',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.forum_outlined),
+            selectedIcon: Icon(Icons.forum),
+            label: 'Rallies',
           ),
         ],
       ),

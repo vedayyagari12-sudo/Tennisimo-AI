@@ -9,9 +9,15 @@ Flight candidates in, landings, line calls and rallies out:
 Refusals (brief G7), checked in this order, each with an EMPTY result rather
 than a guess:
 * ``frame_rate_too_low``: under 24 fps the ball moves too far between frames.
-* ``camera_moving`` / ``camera_unknown``: the court-to-image mapping is only
-  valid for a fixed camera, and an unknown camera cannot be assumed fixed.
+* ``camera_moving``: the court-to-image mapping is only valid for a fixed
+  camera.
 * ``not_calibrated``: without court taps there is no ground position at all.
+
+An UNKNOWN camera (too little texture to measure its motion, common on a
+plain court from a fence) is analysed rather than refused (2026-11-09, owner:
+recording yourself kept being refused). It cannot be confirmed fixed, so the
+result is ``partial``, every landing is flagged ``camera_unverified``, and no
+line call is made: positions and rallies are shown, IN/OUT is "not measured".
 
 A camera bumped part-way is truncated at ``bumped_at_s`` and the result is
 ``partial``: everything after the bump would be mapped with a stale homography.
@@ -81,6 +87,7 @@ AT_NET_FLAG: Final[str] = "at_net"
 #: See ``out_bounces_that_were_hits``.
 PLAY_ON_WITHIN_S: Final[float] = 1.5
 RELABELLED_HIT_FLAG: Final[str] = "out_bounce_relabelled_hit"
+CAMERA_UNVERIFIED_FLAG: Final[str] = "camera_unverified"
 
 
 @dataclass(frozen=True, eq=False)
@@ -130,8 +137,6 @@ def refusal_for(
         return CourtRefusalReason.FRAME_RATE_TOO_LOW
     if stability.verdict is StabilityVerdict.MOVING:
         return CourtRefusalReason.CAMERA_MOVING
-    if stability.verdict is StabilityVerdict.UNKNOWN:
-        return CourtRefusalReason.CAMERA_UNKNOWN
     if calibration is None:
         return CourtRefusalReason.NOT_CALIBRATED
     return None
@@ -350,6 +355,16 @@ def analyze_court_session(
             for e in events
         )
         landings = build_landings(events, flights, calibration, stability, court_format=court_format)
+    if stability.verdict is StabilityVerdict.UNKNOWN:
+        status = CourtSessionStatus.PARTIAL
+        landings = tuple(
+            dataclasses.replace(
+                l,
+                call=None,
+                bounce=dataclasses.replace(l.bounce, flags=(*l.bounce.flags, CAMERA_UNVERIFIED_FLAG)),
+            )
+            for l in landings
+        )
     rallies = segment_rallies(
         events, landings, flights=flights, flight_end_halves=flight_end_halves(flights, calibration)
     )

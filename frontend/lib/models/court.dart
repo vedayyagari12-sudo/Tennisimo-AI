@@ -146,9 +146,9 @@ enum CourtSessionStatus implements WireEnum {
 }
 
 enum CourtRefusalReason implements WireEnum {
-  cameraMoving('camera_moving', 'The camera moved. Put the phone on a tripod or fence mount.'),
+  cameraMoving('camera_moving', 'The phone moved while recording. It doesn’t need a tripod: lean it on the fence, a bag or a bottle so it stays still.'),
   cameraUnknown('camera_unknown', 'We could not tell whether the camera stayed still.'),
-  notCalibrated('not_calibrated', 'Tap the court corners first so we can map the court.'),
+  notCalibrated('not_calibrated', 'We couldn’t find the court lines. Film from behind a baseline, a little above head height if you can, with the whole court in view.'),
   frameRateTooLow('frame_rate_too_low', 'Record at 30 fps or more to track the ball.'),
   unrecognized(_unrecognized, 'Court tracking was not possible for this video.');
 

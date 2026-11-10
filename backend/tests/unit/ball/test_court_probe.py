@@ -16,7 +16,7 @@ from tests.unit.seam_clips import write_clip
 def test_single_swing_limits_are_unchanged() -> None:
     assert video_io.MAX_CLIP_S == 60.0
     assert video_io.MIN_CLIP_S == 2.0
-    assert COURT_MAX_CLIP_S == 600.0
+    assert COURT_MAX_CLIP_S == 300.0  # five-minute matches (owner, 2026-11-09)
 
 
 def test_a_61_second_clip_is_court_only(tmp_path: Path) -> None:

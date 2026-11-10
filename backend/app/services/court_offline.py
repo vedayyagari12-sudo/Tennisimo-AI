@@ -5,6 +5,16 @@ and projects the result onto the wire models in ``app/models/court.py``. No
 routes, no DB, no Jobs: those wait on Session Mode Phase 1. The projection
 functions at the bottom are pure and unit-tested without any video.
 
+With no taps, or taps that are rejected, the court is found automatically
+(``court_lines.fit_court_from_frame``) on the first frame, retried at about
+0.5 s and 1.5 s in case a player hides a line. An automatic fit is used for
+positions, rallies and line calls when its support is at least
+``AUTO_FIT_CALLS_MIN_SUPPORT``. Every automatic fit accepted on the 9 real
+TrackNet matches was right by eye (support 0.74-1.0); a fit shifted by one
+painted line scored 0.713, under the fit's own 0.72 floor. The frame the
+court was found on is kept (``calibration_frame``) so the app can show the
+lines that were used, and the user can see a wrong court for themselves.
+
 Taps arrive as 0-1 fractions of the VIDEO frame (``CourtCalibrationRequest``)
 and are converted to TRACK_SPACE pixels here (brief Constants), so the
 calibration, the ROI and the candidates all share one pixel space.
@@ -16,6 +26,9 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+import dataclasses
+from typing import Final, Literal
 
 import cv2
 import numpy as np
@@ -37,6 +50,7 @@ from app.analysis.line_calls import LineCall, uncertainty_ellipse
 from app.analysis.placement import ShotLanding, ShotMapSummary
 from app.analysis.rally import Rally
 from app.ball.camera_motion import CameraMotionSampler
+from app.ball.court_lines import fit_court_from_frame
 from app.ball.flight_detector import (
     FLIGHT_CANDIDATE_DTYPE,
     court_roi_mask,
@@ -64,6 +78,36 @@ from app.models.court import (
 )
 
 
+#: Frames at which an automatic court fit is tried, until one is accepted.
+AUTO_FIT_FRAMES: Final[tuple[int, ...]] = (0, 15, 45)
+AUTO_FIT_CALLS_MIN_SUPPORT: Final[float] = 0.72
+#: How often the decode loop reports progress, in frames.
+PROGRESS_EVERY_FRAMES: Final[int] = 30
+CalibrationSource = Literal["taps", "auto"]
+
+
+def auto_calibration(bgr: npt.NDArray[np.uint8]) -> CalibrationVerdict | None:
+    """The best automatic court fit on one frame, calibrated like taps, or
+    None when no court is found or its taps do not calibrate."""
+    track_size = (int(bgr.shape[1]), int(bgr.shape[0]))
+    fits = fit_court_from_frame(bgr, max_candidates=1)
+    if not fits:
+        return None
+    verdict = calibrate_court(list(fits[0].taps), track_size)
+    if verdict.calibration is None:
+        return None
+    if fits[0].support < AUTO_FIT_CALLS_MIN_SUPPORT and verdict.calibration.calls_allowed:
+        verdict = CalibrationVerdict(
+            dataclasses.replace(
+                verdict.calibration,
+                calls_allowed=False,
+                flags=(*verdict.calibration.flags, "auto_fit_low_support"),
+            ),
+            None,
+        )
+    return verdict
+
+
 @dataclass(frozen=True, eq=False)
 class CourtVideoInputs:
     """Everything the pure layer needs, decoded from one clip."""
@@ -76,6 +120,11 @@ class CourtVideoInputs:
     stability: CameraStability
     median_feature_count: float | None
     calibration_verdict: CalibrationVerdict | None
+    #: Where the accepted calibration came from; None when there is none.
+    calibration_source: CalibrationSource | None = None
+    #: The TRACK_SPACE frame the calibration was made on (BGR), for the
+    #: court-lines picture; None without a calibration.
+    calibration_frame: npt.NDArray[np.uint8] | None = None
 
 
 def taps_in_track_space(
@@ -87,13 +136,16 @@ def taps_in_track_space(
 
 
 def extract_court_inputs(
-    video: Path, request: CourtCalibrationRequest | None
+    video: Path,
+    request: CourtCalibrationRequest | None,
+    progress: Callable[[float], None] | None = None,
 ) -> CourtVideoInputs:
     """Decode ``video`` once: candidates per frame, camera motion, calibration.
 
-    The court ROI and expected ball size are used only when the taps give an
-    accepted calibration; without one, candidates are searched over the whole
-    frame and the session is later refused as ``not_calibrated``.
+    The court ROI and expected ball size are used once a calibration is
+    accepted (taps, else the automatic fit); before that, and when neither
+    gives one, candidates are searched over the whole frame, and with no
+    calibration at all the session is later refused as ``not_calibrated``.
     """
     probe = probe_court_clip(video)
     sampler = CameraMotionSampler()
@@ -106,21 +158,31 @@ def extract_court_inputs(
     diameter: Callable[[float, float], float] | None = None
     largest: Callable[[float, float], float] | None = None
     track_size: tuple[int, int] | None = None
+    source: CalibrationSource | None = None
+    calibration_frame: npt.NDArray[np.uint8] | None = None
 
     for index, (pts_s, bgr) in enumerate(iter_track_frames(video, probe)):
         if track_size is None:
             track_size = (int(bgr.shape[1]), int(bgr.shape[0]))
-            if request is not None:
+            if request is not None and request.taps:
                 verdict = calibrate_court(
                     taps_in_track_space(request, track_size),
                     track_size,
                     video_frame_size=(request.frame_width_px, request.frame_height_px),
                 )
                 if verdict.calibration is not None:
-                    roi = court_roi_mask(verdict.calibration, track_size)
-                    diameter = expected_diameter_fn(verdict.calibration)
-                    largest = max_diameter_fn(verdict.calibration)
+                    source, calibration_frame = "taps", bgr.copy()
+        if source is None and index in AUTO_FIT_FRAMES:
+            found_auto = auto_calibration(bgr)
+            if found_auto is not None:
+                verdict, source, calibration_frame = found_auto, "auto", bgr.copy()
+        if source is not None and roi is None and verdict is not None and verdict.calibration is not None:
+            roi = court_roi_mask(verdict.calibration, track_size)
+            diameter = expected_diameter_fn(verdict.calibration)
+            largest = max_diameter_fn(verdict.calibration)
         times.append(pts_s)
+        if progress is not None and index % PROGRESS_EVERY_FRAMES == 0 and probe.duration_s > 0.0:
+            progress(min(max(pts_s / probe.duration_s, 0.0), 1.0))
         sampler.add(pts_s, bgr)
         window.append((pts_s, cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), bgr))
         if len(window) == 3:
@@ -148,6 +210,8 @@ def extract_court_inputs(
             float(np.median(samples.feature_counts)) if samples.feature_counts.size else None
         ),
         calibration_verdict=verdict,
+        calibration_source=source,
+        calibration_frame=calibration_frame,
     )
 
 
@@ -155,13 +219,18 @@ def analyze_court_video(
     video: Path,
     request: CourtCalibrationRequest | None,
     pose_hits: Sequence[PoseHit] = (),
+    *,
+    court_format: CourtFormat | None = None,
+    progress: Callable[[float], None] | None = None,
 ) -> tuple[CourtVideoInputs, CourtSessionResult]:
-    """Decode, then run the pure court engine. Pose hits are optional."""
-    inputs = extract_court_inputs(video, request)
+    """Decode, then run the pure court engine. Pose hits are optional.
+    ``court_format`` overrides the request's (needed when there are no taps)."""
+    inputs = extract_court_inputs(video, request, progress)
     calibration = (
         inputs.calibration_verdict.calibration if inputs.calibration_verdict is not None else None
     )
-    court_format = request.court_format if request is not None else CourtFormat.SINGLES
+    if court_format is None:
+        court_format = request.court_format if request is not None else CourtFormat.SINGLES
     result = analyze_court_session(
         inputs.candidates,
         inputs.frame_times_s,
@@ -175,6 +244,30 @@ def analyze_court_video(
 
 
 # ------------------------------------------------------- wire projection (pure)
+
+
+COURT_PICTURE_LONG_EDGE_PX: Final[int] = 960
+COURT_PICTURE_JPEG_QUALITY: Final[int] = 75
+
+
+def court_picture_jpeg(frame_bgr: npt.NDArray[np.uint8], calibration: CourtCalibration) -> bytes:
+    """The frame the court was found on, with the court lines that were used
+    drawn over it, as a JPEG no wider than ``COURT_PICTURE_LONG_EDGE_PX``."""
+    picture = frame_bgr.copy()
+    height, width = picture.shape[:2]
+    for line in calibration_overlay(calibration).lines:
+        a = (int(round(line.a[0] * width)), int(round(line.a[1] * height)))
+        b = (int(round(line.b[0] * width)), int(round(line.b[1] * height)))
+        cv2.line(picture, a, b, (0, 0, 0), 5, cv2.LINE_AA)
+        cv2.line(picture, a, b, (60, 230, 255), 2, cv2.LINE_AA)
+    height, width = picture.shape[:2]
+    scale = COURT_PICTURE_LONG_EDGE_PX / float(max(width, height))
+    if scale < 1.0:
+        picture = cv2.resize(picture, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, COURT_PICTURE_JPEG_QUALITY])
+    if not ok:  # pragma: no cover - imencode of a valid uint8 image does not fail
+        raise ValueError("could not encode the court picture")
+    return encoded.tobytes()
 
 
 def calibration_overlay(calibration: CourtCalibration) -> CalibrationOverlay:
@@ -345,6 +438,7 @@ __all__ = [
     "analyze_court_video",
     "calibration_overlay",
     "calibration_response",
+    "court_picture_jpeg",
     "extract_court_inputs",
     "landing_response",
     "project_court_result",

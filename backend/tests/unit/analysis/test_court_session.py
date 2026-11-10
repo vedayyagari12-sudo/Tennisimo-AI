@@ -16,6 +16,7 @@ from app.analysis.camera_stability import CameraStability
 from app.analysis.court_calibration import CourtTap, calibrate_court
 from app.analysis.court_model import keypoint_xy
 from app.analysis.court_session import (
+    CAMERA_UNVERIFIED_FLAG,
     COURT_ENGINE_VERSION,
     MIN_FPS,
     CourtSessionResult,
@@ -210,19 +211,23 @@ def test_summary_counts_every_landing() -> None:
 # ------------------------------------------------------------- refusals
 
 
-@pytest.mark.parametrize(
-    ("verdict", "reason"),
-    [
-        (StabilityVerdict.MOVING, CourtRefusalReason.CAMERA_MOVING),
-        (StabilityVerdict.UNKNOWN, CourtRefusalReason.CAMERA_UNKNOWN),
-    ],
-)
-def test_refuses_an_unfixed_camera(verdict: StabilityVerdict, reason: CourtRefusalReason) -> None:
-    _, result = run(SEEDS[0], stability=CameraStability(verdict, None, None, None, 20))
+def test_refuses_a_moving_camera() -> None:
+    moving = CameraStability(StabilityVerdict.MOVING, None, None, None, 20)
+    _, result = run(SEEDS[0], stability=moving)
     assert result.status is CourtSessionStatus.REFUSED
-    assert result.refusal_reason is reason
+    assert result.refusal_reason is CourtRefusalReason.CAMERA_MOVING
     assert result.landings == () and result.rallies == ()
     assert result.summary.count == 0 and result.summary.median_sigma_along_m is None
+
+
+def test_an_unknown_camera_is_analysed_without_line_calls() -> None:
+    unknown = CameraStability(StabilityVerdict.UNKNOWN, None, None, None, 5)
+    _, result = run(SEEDS[0], stability=unknown)
+    assert result.status is CourtSessionStatus.PARTIAL
+    assert result.refusal_reason is None
+    assert result.landings and result.rallies
+    assert all(l.call is None for l in result.landings)
+    assert all(CAMERA_UNVERIFIED_FLAG in l.bounce.flags for l in result.landings)
 
 
 def test_shaky_camera_is_analysed() -> None:

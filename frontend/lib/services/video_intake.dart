@@ -34,6 +34,15 @@ const int kMaxUploadBytes = 52428800;
 /// opaque failure for something the client can see instantly.
 const double kMaxClipSeconds = 60.0;
 
+/// Match mode: videos up to five minutes. They go up in 40 MiB pieces (each
+/// under Supabase's free-tier 50 MB per-file limit), are joined on the server,
+/// and every piece is deleted once the match is analysed.
+const double kMaxMatchSeconds = 300.0;
+
+/// Largest match video (backend `MATCH_MAX_UPLOAD_BYTES`): five minutes at
+/// 720p fits; 1080p may not.
+const int kMaxMatchUploadBytes = 450 * 1024 * 1024;
+
 /// The content types `ALLOWED_CONTENT_TYPES` accepts
 /// (`backend/app/models/requests.py`), and the extension each maps to.
 ///
@@ -133,6 +142,12 @@ const String kUnrecognisedVideoMessage =
 /// Public because the file picker refuses an over-limit file on its *reported*
 /// size, before reading it into memory, and must say the same thing there as
 /// [videoRejectionReason] says later.
+/// Shown when a match video is over [kMaxMatchUploadBytes].
+String matchOversizeMessage(int sizeBytes) =>
+    'That video is ${formatMegabytes(sizeBytes)}, over the '
+    '${formatMegabytes(kMaxMatchUploadBytes)} limit. Record at 720p instead of '
+    '1080p or 4K, or trim it.';
+
 String oversizeMessage(int sizeBytes) {
   return 'That clip is ${formatMegabytes(sizeBytes)}, over the '
       '${formatMegabytes(kMaxUploadBytes)} limit. Trim it, or record a '
@@ -155,6 +170,8 @@ String? videoRejectionReason({
   required String? contentType,
   required int sizeBytes,
   required double durationSeconds,
+  double maxSeconds = kMaxClipSeconds,
+  int maxBytes = kMaxUploadBytes,
 }) {
   if (contentType == null ||
       !kAcceptedVideoContentTypes.containsKey(contentType)) {
@@ -163,14 +180,20 @@ String? videoRejectionReason({
   if (sizeBytes <= 0) {
     return 'That file is empty, so there is nothing to analyse.';
   }
-  if (sizeBytes > kMaxUploadBytes) {
-    return oversizeMessage(sizeBytes);
+  if (sizeBytes > maxBytes) {
+    return maxBytes == kMaxUploadBytes
+        ? oversizeMessage(sizeBytes)
+        : matchOversizeMessage(sizeBytes);
   }
   if (durationSeconds <= 0) {
     return 'The length of that clip could not be read, so it cannot be sent '
         'for analysis. Try another file, or record a swing instead.';
   }
-  if (durationSeconds > kMaxClipSeconds) {
+  if (durationSeconds > maxSeconds) {
+    if (maxSeconds != kMaxClipSeconds) {
+      return 'That video is ${(durationSeconds / 60).toStringAsFixed(1)} minutes, '
+          'over the ${(maxSeconds / 60).toStringAsFixed(0)} minute limit. Trim it first.';
+    }
     return 'That clip is ${durationSeconds.toStringAsFixed(0)} seconds, over '
         'the ${kMaxClipSeconds.toStringAsFixed(0)} second limit. Trim it to '
         'just the swing.';
