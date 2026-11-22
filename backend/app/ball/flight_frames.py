@@ -54,7 +54,7 @@ __all__ = [
 #: Design 2.3 / brief Constants: rotated native frames capped at this long edge.
 TRACK_SPACE_LONG_EDGE_PX: Final[int] = 1920
 #: Court sessions run up to 10 minutes (design 4.6: memory fits a 4 GiB Job).
-COURT_MAX_CLIP_S: Final[float] = 600.0
+COURT_MAX_CLIP_S: Final[float] = 300.0
 
 
 def probe_court_clip(path: Path) -> ClipProbe:

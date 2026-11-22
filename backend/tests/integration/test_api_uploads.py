@@ -24,7 +24,9 @@ def test_ticket_path_is_server_chosen_and_user_prefixed(
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"storage_path", "upload_url", "upload_token", "expires_at"}
+    # parts / part_bytes are for match tickets; a swing ticket carries them empty.
+    assert set(body) == {"storage_path", "upload_url", "upload_token", "expires_at", "parts", "part_bytes"}
+    assert body["parts"] == [] and body["part_bytes"] is None
 
     prefix = f"swing-videos/{USER_ID}/"
     assert body["storage_path"].startswith(prefix)

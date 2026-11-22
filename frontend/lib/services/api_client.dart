@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/analysis_response.dart';
 import '../models/ball_speed_calibration.dart';
 import '../models/enums.dart';
+import '../models/match.dart';
 
 /// Base URL of the deployed FastAPI backend (Cloud Run, us-east1).
 ///
@@ -206,12 +207,36 @@ class UploadTicket {
     required this.storagePath,
     required this.uploadUrl,
     required this.uploadToken,
+    this.parts = const <UploadPart>[],
+    this.partBytes,
   });
 
   final String storagePath;
   final String uploadUrl;
   final String uploadToken;
+
+  /// Match tickets: where each piece of the video goes, in byte order. Empty
+  /// for a swing, which is one upload to [storagePath].
+  final List<UploadPart> parts;
+
+  /// Match tickets: bytes per piece (the last piece may be shorter).
+  final int? partBytes;
 }
+
+/// One piece of a match video upload.
+class UploadPart {
+  const UploadPart({required this.storagePath, required this.uploadToken});
+
+  final String storagePath;
+  final String uploadToken;
+}
+
+/// PURE. The byte ranges of each piece: piece i is
+/// `[i * partBytes, min((i + 1) * partBytes, size))`.
+List<(int, int)> uploadPartRanges(int size, int partBytes, int count) => <(int, int)>[
+      for (int i = 0; i < count; i++)
+        (i * partBytes, ((i + 1) * partBytes) < size ? (i + 1) * partBytes : size),
+    ];
 
 /// Mirrors PIPELINE.md 2.2 `CreateAnalysisResponse`.
 class CreateAnalysisResult {
@@ -309,6 +334,7 @@ Future<ApiResult<UploadTicket>> requestUploadTicket({
   required String contentType,
   required int sizeBytes,
   required double durationS,
+  String purpose = 'swing',
 }) async {
   final String? token = currentAccessToken();
   if (token == null) return const ApiResult<UploadTicket>.err(_notSignedIn);
@@ -321,6 +347,8 @@ Future<ApiResult<UploadTicket>> requestUploadTicket({
         'content_type': contentType,
         'size_bytes': sizeBytes,
         'duration_s': durationS,
+        // Older servers do not know the field; a swing omits it.
+        if (purpose != 'swing') 'purpose': purpose,
       }),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -333,10 +361,22 @@ Future<ApiResult<UploadTicket>> requestUploadTicket({
         message: 'The upload ticket could not be read.',
       ));
     }
+    final Object? rawParts = body['parts'];
+    final Object? rawPartBytes = body['part_bytes'];
     return ApiResult<UploadTicket>.ok(UploadTicket(
       storagePath: '${body['storage_path'] ?? ''}',
       uploadUrl: '${body['upload_url'] ?? ''}',
       uploadToken: '${body['upload_token'] ?? ''}',
+      parts: <UploadPart>[
+        if (rawParts is List)
+          for (final Object? part in rawParts)
+            if (part is Map)
+              UploadPart(
+                storagePath: '${part['storage_path'] ?? ''}',
+                uploadToken: '${part['upload_token'] ?? ''}',
+              ),
+      ],
+      partBytes: rawPartBytes is num ? rawPartBytes.toInt() : null,
     ));
   } catch (e) {
     return ApiResult<UploadTicket>.err(networkFailure(e));
@@ -760,4 +800,141 @@ Future<ApiResult<AnalysisResponse>> fetchAnalysisDetail(
     ));
   }
   return ApiResult<AnalysisResponse>.ok(analysis);
+}
+
+
+// --------------------------------------------------------------------------
+// Match mode (2026-11-09): `/v1/matches`.
+// --------------------------------------------------------------------------
+
+/// PURE. The `POST /v1/matches` body. No taps: the server finds the court.
+Map<String, dynamic> createMatchBody({
+  required String storagePath,
+  required String courtFormat,
+  String? title,
+  int partCount = 0,
+  SessionKind kind = SessionKind.match,
+}) =>
+    <String, dynamic>{
+      'storage_path': storagePath,
+      'court_format': courtFormat,
+      if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+      if (partCount > 0) 'part_count': partCount,
+      if (kind != SessionKind.match) 'kind': kind.wire,
+    };
+
+ApiResult<MatchRecord> _matchFrom(http.Response response) {
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    return ApiResult<MatchRecord>.err(_failureFromResponse(response));
+  }
+  final Object? body = jsonDecode(response.body);
+  if (body is! Map<String, dynamic>) {
+    return const ApiResult<MatchRecord>.err(ApiFailure(
+      kind: ApiFailureKind.badResponse,
+      message: 'The match could not be read.',
+    ));
+  }
+  return ApiResult<MatchRecord>.ok(MatchRecord.fromJson(body));
+}
+
+/// Queue an uploaded match video for analysis.
+Future<ApiResult<MatchRecord>> createMatch({
+  required String storagePath,
+  required String courtFormat,
+  String? title,
+  int partCount = 0,
+  SessionKind kind = SessionKind.match,
+}) async {
+  final String? token = currentAccessToken();
+  if (token == null) return const ApiResult<MatchRecord>.err(_notSignedIn);
+  try {
+    final http.Response response = await http.post(
+      Uri.parse('$baseUrl/v1/matches'),
+      headers: _authHeaders(token, json: true),
+      body: jsonEncode(createMatchBody(
+          storagePath: storagePath, courtFormat: courtFormat, title: title, partCount: partCount, kind: kind)),
+    );
+    return _matchFrom(response);
+  } catch (e) {
+    return ApiResult<MatchRecord>.err(networkFailure(e));
+  }
+}
+
+/// One match: its progress while it runs, its result when complete.
+Future<ApiResult<MatchRecord>> fetchMatch(String matchId) async {
+  final String? token = currentAccessToken();
+  if (token == null) return const ApiResult<MatchRecord>.err(_notSignedIn);
+  try {
+    final http.Response response = await http.get(
+      Uri.parse('$baseUrl/v1/matches/$matchId'),
+      headers: _authHeaders(token),
+    );
+    return _matchFrom(response);
+  } catch (e) {
+    return ApiResult<MatchRecord>.err(networkFailure(e));
+  }
+}
+
+/// The user's matches, newest first, without their shot maps.
+Future<ApiResult<List<MatchRecord>>> fetchMatches({SessionKind? kind}) async {
+  final String? token = currentAccessToken();
+  if (token == null) return const ApiResult<List<MatchRecord>>.err(_notSignedIn);
+  try {
+    final http.Response response = await http.get(
+      Uri.parse(kind == null ? '$baseUrl/v1/matches' : '$baseUrl/v1/matches?kind=${kind.wire}'),
+      headers: _authHeaders(token),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return ApiResult<List<MatchRecord>>.err(_failureFromResponse(response));
+    }
+    final Object? body = jsonDecode(response.body);
+    final Object? items = body is Map ? body['items'] : null;
+    if (items is! List) {
+      return const ApiResult<List<MatchRecord>>.err(ApiFailure(
+        kind: ApiFailureKind.badResponse,
+        message: 'Your matches could not be read.',
+      ));
+    }
+    return ApiResult<List<MatchRecord>>.ok(<MatchRecord>[
+      for (final Object? item in items)
+        if (item is Map<String, dynamic>) MatchRecord.fromJson(item),
+    ]);
+  } catch (e) {
+    return ApiResult<List<MatchRecord>>.err(networkFailure(e));
+  }
+}
+
+/// The picture of the court lines the analysis used, or a failure.
+Future<ApiResult<Uint8List>> fetchMatchCourtPicture(String matchId) async {
+  final String? token = currentAccessToken();
+  if (token == null) return const ApiResult<Uint8List>.err(_notSignedIn);
+  try {
+    final http.Response response = await http.get(
+      Uri.parse('$baseUrl/v1/matches/$matchId/court.jpg'),
+      headers: _authHeaders(token),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return ApiResult<Uint8List>.err(_failureFromResponse(response));
+    }
+    return ApiResult<Uint8List>.ok(response.bodyBytes);
+  } catch (e) {
+    return ApiResult<Uint8List>.err(networkFailure(e));
+  }
+}
+
+Future<ApiResult<void>> deleteMatch(String matchId) async {
+  final String? token = currentAccessToken();
+  if (token == null) return const ApiResult<void>.err(_notSignedIn);
+  try {
+    final http.Response response = await http.delete(
+      Uri.parse('$baseUrl/v1/matches/$matchId'),
+      headers: _authHeaders(token),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return ApiResult<void>.err(_failureFromResponse(response));
+    }
+    return const ApiResult<void>.ok(null);
+  } catch (e) {
+    return ApiResult<void>.err(networkFailure(e));
+  }
 }

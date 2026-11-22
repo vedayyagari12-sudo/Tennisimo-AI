@@ -248,15 +248,18 @@ def generate_court_summary(
     analysis: CourtAnalysisResponse,
     client: GeminiClient,
     score: ScoreResponse | None = None,
+    *,
+    min_landings: int = MIN_LANDINGS_FOR_GEMINI,
 ) -> CoachingFeedback:
     """Numbers -> payload -> Gemini text -> court guard. Never raises.
 
-    A refused session or fewer than ``MIN_LANDINGS_FOR_GEMINI`` landings never
-    calls the model; any model failure falls back to the template.
+    A refused session or fewer than ``min_landings`` landings never calls the
+    model; any model failure falls back to the template. Rally mode passes a
+    lower ``min_landings`` (a rally video is short).
     """
     core = build_court_feedback_input(analysis, score)
     skipped = NumericGuardReport(passed=True, fell_back_to_template=True, mph_rule="banned")
-    if analysis.status is CourtSessionStatus.REFUSED or core.landings_counted < MIN_LANDINGS_FOR_GEMINI:
+    if analysis.status is CourtSessionStatus.REFUSED or core.landings_counted < min_landings:
         return _template(core, skipped)
 
     payload = court_payload(core)

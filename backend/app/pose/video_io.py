@@ -49,6 +49,7 @@ from av.sidedata.sidedata import Type as SideDataType
 
 from app.models.enums import ErrorCode
 from app.models.responses import VideoMeta
+from app.pose.crop import CropBox, crop_pixels
 
 # --------------------------------------------------------------------------- #
 # Constants -- PIPELINE.md Stage 5. No magic numbers below this block.
@@ -733,6 +734,7 @@ def _sample_rgb_frames(
     targets: list[float],
     long_edge_px: int,
     counts: FrameCounts,
+    crop: CropBox | None = None,
 ) -> Iterator[tuple[float, np.ndarray]]:
     """Yield ``(absolute_pts_s, frame_rgb)`` for the nearest frame to each target.
 
@@ -803,7 +805,7 @@ def _sample_rgb_frames(
                 if converted is not None and converted[0] == chosen[0]:
                     rgb = converted[1].copy()
                 else:
-                    rgb = _to_pose_rgb(chosen[1], probe.rotation_deg, long_edge_px)
+                    rgb = _to_pose_rgb(chosen[1], probe.rotation_deg, long_edge_px, crop)
                     converted = (chosen[0], rgb)
                 yield chosen[0], rgb
                 index += 1
@@ -814,15 +816,20 @@ def _sample_rgb_frames(
         # window the caller believes was covered.
         if index < len(targets) and previous is not None and index == 0:
             counts.sampled += 1
-            yield previous[0], _to_pose_rgb(previous[1], probe.rotation_deg, long_edge_px)
+            yield previous[0], _to_pose_rgb(previous[1], probe.rotation_deg, long_edge_px, crop)
     except av.FFmpegError as exc:
         raise VideoDecodeError(ErrorCode.DECODE_FAILED, str(exc)) from exc
     finally:
         container.close()
 
 
-def _to_pose_rgb(frame: "av.VideoFrame", rotation_deg: int, long_edge_px: int) -> np.ndarray:
-    """One decoded frame -> rotated, downscaled, contiguous uint8 **RGB**.
+def _to_pose_rgb(
+    frame: "av.VideoFrame", rotation_deg: int, long_edge_px: int, crop: CropBox | None = None
+) -> np.ndarray:
+    """One decoded frame -> rotated, [cropped,] downscaled, contiguous uint8 **RGB**.
+
+    A crop is cut from the full-resolution rotated frame BEFORE the resize, so
+    a small player keeps every source pixel (``app/pose/crop.py``).
 
     ``format="rgb24"`` is the colour-space decision, made here at the seam and
     nowhere else. The ball stream asks PyAV for ``bgr24`` in its own pass
@@ -830,7 +837,45 @@ def _to_pose_rgb(frame: "av.VideoFrame", rotation_deg: int, long_edge_px: int) -
     """
     rgb = frame.to_ndarray(format="rgb24")
     rotated = apply_rotation(rgb, rotation_deg)
+    if crop is not None:
+        rotated = crop_pixels(rotated, crop)
     return resize_to_long_edge(rotated, long_edge_px)
+
+
+#: Motion map for the zoom-in retry: frames sampled across the window, at a
+#: small size. Enough to find a swinging player, cheap next to pose.
+MOTION_MAP_LONG_EDGE_PX: Final[int] = 320
+MOTION_MAP_MAX_FRAMES: Final[int] = 48
+
+
+def window_motion_map(path: Path, start_s: float, end_s: float) -> np.ndarray | None:
+    """Mean absolute grey-level difference between consecutive sampled frames
+    of ``[start_s, end_s]``, rotated like the pose frames, or None when fewer
+    than two frames decode. Never raises a decode error: the retry it feeds is
+    optional."""
+    try:
+        probe = probe_clip(path)
+        targets = target_times(
+            start_s, end_s, fps=MOTION_MAP_MAX_FRAMES / max(end_s - start_s, 1e-3),
+            cap=MOTION_MAP_MAX_FRAMES,
+        )
+        total: np.ndarray | None = None
+        previous: np.ndarray | None = None
+        pairs = 0
+        for _pts, rgb in _sample_rgb_frames(
+            path, probe, targets, MOTION_MAP_LONG_EDGE_PX, FrameCounts()
+        ):
+            grey = rgb.astype(np.float32).mean(axis=2)
+            if previous is not None and previous.shape == grey.shape:
+                difference = np.abs(grey - previous)
+                total = difference if total is None else total + difference
+                pairs += 1
+            previous = grey
+    except (VideoDecodeError, av.FFmpegError, OSError):
+        return None
+    if total is None or pairs == 0:
+        return None
+    return total / float(pairs)
 
 
 def open_pose_stream(
@@ -842,6 +887,7 @@ def open_pose_stream(
     analysis_fps: float = ANALYSIS_FPS,
     max_frames: int = MAX_ANALYSIS_FRAMES,
     motion_scan_threshold_s: float | None = None,
+    crop: CropBox | None = None,
 ) -> PoseStream:
     """Stage 5 entry point. Probe, locate the window, return a frame generator.
 
@@ -878,7 +924,7 @@ def open_pose_stream(
     cal_w, cal_h = scaled_size(probe.width_px, probe.height_px, cal_long_edge_px)
 
     return PoseStream(
-        frames=_sample_rgb_frames(path, probe, targets, long_edge_px, counts),
+        frames=_sample_rgb_frames(path, probe, targets, long_edge_px, counts, crop),
         duration_s=probe.duration_s,
         source_fps=probe.source_fps,
         rotation_deg=probe.rotation_deg,

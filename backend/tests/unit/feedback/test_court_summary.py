@@ -218,6 +218,22 @@ def test_too_few_landings_never_calls_the_model() -> None:
     assert feedback.source is FeedbackSource.TEMPLATE
 
 
+def test_a_lower_minimum_lets_a_short_rally_be_summarised() -> None:
+    few = {
+        **SECTION_73["summary"],  # type: ignore[dict-item]
+        "count": 8,
+        "verdict_counts": {"in": 6, "out": 1, "too_close_to_call": 1},
+        "depth_expected_counts": {"short": 2.0, "mid": 3.0, "deep": 2.0, "beyond": 1.0},
+        "width_counts": {"left": 3, "centre": 3, "right": 2},
+    }
+    client = FakeGeminiClient(response=draft("An estimated 6 of your 8 landings were in."))
+    assert generate_court_summary(analysis(summary=few), client).source is FeedbackSource.TEMPLATE
+    assert client.call_count == 0
+    feedback = generate_court_summary(analysis(summary=few), client, min_landings=6)
+    assert client.call_count == 1
+    assert feedback.source is FeedbackSource.GEMINI
+
+
 def test_refused_never_calls_the_model() -> None:
     empty = {"count": 0, "verdict_counts": {}, "depth_expected_counts": {}, "width_counts": {},
              "median_sigma_along_m": None}

@@ -280,13 +280,18 @@ void main() {
     });
   });
 
-  test('no screen imports the court widgets yet (blocked on Phase 1)', () {
+  // Match mode (2026-11-09) wires the court widgets into one screen only. The
+  // score panel stays unused: scoring needs a match setup the app does not
+  // collect yet.
+  test('only the matches screen imports the court widgets', () {
     for (final FileSystemEntity f in Directory('lib/screens').listSync(recursive: true)) {
       if (f is! File || !f.path.endsWith('.dart')) continue;
       final String text = f.readAsStringSync();
-      for (final String name in <String>['court_map.dart', 'line_call_card.dart', 'rally_timeline.dart', 'score_panel.dart']) {
-        expect(text.contains(name), isFalse, reason: '${f.path} imports $name');
+      final bool matches = f.path.replaceAll(r'\', '/').endsWith('screens/matches_screen.dart');
+      for (final String name in <String>['court_map.dart', 'line_call_card.dart', 'rally_timeline.dart']) {
+        expect(text.contains(name), matches, reason: '${f.path} and $name');
       }
+      expect(text.contains('score_panel.dart'), isFalse, reason: '${f.path} imports score_panel.dart');
     }
   });
 }

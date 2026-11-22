@@ -28,7 +28,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from app.api import routes_account, routes_analyses, routes_uploads
+from app.api import routes_account, routes_analyses, routes_matches, routes_uploads
 from app.api.auth import SupabaseJwtVerifier
 from app.api.errors import RequestIdMiddleware, register_exception_handlers
 from app.config import (
@@ -40,6 +40,7 @@ from app.config import (
     parse_cors_origins,
 )
 from app.services.auth_admin import SupabaseAuthAdminClient
+from app.services.match_jobs import MatchJobs
 from app.services.orchestrator import JobOrchestrator
 from app.services.repository import SupabaseRepository
 from app.services.storage import SupabaseStorageClient
@@ -97,6 +98,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings=settings,
         loop=asyncio.get_running_loop(),
     )
+    app.state.match_jobs = MatchJobs(
+        store=app.state.storage_client,
+        settings=settings,
+        loop=asyncio.get_running_loop(),
+    )
     if settings.warm_pipeline_on_startup:
         threading.Thread(target=_warm_pipeline, name="pipeline-warmup", daemon=True).start()
     logger.info("tennisform api started")
@@ -104,6 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         app.state.orchestrator.shutdown()
+        app.state.match_jobs.shutdown()
         await http_client.aclose()
         logger.info("tennisform api stopped")
 
@@ -188,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_uploads.router)
     app.include_router(routes_analyses.router)
     app.include_router(routes_account.router)
+    app.include_router(routes_matches.router)
 
     return app
 

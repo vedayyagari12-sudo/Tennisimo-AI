@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Final, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import MAX_UPLOAD_BYTES
 from app.models.enums import (
@@ -68,6 +68,20 @@ ALLOWED_CONTENT_TYPES: Final[dict[str, str]] = {
     "video/webm": "webm",
 }
 
+#: Upload ticket duration caps by purpose.
+SWING_MAX_SECONDS: Final[float] = 60.0
+MATCH_MAX_SECONDS: Final[float] = 300.0
+#: Match videos are larger than Supabase's free-tier 50 MB per-file limit, so
+#: the client uploads one in pieces of at most this size, each its own object
+#: (``{storage_path}.part000`` ...). The server joins them back into the exact
+#: original file, analyses it, and deletes every piece (owner, 2026-11-09).
+MATCH_PART_BYTES: Final[int] = 40 * 1024 * 1024
+#: Largest match video accepted. Five minutes at 720p is about 300 MB; 1080p
+#: can pass this, which is why the app asks for 720p. The whole file is also
+#: held on Cloud Run's in-memory disk while it is analysed.
+MATCH_MAX_UPLOAD_BYTES: Final[int] = 450 * 1024 * 1024
+MATCH_MAX_PARTS: Final[int] = -(-MATCH_MAX_UPLOAD_BYTES // MATCH_PART_BYTES)
+
 #: Stage 3 calibration gates. Named so no other module holds the literals.
 MIN_TAP_SEPARATION_NORMALIZED: Final[float] = 0.05
 REFERENCE_DISTANCE_TOLERANCE_M: Final[float] = 0.01
@@ -93,7 +107,25 @@ class UploadTicketRequest(BaseModel):
             "413 file_too_large."
         ),
     )
-    duration_s: float = Field(gt=0.0, le=60.0, description="Client-measured clip duration, seconds.")
+    duration_s: float = Field(
+        gt=0.0,
+        le=MATCH_MAX_SECONDS,
+        description=(
+            "Client-measured clip duration, seconds. At most 60 for a swing, "
+            "300 for a match (checked against ``purpose``)."
+        ),
+    )
+    purpose: Literal["swing", "match"] = Field(
+        default="swing",
+        description="What the video is for. Older clients omit it: a swing.",
+    )
+
+    @model_validator(mode="after")
+    def _duration_fits_purpose(self) -> "UploadTicketRequest":
+        limit = SWING_MAX_SECONDS if self.purpose == "swing" else MATCH_MAX_SECONDS
+        if self.duration_s > limit:
+            raise ValueError(f"duration_s must be at most {limit:g} for a {self.purpose}")
+        return self
 
 
 class UploadTicketResponse(BaseModel):
@@ -108,6 +140,21 @@ class UploadTicketResponse(BaseModel):
     upload_url: str = Field(description="Supabase Storage signed upload URL.")
     upload_token: str = Field(description="Token to pass to the Supabase Storage client.")
     expires_at: datetime = Field(description="UTC expiry of the signed URL.")
+    parts: list["UploadPart"] = Field(
+        default_factory=list,
+        description=(
+            "Match tickets only: where each piece of the video goes, in order. "
+            "Piece i holds bytes [i * part_bytes, (i + 1) * part_bytes). Empty "
+            "for a swing, which is one object at storage_path."
+        ),
+    )
+    part_bytes: int | None = Field(default=None, description="Match tickets only: bytes per piece.")
+
+
+class UploadPart(BaseModel):
+    storage_path: str
+    upload_url: str
+    upload_token: str
 
 
 class NormalizedPoint(BaseModel):
