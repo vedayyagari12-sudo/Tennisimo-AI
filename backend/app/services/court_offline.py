@@ -50,6 +50,7 @@ from app.analysis.line_calls import LineCall, uncertainty_ellipse
 from app.analysis.placement import ShotLanding, ShotMapSummary
 from app.analysis.rally import Rally
 from app.ball.camera_motion import CameraMotionSampler
+from app.services.player_tracking import PlayerTrackingReport
 from app.ball.court_lines import fit_court_from_frame
 from app.ball.flight_detector import (
     FLIGHT_CANDIDATE_DTYPE,
@@ -81,6 +82,8 @@ from app.models.court import (
 #: Frames at which an automatic court fit is tried, until one is accepted.
 AUTO_FIT_FRAMES: Final[tuple[int, ...]] = (0, 15, 45)
 AUTO_FIT_CALLS_MIN_SUPPORT: Final[float] = 0.72
+#: The ball pass is this share of a match's progress; player tracking is the rest.
+BALL_PASS_SHARE: Final[float] = 0.8
 #: How often the decode loop reports progress, in frames.
 PROGRESS_EVERY_FRAMES: Final[int] = 30
 CalibrationSource = Literal["taps", "auto"]
@@ -125,6 +128,8 @@ class CourtVideoInputs:
     #: The TRACK_SPACE frame the calibration was made on (BGR), for the
     #: court-lines picture; None without a calibration.
     calibration_frame: npt.NDArray[np.uint8] | None = None
+    #: What player tracking did; None when it was not run.
+    player_tracking: PlayerTrackingReport | None = None
 
 
 def taps_in_track_space(
@@ -222,24 +227,47 @@ def analyze_court_video(
     *,
     court_format: CourtFormat | None = None,
     progress: Callable[[float], None] | None = None,
+    track_players: bool = False,
 ) -> tuple[CourtVideoInputs, CourtSessionResult]:
     """Decode, then run the pure court engine. Pose hits are optional.
-    ``court_format`` overrides the request's (needed when there are no taps)."""
-    inputs = extract_court_inputs(video, request, progress)
+    ``court_format`` overrides the request's (needed when there are no taps).
+
+    ``track_players``: after the ball pass, find the player at each ball hit
+    (``services/player_tracking``) and run the engine again with that
+    evidence, so landings carry the hitter's end, where they stood and the
+    stroke. The ball pass is the first 80 % of ``progress``. A failure in
+    tracking leaves the ball-only result."""
+    ball_progress = (lambda f: progress(BALL_PASS_SHARE * f)) if (progress and track_players) else progress
+    inputs = extract_court_inputs(video, request, ball_progress)
     calibration = (
         inputs.calibration_verdict.calibration if inputs.calibration_verdict is not None else None
     )
     if court_format is None:
         court_format = request.court_format if request is not None else CourtFormat.SINGLES
-    result = analyze_court_session(
-        inputs.candidates,
-        inputs.frame_times_s,
-        calibration,
-        inputs.stability,
-        pose_hits,
-        court_format=court_format,
-        frame_size=inputs.track_size or (1, 1),
-    )
+    def run(hits: Sequence[PoseHit]) -> CourtSessionResult:
+        return analyze_court_session(
+            inputs.candidates,
+            inputs.frame_times_s,
+            calibration,
+            inputs.stability,
+            hits,
+            court_format=court_format,
+            frame_size=inputs.track_size or (1, 1),
+        )
+
+    result = run(pose_hits)
+    if track_players and calibration is not None and result.events:
+        from app.services.player_tracking import track_players as find_players
+
+        found, report = find_players(
+            video,
+            calibration,
+            result.events,
+            progress=(lambda f: progress(BALL_PASS_SHARE + (1.0 - BALL_PASS_SHARE) * f)) if progress else None,
+        )
+        inputs = dataclasses.replace(inputs, player_tracking=report)
+        if found:
+            result = run((*pose_hits, *found))
     return inputs, result
 
 

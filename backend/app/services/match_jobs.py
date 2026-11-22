@@ -163,7 +163,8 @@ def run_match_analysis(
     )
 
     inputs, result = analyze_court_video(
-        video, request.calibration, court_format=request.court_format, progress=progress
+        video, request.calibration, court_format=request.court_format, progress=progress,
+        track_players=True,
     )
     response = project_court_result(result, frame_size=inputs.track_size or (1, 1))
     times = inputs.frame_times_s

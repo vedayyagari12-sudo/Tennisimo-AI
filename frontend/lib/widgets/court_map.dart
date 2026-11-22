@@ -1,9 +1,13 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import '../models/court.dart';
 import '../theme/app_theme.dart';
+import 'app_card.dart';
+import 'line_call_card.dart';
+import 'rally_timeline.dart' show clockText;
 
 /// Which landings the map shows (SESSION_MODE_PHASE2.md 8.1).
 enum CourtMapSide { all, yours, opponent }
@@ -195,16 +199,47 @@ class CourtMap extends StatefulWidget {
   State<CourtMap> createState() => _CourtMapState();
 }
 
-class _CourtMapState extends State<CourtMap> {
+class _CourtMapState extends State<CourtMap> with SingleTickerProviderStateMixin {
   late CourtMapFilter _filter = widget.filter;
   String? _selected;
   bool _paths = true;
   bool _zones = false;
+  bool _trace = false;
+
+  /// The entrance: ball flights draw themselves in, once.
+  late final AnimationController _reveal =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _reveal.value = 1;
+    } else {
+      _reveal.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _reveal.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(CourtMap old) {
     super.didUpdateWidget(old);
     if (old.filter != widget.filter) _filter = widget.filter;
+  }
+
+  ShotLanding? _selectedLanding(List<ShotLanding> shown) {
+    for (final ShotLanding l in shown) {
+      if (l.bounceId == _selected) return l;
+    }
+    return null;
   }
 
   void _tap(Offset p, Size size, List<ShotLanding> shown) {
@@ -284,6 +319,7 @@ class _CourtMapState extends State<CourtMap> {
             children: <Widget>[
               chip('Paths', _paths, () => setState(() => _paths = !_paths)),
               chip('Zones', _zones, () => setState(() => _zones = !_zones)),
+              chip('Rally trace', _trace, () => setState(() => _trace = !_trace)),
             ],
           ),
         ],
@@ -298,25 +334,39 @@ class _CourtMapState extends State<CourtMap> {
                   final Size size = Size(box.maxWidth, box.maxHeight);
                   return Semantics(
                     label: 'Court map. ${courtMapSummary(shown)}',
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTapUp: (TapUpDetails d) => _tap(d.localPosition, size, shown),
-                      child: CustomPaint(
-                        key: const Key('court-map-canvas'),
-                        size: size,
-                        painter: CourtMapPainter(
-                          landings: shown,
-                          selectedId: _selected,
-                          courtFill: theme.colorScheme.surfaceContainerHigh,
-                          lineColor: theme.colorScheme.outline,
-                          inColor: palette.primaryFill,
-                          outColor: palette.errorFill,
-                          neutralColor: palette.onSurfaceVariant,
-                          selectColor: theme.colorScheme.onSurface,
-                          showPaths: _paths,
-                          zones: _zones ? zonePercents(shown) : null,
-                          zoneColor: palette.primaryFill,
-                          zoneTextStyle: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapUp: (TapUpDetails d) => _tap(d.localPosition, size, shown),
+                        child: AnimatedBuilder(
+                          animation: _reveal,
+                          builder: (BuildContext context, Widget? _) => CustomPaint(
+                            key: const Key('court-map-canvas'),
+                            size: size,
+                            painter: CourtMapPainter(
+                              landings: shown,
+                              selectedId: _selected,
+                              // A hard court from above: the court a shade of
+                              // the accent over the surface, the run-off plain.
+                              courtFill: Color.alphaBlend(
+                                  palette.primaryFill.withValues(alpha: 0.20), theme.colorScheme.surfaceContainerHigh),
+                              runoffFill: theme.colorScheme.surfaceContainerLow,
+                              lineColor: theme.colorScheme.onSurface.withValues(alpha: 0.78),
+                              inColor: palette.primaryFill,
+                              outColor: palette.errorFill,
+                              neutralColor: palette.onSurfaceVariant,
+                              selectColor: theme.colorScheme.onSurface,
+                              showPaths: _paths,
+                              showTrace: _trace,
+                              reveal: _reveal.value,
+                              labelStyle: theme.textTheme.labelSmall?.copyWith(
+                                  color: palette.onSurfaceVariant.withValues(alpha: 0.7), letterSpacing: 1.6),
+                              zones: _zones ? zonePercents(shown) : null,
+                              zoneColor: palette.primaryFill,
+                              zoneTextStyle: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -326,6 +376,12 @@ class _CourtMapState extends State<CourtMap> {
             ),
           ),
         ),
+        const SizedBox(height: AppSpacing.md),
+        _MapLegend(landings: shown),
+        if (_selectedLanding(shown) != null) ...<Widget>[
+          const SizedBox(height: AppSpacing.md),
+          _ShotDetail(landing: _selectedLanding(shown)!),
+        ],
         const SizedBox(height: AppSpacing.md),
         Text(courtMapSummary(shown), style: theme.textTheme.bodyMedium),
         const SizedBox(height: AppSpacing.xs),
@@ -340,6 +396,161 @@ class _CourtMapState extends State<CourtMap> {
       ],
     );
   }
+}
+
+/// One letter for a shot type, for the mark on the map: forehand F, any
+/// backhand B, serve S, volley V, overhead O; otherwise the first letter.
+/// Null when the shot type is not known (the mark then has no letter).
+String? shotTypeLetter(ShotLanding landing) {
+  if (landing.isServe) return 'S';
+  final String? type = landing.shotType;
+  if (type == null || type.isEmpty) return null;
+  if (type.contains('backhand')) return 'B';
+  if (type.contains('forehand')) return 'F';
+  if (type.contains('volley')) return 'V';
+  if (type.contains('overhead') || type.contains('smash')) return 'O';
+  return type[0].toUpperCase();
+}
+
+/// "Forehand · landed in", for the detail card under the map.
+String shotHeadline(ShotLanding l) {
+  final String what = l.isServe
+      ? 'Serve'
+      : (l.shotType == null ? 'Shot' : shotTypeLabel(l.shotType!));
+  final String how = switch (l.verdict) {
+    LineVerdict.inside => 'landed in',
+    LineVerdict.out => 'landed out',
+    LineVerdict.tooCloseToCall => 'too close to call',
+    _ => 'not called',
+  };
+  return '$what · $how';
+}
+
+/// The facts about one tapped shot, from numbers already measured.
+class _ShotDetail extends StatelessWidget {
+  const _ShotDetail({required this.landing});
+
+  final ShotLanding landing;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final AppPalette palette = context.palette;
+    final ShotLanding l = landing;
+    final String? sentence = lineCallSentence(l.lineCall);
+    final List<String> facts = <String>[
+      'At ${clockText(l.timeS)}',
+      if (l.shotIndexInRally != null) 'Shot ${l.shotIndexInRally} of its rally',
+      '${l.depthZone.label} depth',
+      if (l.widthZone != WidthZone.unrecognized) '${l.widthZone.wire[0].toUpperCase()}${l.widthZone.wire.substring(1)} third',
+      if (l.hitterEnd == CourtEnd.near) 'Hit from your end',
+      if (l.hitterEnd == CourtEnd.far) 'Hit from the far end',
+      'Confidence ${(l.confidence * 100).round()}%',
+    ];
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(shotHeadline(l), style: theme.textTheme.titleSmall),
+          if (sentence != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.xs),
+            Text(sentence, style: theme.textTheme.bodyMedium),
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xs,
+            children: <Widget>[
+              for (final String fact in facts)
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    child: Text(fact, style: theme.textTheme.labelMedium?.copyWith(color: palette.onSurfaceVariant)),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What each mark means. Shape carries the verdict; a letter carries the
+/// shot type when it is known.
+class _MapLegend extends StatelessWidget {
+  const _MapLegend({required this.landings});
+
+  final List<ShotLanding> landings;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final AppPalette palette = context.palette;
+    final TextStyle? style = theme.textTheme.bodySmall?.copyWith(color: palette.onSurfaceVariant);
+    final Map<String, String> letters = <String, String>{
+      for (final ShotLanding l in landings)
+        if (shotTypeLetter(l) != null)
+          shotTypeLetter(l)!: l.isServe ? 'Serve' : shotTypeLabel(l.shotType!),
+    };
+    Widget item(CustomPainter mark, String text) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            CustomPaint(size: const Size(14, 14), painter: mark),
+            const SizedBox(width: 6),
+            Flexible(child: Text(text, style: style)),
+          ],
+        );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Wrap(
+          spacing: AppSpacing.md,
+          runSpacing: AppSpacing.xs,
+          children: <Widget>[
+            item(_LegendMark(_MarkShape.disc, palette.primaryFill), 'Landed in'),
+            item(_LegendMark(_MarkShape.cross, palette.errorFill), 'Landed out'),
+            item(_LegendMark(_MarkShape.ring, palette.onSurfaceVariant), 'Too close to call'),
+            item(_LegendMark(_MarkShape.square, palette.onSurfaceVariant), 'Not called'),
+          ],
+        ),
+        if (letters.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            <String>[for (final MapEntry<String, String> e in letters.entries) '${e.key} = ${e.value}'].join('   '),
+            style: style,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+enum _MarkShape { disc, cross, ring, square }
+
+class _LegendMark extends CustomPainter {
+  const _LegendMark(this.shape, this.colour);
+
+  final _MarkShape shape;
+  final Color colour;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset c = size.center(Offset.zero);
+    CourtMapPainter.paintMark(canvas, c, 5, colour, switch (shape) {
+      _MarkShape.disc => LineVerdict.inside,
+      _MarkShape.cross => LineVerdict.out,
+      _MarkShape.ring => LineVerdict.tooCloseToCall,
+      _MarkShape.square => null,
+    });
+  }
+
+  @override
+  bool shouldRepaint(_LegendMark old) => old.colour != colour || old.shape != shape;
 }
 
 /// Paints the court and the landings. Public for the hit test, like
@@ -358,6 +569,10 @@ class CourtMapPainter extends CustomPainter {
     this.zones,
     this.zoneColor,
     this.zoneTextStyle,
+    this.runoffFill,
+    this.labelStyle,
+    this.showTrace = false,
+    this.reveal = 1.0,
   });
 
   final List<ShotLanding> landings;
@@ -376,6 +591,19 @@ class CourtMapPainter extends CustomPainter {
   final Map<ZoneCell, int>? zones;
   final Color? zoneColor;
   final TextStyle? zoneTextStyle;
+
+  /// The run-off outside the court lines; defaults to [courtFill].
+  final Color? runoffFill;
+
+  /// For "FAR END", "NET" and "NEAR END"; null draws no labels.
+  final TextStyle? labelStyle;
+
+  /// Join each rally's landings in order with a dashed line.
+  final bool showTrace;
+
+  /// 0 to 1: how much of each ball flight is drawn, and how visible the
+  /// marks are. 1 once the entrance has played.
+  final double reveal;
 
   /// Court metres shown: the doubles court plus run-off on every side.
   static const double halfWidthM = 6.5;
@@ -414,54 +642,64 @@ class CourtMapPainter extends CustomPainter {
     return best;
   }
 
+  /// One mark, centred on [c]: the verdict as a shape, never by colour alone.
+  /// In is a disc, out a cross, too close a ring, no call a square.
+  static void paintMark(Canvas canvas, Offset c, double r, Color colour, LineVerdict? verdict) {
+    switch (verdict) {
+      case LineVerdict.inside:
+        canvas.drawCircle(c, r + 1.5, Paint()..color = const Color(0xE6FFFFFF));
+        canvas.drawCircle(c, r, Paint()..color = colour);
+      case LineVerdict.out:
+        final Paint cross = Paint()
+          ..color = colour
+          ..strokeWidth = 2.4
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(c + Offset(-r, -r), c + Offset(r, r), cross);
+        canvas.drawLine(c + Offset(-r, r), c + Offset(r, -r), cross);
+      case LineVerdict.tooCloseToCall:
+      case LineVerdict.unrecognized:
+        canvas.drawCircle(
+            c,
+            r,
+            Paint()
+              ..color = colour
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.8);
+      case null:
+        canvas.drawRect(
+            Rect.fromCenter(center: c, width: r * 1.6, height: r * 1.6),
+            Paint()
+              ..color = colour
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.4);
+    }
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final double scale = _pxPerM(size);
     Offset at(double x, double y) => toCanvas(CourtPoint(x, y), size);
 
-    canvas.drawRect(Offset.zero & size, Paint()..color = courtFill);
-    final Paint line = Paint()
-      ..color = lineColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = math.max(1, 0.05 * scale);
-    canvas.drawRect(Rect.fromPoints(at(-_doublesX, _baselineY), at(_doublesX, -_baselineY)), line);
-    for (final double x in <double>[-_singlesX, _singlesX]) {
-      canvas.drawLine(at(x, _baselineY), at(x, -_baselineY), line);
-    }
-    for (final double y in <double>[_serviceY, -_serviceY]) {
-      canvas.drawLine(at(-_singlesX, y), at(_singlesX, y), line);
-    }
-    canvas.drawLine(at(0, _serviceY), at(0, -_serviceY), line);
-    canvas.drawLine(at(-_doublesX - 0.9, 0), at(_doublesX + 0.9, 0), line..strokeWidth = line.strokeWidth * 2.5);
+    _paintCourt(canvas, size, scale, at);
 
     final Map<ZoneCell, int>? grid = zones;
     if (grid != null) _paintZones(canvas, size, grid);
 
+    if (showTrace) _paintTrace(canvas, size);
     if (showPaths) {
       for (final ShotLanding l in landings) {
-        final CourtPoint? from = l.hitXy;
-        if (from == null) continue;
-        final Color colour = _colourOf(l);
-        final Offset a = toCanvas(from, size);
-        final Offset b = toCanvas(l.courtXy, size);
-        canvas.drawLine(
-            a,
-            b,
-            Paint()
-              ..color = colour.withValues(alpha: 0.5)
-              ..strokeWidth = 1.5
-              ..strokeCap = StrokeCap.round);
-        // Where the hitter stood: a small hollow mark, never a landing shape.
-        canvas.drawCircle(
-            a,
-            2.5,
-            Paint()
-              ..color = neutralColor
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 1);
+        if (l.bounceId != selectedId) {
+          _paintFlight(canvas, size, l, selected: false);
+        }
+      }
+      for (final ShotLanding l in landings) {
+        if (l.bounceId == selectedId) {
+          _paintFlight(canvas, size, l, selected: true);
+        }
       }
     }
 
+    final double fade = Curves.easeOut.transform(reveal.clamp(0.0, 1.0));
     for (final ShotLanding l in landings) {
       final Color colour = _colourOf(l);
       final Offset c = toCanvas(l.courtXy, size);
@@ -474,51 +712,219 @@ class CourtMapPainter extends CustomPainter {
         width: math.max(2 * ellipseZ * l.sigma.major * scale, 2),
         height: math.max(2 * ellipseZ * l.sigma.minor * scale, 2),
       );
-      canvas.drawOval(oval, Paint()..color = colour.withValues(alpha: 0.14));
+      canvas.drawOval(oval, Paint()..color = colour.withValues(alpha: 0.14 * fade));
       canvas.drawOval(
           oval,
           Paint()
-            ..color = colour.withValues(alpha: 0.45)
+            ..color = colour.withValues(alpha: 0.45 * fade)
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1);
       canvas.restore();
 
-      const double r = 4;
-      switch (l.verdict) {
-        case LineVerdict.inside:
-          canvas.drawCircle(c, r, Paint()..color = colour);
-        case LineVerdict.out:
-          final Paint cross = Paint()
-            ..color = colour
-            ..strokeWidth = 2
-            ..strokeCap = StrokeCap.round;
-          canvas.drawLine(c + const Offset(-r, -r), c + const Offset(r, r), cross);
-          canvas.drawLine(c + const Offset(-r, r), c + const Offset(r, -r), cross);
-        case LineVerdict.tooCloseToCall:
-        case LineVerdict.unrecognized:
-          canvas.drawCircle(
-              c,
-              r,
-              Paint()
-                ..color = colour
-                ..style = PaintingStyle.stroke
-                ..strokeWidth = 1.5);
-        case null:
-          // Not called (too few court taps): a small square, never a dot.
-          canvas.drawRect(Rect.fromCenter(center: c, width: 5, height: 5),
-              Paint()
-                ..color = colour
-                ..style = PaintingStyle.stroke
-                ..strokeWidth = 1.2);
-      }
+      final String? letter = shotTypeLetter(l);
+      final double r = letter == null ? 4.5 : 7.5;
+      final double grow = 0.4 + 0.6 * fade;
       if (l.bounceId == selectedId) {
         canvas.drawCircle(
             c,
-            r + 4,
+            r + 6,
             Paint()
               ..color = selectColor
               ..style = PaintingStyle.stroke
               ..strokeWidth = 1.5);
+      }
+      paintMark(canvas, c, r * grow, colour.withValues(alpha: fade), l.verdict);
+      if (letter != null && fade > 0.6) {
+        _paintLetter(canvas, c, r, letter, colour, l.verdict);
+      }
+    }
+  }
+
+  void _paintLetter(Canvas canvas, Offset c, double r, String letter, Color colour, LineVerdict? verdict) {
+    final bool onDisc = verdict == LineVerdict.inside;
+    final Color ink = onDisc
+        ? (colour.computeLuminance() > 0.5 ? const Color(0xDE000000) : const Color(0xFFFFFFFF))
+        : selectColor;
+    final TextPainter text = TextPainter(
+      text: TextSpan(
+        text: letter,
+        style: TextStyle(color: ink, fontSize: onDisc ? 9.5 : 9, fontWeight: FontWeight.w800, height: 1),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    // A cross has no room inside: its letter sits beside it.
+    final Offset centre = verdict == LineVerdict.out ? c + Offset(r + 3, -r - 1) : c;
+    text.paint(canvas, centre - Offset(text.width / 2, text.height / 2));
+    text.dispose();
+  }
+
+  /// The court, drawn as a hard court from above: run-off, court, tinted
+  /// doubles alleys and service boxes, crisp white lines, and a net with posts.
+  void _paintCourt(Canvas canvas, Size size, double scale, Offset Function(double, double) at) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = runoffFill ?? courtFill);
+    final Rect doubles = Rect.fromPoints(at(-_doublesX, _baselineY), at(_doublesX, -_baselineY));
+    canvas.drawRect(doubles, Paint()..color = courtFill);
+    // Alleys: the strips between the singles and doubles sidelines.
+    final Paint alley = Paint()..color = lineColor.withValues(alpha: 0.07);
+    canvas.drawRect(Rect.fromPoints(at(-_doublesX, _baselineY), at(-_singlesX, -_baselineY)), alley);
+    canvas.drawRect(Rect.fromPoints(at(_singlesX, _baselineY), at(_doublesX, -_baselineY)), alley);
+    // Service boxes, one shade lighter.
+    final Paint boxes = Paint()..color = lineColor.withValues(alpha: 0.05);
+    canvas.drawRect(Rect.fromPoints(at(-_singlesX, _serviceY), at(_singlesX, -_serviceY)), boxes);
+
+    final double w = math.max(1.2, 0.07 * scale);
+    final Paint line = Paint()
+      ..color = lineColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawRect(doubles, line);
+    for (final double x in <double>[-_singlesX, _singlesX]) {
+      canvas.drawLine(at(x, _baselineY), at(x, -_baselineY), line);
+    }
+    for (final double y in <double>[_serviceY, -_serviceY]) {
+      canvas.drawLine(at(-_singlesX, y), at(_singlesX, y), line);
+    }
+    canvas.drawLine(at(0, _serviceY), at(0, -_serviceY), line);
+    for (final double y in <double>[_baselineY, -_baselineY]) {
+      canvas.drawLine(at(0, y), at(0, y > 0 ? y - 0.3 : y + 0.3), line);
+    }
+
+    // The net: a mesh band, a taut top cord, and a post each side.
+    final Offset left = at(-_doublesX - 0.9, 0);
+    final Offset right = at(_doublesX + 0.9, 0);
+    canvas.drawLine(left, right, Paint()
+      ..color = lineColor.withValues(alpha: 0.25)
+      ..strokeWidth = 0.28 * scale);
+    for (double x = left.dx + 3; x < right.dx; x += 4) {
+      canvas.drawLine(Offset(x, left.dy - 0.13 * scale), Offset(x, left.dy + 0.13 * scale),
+          Paint()
+            ..color = lineColor.withValues(alpha: 0.35)
+            ..strokeWidth = 0.6);
+    }
+    canvas.drawLine(left, right, Paint()
+      ..color = lineColor
+      ..strokeWidth = w * 1.6);
+    for (final Offset post in <Offset>[left, right]) {
+      canvas.drawCircle(post, math.max(2.2, 0.16 * scale), Paint()..color = lineColor);
+    }
+
+    final TextStyle? style = labelStyle;
+    if (style != null) {
+      void label(String text, Offset centre) {
+        final TextPainter p = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: TextDirection.ltr,
+          maxLines: 1,
+        )..layout(maxWidth: size.width);
+        p.paint(canvas, centre - Offset(p.width / 2, p.height / 2));
+        p.dispose();
+      }
+
+      label('FAR END', Offset(size.width / 2, (at(0, _baselineY).dy) / 2));
+      label('NEAR END', Offset(size.width / 2, (at(0, -_baselineY).dy + size.height) / 2));
+    }
+  }
+
+  /// A ball flight from where the hitter stood to where it landed, drawn as
+  /// a curved arc that fades in towards the landing, with an arrowhead.
+  /// Only when the hitter's position was measured: no guess is drawn.
+  void _paintFlight(Canvas canvas, Size size, ShotLanding l, {required bool selected}) {
+    final CourtPoint? from = l.hitXy;
+    if (from == null) return;
+    final Color colour = _colourOf(l);
+    final Offset a = toCanvas(from, size);
+    final Offset b = toCanvas(l.courtXy, size);
+    final Offset d = b - a;
+    final double length = d.distance;
+    if (length < 4) return;
+    final Offset normal = Offset(-d.dy, d.dx) / length;
+    final Offset control = (a + b) / 2 + normal * length * 0.14;
+    final Path arc = Path()
+      ..moveTo(a.dx, a.dy)
+      ..quadraticBezierTo(control.dx, control.dy, b.dx, b.dy);
+    final ui.PathMetric metric = arc.computeMetrics().first;
+    final Path drawn = metric.extractPath(0, metric.length * Curves.easeOut.transform(reveal.clamp(0.0, 1.0)));
+    final double alpha = selected ? 0.95 : 0.55;
+    canvas.drawPath(
+      drawn,
+      Paint()
+        ..shader = ui.Gradient.linear(
+            a, b, <Color>[colour.withValues(alpha: 0.05), colour.withValues(alpha: alpha)])
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = selected ? 2.6 : 1.6
+        ..strokeCap = StrokeCap.round,
+    );
+    // Where the hitter stood: a small ring, never a landing shape.
+    canvas.drawCircle(
+        a,
+        3,
+        Paint()
+          ..color = neutralColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2);
+    if (reveal >= 0.95) {
+      // An arrowhead just before the landing mark, along the arc's end.
+      final Offset tangent = (b - control) / (b - control).distance;
+      final Offset tip = b - tangent * 9;
+      final Offset side = Offset(-tangent.dy, tangent.dx) * 3.2;
+      canvas.drawPath(
+        Path()
+          ..moveTo(tip.dx, tip.dy)
+          ..lineTo((tip - tangent * 5 + side).dx, (tip - tangent * 5 + side).dy)
+          ..lineTo((tip - tangent * 5 - side).dx, (tip - tangent * 5 - side).dy)
+          ..close(),
+        Paint()..color = colour.withValues(alpha: selected ? 0.95 : 0.7),
+      );
+    }
+  }
+
+  /// Each rally's landings joined in time order by a dashed line. The tapped
+  /// shot's rally is drawn solid and brighter, numbered by shot.
+  void _paintTrace(Canvas canvas, Size size) {
+    final Map<String, List<ShotLanding>> rallies = <String, List<ShotLanding>>{};
+    for (final ShotLanding l in landings) {
+      final String? id = l.rallyId;
+      if (id != null) (rallies[id] ??= <ShotLanding>[]).add(l);
+    }
+    String? selectedRally;
+    for (final ShotLanding l in landings) {
+      if (l.bounceId == selectedId) selectedRally = l.rallyId;
+    }
+    for (final MapEntry<String, List<ShotLanding>> e in rallies.entries) {
+      if (e.value.length < 2) continue;
+      final List<ShotLanding> ordered = <ShotLanding>[...e.value]
+        ..sort((ShotLanding x, ShotLanding y) => x.timeS.compareTo(y.timeS));
+      final bool current = e.key == selectedRally;
+      final Path path = Path();
+      for (int i = 0; i < ordered.length; i++) {
+        final Offset p = toCanvas(ordered[i].courtXy, size);
+        i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+      }
+      final Paint paint = Paint()
+        ..color = selectColor.withValues(alpha: current ? 0.8 : 0.28)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = current ? 1.8 : 1.1;
+      for (final ui.PathMetric m in path.computeMetrics()) {
+        double at = 0;
+        while (at < m.length) {
+          canvas.drawPath(m.extractPath(at, math.min(at + 5, m.length)), paint);
+          at += 9;
+        }
+      }
+      if (current) {
+        for (int i = 0; i < ordered.length; i++) {
+          final Offset p = toCanvas(ordered[i].courtXy, size) + const Offset(9, 9);
+          final TextPainter text = TextPainter(
+            text: TextSpan(
+              text: '${i + 1}',
+              style: TextStyle(color: selectColor, fontSize: 10, fontWeight: FontWeight.w700),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          text.paint(canvas, p - Offset(text.width / 2, text.height / 2));
+          text.dispose();
+        }
       }
     }
   }
@@ -570,10 +976,14 @@ class CourtMapPainter extends CustomPainter {
   @override
   bool shouldRepaint(CourtMapPainter old) =>
       old.showPaths != showPaths ||
+      old.showTrace != showTrace ||
+      old.reveal != reveal ||
       old.zones != zones ||
       old.landings != landings ||
       old.selectedId != selectedId ||
       old.courtFill != courtFill ||
+      old.runoffFill != runoffFill ||
+      old.lineColor != lineColor ||
       old.inColor != inColor ||
       old.outColor != outColor;
 }

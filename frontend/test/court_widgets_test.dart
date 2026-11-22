@@ -126,6 +126,59 @@ void main() {
       expect(shotTypeLabel(''), 'Other');
     });
 
+    test('a shot type gets one letter on its mark; unknown gets none', () {
+      expect(shotTypeLetter(_landing('b_000001')), isNotNull);
+      final Map<String?, String?> seen = <String?, String?>{
+        for (final ShotLanding l in _session.landings) l.shotType: shotTypeLetter(l),
+      };
+      expect(seen['forehand'], 'F');
+      expect(seen['backhand'], 'B');
+      expect(seen['serve'], 'S');
+      expect(seen[null], isNull);
+    });
+
+    testWidgets('the legend names the letters that are on the map', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));
+      expect(find.textContaining('F = Forehand'), findsOneWidget);
+      expect(find.textContaining('B = Backhand'), findsOneWidget);
+      expect(find.text('Landed in'), findsOneWidget);
+      expect(find.text('Landed out'), findsOneWidget);
+    });
+
+    testWidgets('tapping a mark shows the facts about that shot under the map', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));
+      final Finder canvas = find.byKey(const Key('court-map-canvas'));
+      final Size size = tester.getSize(canvas);
+      final Offset origin = tester.getTopLeft(canvas);
+      final ShotLanding target = _session.landings.firstWhere((ShotLanding l) => l.shotType == 'forehand');
+      expect(find.textContaining('Confidence'), findsNothing);
+      await tester.tapAt(origin + CourtMapPainter.toCanvas(target.courtXy, size));
+      await tester.pump();
+      expect(find.text(shotHeadline(target)), findsOneWidget);
+      expect(find.textContaining('Forehand'), findsWidgets);
+      expect(find.text('Confidence 90%'), findsOneWidget);
+      expect(find.text('At 0:10'), findsOneWidget);
+    });
+
+    testWidgets('the rally trace and the entrance paint without error', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));
+      await tester.tap(find.text('Rally trace'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+      final Finder canvas = find.byKey(const Key('court-map-canvas'));
+      final Size size = tester.getSize(canvas);
+      final Offset origin = tester.getTopLeft(canvas);
+      await tester.tapAt(origin + CourtMapPainter.toCanvas(_landing('b_000001').courtXy, size));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    test('headlines read as a sentence', () {
+      expect(shotHeadline(_landing('b_000001')), contains('·'));
+      final ShotLanding serve = _session.landings.firstWhere((ShotLanding l) => l.isServe);
+      expect(shotHeadline(serve), startsWith('Serve · '));
+    });
+
     testWidgets('paths are on by default and say how many were measured', (WidgetTester tester) async {
       await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));
       expect(find.text(pathsLine(_session.landings)), findsOneWidget);
