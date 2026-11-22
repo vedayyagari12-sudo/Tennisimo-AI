@@ -26,6 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tennisimo_ai/main.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
+import 'package:tennisimo_ai/screens/profile_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/theme/theme_controller.dart';
@@ -53,7 +54,7 @@ String _hex(Color c) =>
     '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
 
 Future<void> _openMenu(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.more_vert));
+  await tester.tap(find.byTooltip(kProfileTooltip));
   for (int i = 0; i < 10; i++) {
     await tester.pump(const Duration(milliseconds: 100));
   }
@@ -72,13 +73,12 @@ void main() {
 
   group('resolveAppTheme, the gate', () {
     for (final ThemeMode requested in ThemeMode.values) {
-      test('off the web, "${requested.name}" still resolves light-only', () {
+      test('on mobile, "${requested.name}" is honoured too', () {
         final AppThemeConfig config =
             resolveAppTheme(isWeb: false, requested: requested);
-        expect(config.darkTheme, isNull);
-        expect(config.themeMode, ThemeMode.light);
-        expect(config.theme.brightness, Brightness.light);
+        expect(config.themeMode, requested);
         expect(config.theme.extension<AppPalette>(), same(_light));
+        expect(config.darkTheme!.extension<AppPalette>(), same(_dark));
       });
 
       test('on the web, "${requested.name}" is honoured', () {
@@ -93,12 +93,10 @@ void main() {
     }
   });
 
-  group('mobile ignores a stored dark choice', () {
-    testWidgets('stored dark + dark platform + a controller: still light',
+  group('mobile honours the choice, like the web', () {
+    testWidgets('a stored dark choice paints the dark canvas',
         (WidgetTester tester) async {
       final ThemeController controller = await _storedDark();
-      addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
-      tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
 
       await tester.pumpWidget(
         TennisimoApp(home: _home, themeController: controller),
@@ -106,38 +104,38 @@ void main() {
       await tester.pumpAndSettle();
 
       final MaterialApp app = tester.widget(find.byType(MaterialApp));
-      expect(app.darkTheme, isNull);
-      expect(app.themeMode, ThemeMode.light);
+      expect(app.themeMode, ThemeMode.dark);
+      final BuildContext context = tester.element(find.byType(SizedBox).first);
+      expect(Theme.of(context).brightness, Brightness.dark);
+      expect(context.palette, same(_dark));
+      expect(ThemeScope.maybeOf(context), same(controller));
+
+      // Light status-bar icons on the dark canvas.
+      final AnnotatedRegion<SystemUiOverlayStyle> region = tester.widget(
+        find.byType(AnnotatedRegion<SystemUiOverlayStyle>).first,
+      );
+      expect(region.value, darkCanvasOverlayStyle());
+      expect(region.value.statusBarIconBrightness, Brightness.light);
+    });
+
+    testWidgets('switching to light at runtime repaints light',
+        (WidgetTester tester) async {
+      final ThemeController controller = await _storedDark();
+      await tester.pumpWidget(
+        TennisimoApp(home: _home, themeController: controller),
+      );
+      await controller.setMode(ThemeMode.light);
+      await tester.pumpAndSettle();
 
       final BuildContext context = tester.element(find.byType(SizedBox).first);
-      expect(Theme.of(context).brightness, Brightness.light);
       expect(context.palette, same(_light));
-      // No scope, so nothing below can find a controller to offer.
-      expect(find.byType(ThemeScope), findsNothing);
-      expect(ThemeScope.maybeOf(context), isNull);
-
       final AnnotatedRegion<SystemUiOverlayStyle> region = tester.widget(
         find.byType(AnnotatedRegion<SystemUiOverlayStyle>).first,
       );
       expect(region.value, lightCanvasOverlayStyle());
     });
 
-    testWidgets('changing the choice at runtime changes nothing',
-        (WidgetTester tester) async {
-      final ThemeController controller = await _storedDark();
-      await tester.pumpWidget(
-        TennisimoApp(home: _home, themeController: controller),
-      );
-      await controller.setMode(ThemeMode.system);
-      await controller.setMode(ThemeMode.dark);
-      await tester.pumpAndSettle();
-
-      final MaterialApp app = tester.widget(find.byType(MaterialApp));
-      expect(app.darkTheme, isNull);
-      expect(app.themeMode, ThemeMode.light);
-    });
-
-    testWidgets('the dashboard menu offers no theme choice',
+    testWidgets('Profile offers the choice on mobile',
         (WidgetTester tester) async {
       final ThemeController controller = await _storedDark();
       tester.view.physicalSize = const Size(412, 915);
@@ -153,10 +151,9 @@ void main() {
       await _settle(tester);
       await _openMenu(tester);
 
+      expect(find.text('System'), findsOneWidget);
+      expect(find.text('Dark'), findsOneWidget);
       expect(find.text('Sign out'), findsOneWidget);
-      expect(find.text('Dark'), findsNothing);
-      expect(find.text('Light'), findsNothing);
-      expect(find.text('Follow system'), findsNothing);
     });
   });
 
@@ -220,7 +217,7 @@ void main() {
       expect(app.themeAnimationDuration, Duration.zero);
     });
 
-    testWidgets('the dashboard menu offers the choice, and it persists',
+    testWidgets('Profile offers the choice, and it persists',
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final ThemeController controller = ThemeController();
@@ -238,17 +235,14 @@ void main() {
       await _settle(tester);
       await _openMenu(tester);
 
-      expect(find.text('Follow system'), findsOneWidget);
+      expect(find.text('System'), findsOneWidget);
       expect(find.text('Light'), findsOneWidget);
       expect(find.text('Dark'), findsOneWidget);
       expect(find.text('Sign out'), findsOneWidget);
-      final CheckedPopupMenuItem<String> system = tester.widget(
-        find.ancestor(
-          of: find.text('Follow system'),
-          matching: find.byType(CheckedPopupMenuItem<String>),
-        ),
-      );
-      expect(system.checked, isTrue, reason: 'the default is follow-system');
+      final SegmentedButton<ThemeMode> choice =
+          tester.widget(find.byType(SegmentedButton<ThemeMode>));
+      expect(choice.selected, <ThemeMode>{ThemeMode.system},
+          reason: 'the default is follow-system');
 
       await tester.tap(find.text('Dark'));
       await _settle(tester);
@@ -257,7 +251,7 @@ void main() {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       expect(prefs.getString(kThemeModePrefsKey), 'dark');
       final BuildContext context =
-          tester.element(find.byType(DashboardScreen));
+          tester.element(find.byType(ProfileScreen));
       expect(context.palette, same(_dark));
     });
   });
@@ -281,12 +275,12 @@ void main() {
     });
 
     test('both canvases are the web build\'s real surfaces', () {
-      // The web build is the alternate flavor (see README.md).
-      expect(html, contains('background-color: ${_hex(schoolLight.surface)}'));
-      expect(html, contains('background-color: ${_hex(schoolDark.surface)}'));
+      // Web and mobile ship the same default palette (see README.md).
+      expect(html, contains('background-color: ${_hex(tennisimoLight.surface)}'));
+      expect(html, contains('background-color: ${_hex(tennisimoDark.surface)}'));
       expect(
         html,
-        contains("setAttribute('content', '${_hex(schoolDark.surface)}')"),
+        contains("setAttribute('content', '${_hex(tennisimoDark.surface)}')"),
       );
     });
   });

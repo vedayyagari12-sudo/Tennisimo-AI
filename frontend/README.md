@@ -18,17 +18,22 @@ samples, guidance on mobile development, and a full API reference.
 
 ## Builds and palettes
 
-One codebase ships two builds, selected at compile time by `BRAND`:
-
-- **Mobile app** (Android / iOS): the default palette. Build with no define,
-  e.g. `flutter build apk`.
-- **Web**: the alternate palette (powder blue, gold and white). The files in
-  `web/` (`index.html` background, `manifest.json` colours, favicon and icons)
-  are themed to match it, so always build the web version with the define:
+Web, Android and iOS ship the SAME look: the default green palette, the same
+screens and the same icons, so a player sees one app on every device. Build
+with no define:
 
 ```
-flutter build web --release --dart-define=BRAND=school
+flutter build web --release
+flutter build apk
 ```
 
-The output lands in `build/web/`. A web build made without the define would
-paint the default palette inside a page themed for the alternate one.
+The files in `web/` (`index.html` background, `manifest.json` colours, favicon
+and icons) match the default palette. The alternate `BRAND=school` palette
+still compiles but no build ships it.
+
+The public legal pages (`web/privacy.html`, `web/terms.html`,
+`web/delete-account.html`) are generated from `lib/models/legal_content.dart`:
+
+```
+dart run tool/gen_legal_pages.dart
+```

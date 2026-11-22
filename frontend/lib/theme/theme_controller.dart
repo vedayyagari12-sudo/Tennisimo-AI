@@ -1,17 +1,13 @@
-/// The web app's light / dark choice, and the one seam that keeps the mobile
-/// app light-only.
+/// The light / dark / follow-system choice, on web, Android and iOS alike.
 ///
 /// ## The gate
 ///
 /// [resolveAppTheme] is the only function that decides what `MaterialApp`
-/// gets for `theme`, `darkTheme` and `themeMode`. Given `isWeb: false` it
-/// returns `darkTheme: null` and `themeMode: ThemeMode.light` WHATEVER mode is
-/// asked for, so no stored preference, no controller and no platform
-/// brightness can reach a dark canvas on a phone. `main.dart` calls it with
-/// `kIsWeb`, and does not even construct a [ThemeController] or install a
-/// [ThemeScope] off the web, so the dashboard's theme menu entries (which
-/// render only under a [ThemeScope]) do not exist on mobile either. There is
-/// no `kIsWeb` check anywhere in the UI.
+/// gets for `theme`, `darkTheme` and `themeMode`. Every build now ships both
+/// canvases and honours the requested mode, so the app looks the same on a
+/// phone and in a browser. The choice is offered in Profile › Appearance,
+/// which renders only under a [ThemeScope]; `main.dart` installs one on every
+/// platform.
 ///
 /// ## Persistence
 ///
@@ -87,7 +83,7 @@ class PreferencesThemeModeStore implements ThemeModeStore {
   }
 }
 
-/// Holds the web app's [ThemeMode] and notifies when it changes.
+/// Holds the app's [ThemeMode] and notifies when it changes.
 ///
 /// Defaults to [ThemeMode.system]: the page follows the browser until the user
 /// says otherwise, and "otherwise" is what gets written down.
@@ -141,8 +137,8 @@ class ThemeScope extends InheritedNotifier<ThemeController> {
     required super.child,
   }) : super(notifier: controller);
 
-  /// The controller, or null when no scope is installed: always on mobile,
-  /// and in widget tests that mount a single screen.
+  /// The controller, or null when no scope is installed: in widget tests
+  /// that mount a single screen.
   static ThemeController? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<ThemeScope>()?.notifier;
 }
@@ -161,21 +157,13 @@ class AppThemeConfig {
   final ThemeMode themeMode;
 }
 
-/// The gate. Off the web the answer is light-only regardless of [requested]:
-/// no dark theme exists for `MaterialApp` to fall back to, and the mode says
-/// so explicitly. On the web the dark theme is attached and [requested] is
-/// honoured.
+/// The gate: both themes are attached and [requested] is honoured.
 AppThemeConfig resolveAppTheme({
   required bool isWeb,
   required ThemeMode requested,
 }) {
-  if (!isWeb) {
-    return AppThemeConfig(
-      theme: buildAppTheme(),
-      darkTheme: null,
-      themeMode: ThemeMode.light,
-    );
-  }
+  // Web, Android and iOS all honour the choice: one app, one look. [isWeb]
+  // is kept so callers and tests state which build they mean.
   return AppThemeConfig(
     theme: buildAppTheme(),
     darkTheme: buildDarkAppTheme(),

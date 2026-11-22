@@ -167,6 +167,24 @@ SystemUiOverlayStyle lightCanvasOverlayStyle() {
   );
 }
 
+/// The dark-canvas counterpart of [lightCanvasOverlayStyle]: LIGHT icons on
+/// Android, and iOS told the background is DARK.
+SystemUiOverlayStyle darkCanvasOverlayStyle() {
+  return SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    statusBarBrightness: Brightness.dark,
+    systemNavigationBarColor: darkPaletteFor(kBrandFlavor).surface,
+    systemNavigationBarIconBrightness: Brightness.light,
+  );
+}
+
+/// The overlay style for a canvas of [brightness].
+SystemUiOverlayStyle canvasOverlayStyle(Brightness brightness) =>
+    brightness == Brightness.dark
+        ? darkCanvasOverlayStyle()
+        : lightCanvasOverlayStyle();
+
 /// Base typography, with tabular figures on every size a big numeral uses.
 TextTheme _textTheme(TextTheme base) {
   TextStyle? tabular(TextStyle? style, {FontWeight? weight}) =>
@@ -178,8 +196,8 @@ TextTheme _textTheme(TextTheme base) {
     displaySmall: tabular(base.displaySmall, weight: FontWeight.w700),
     headlineLarge: tabular(base.headlineLarge, weight: FontWeight.w700),
     headlineMedium: tabular(base.headlineMedium, weight: FontWeight.w700),
-    headlineSmall: tabular(base.headlineSmall, weight: FontWeight.w600),
-    titleLarge: tabular(base.titleLarge, weight: FontWeight.w600),
+    headlineSmall: tabular(base.headlineSmall, weight: FontWeight.w800),
+    titleLarge: tabular(base.titleLarge, weight: FontWeight.w700),
     titleMedium: base.titleMedium?.copyWith(fontWeight: FontWeight.w600),
     titleSmall: base.titleSmall?.copyWith(fontWeight: FontWeight.w600),
     labelLarge: base.labelLarge?.copyWith(letterSpacing: 0.3),
@@ -224,7 +242,7 @@ ThemeData _buildTheme(AppPalette palette) {
       scrolledUnderElevation: 0,
       centerTitle: false,
       // Never left to Flutter's guess: see [lightCanvasOverlayStyle].
-      systemOverlayStyle: lightCanvasOverlayStyle(),
+      systemOverlayStyle: canvasOverlayStyle(palette.brightness),
     ),
     cardTheme: CardThemeData(
       color: palette.surfaceContainer,
@@ -233,16 +251,20 @@ ThemeData _buildTheme(AppPalette palette) {
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-        // A card edge is a decorative rule, not a control boundary.
-        side: BorderSide(color: palette.outlineVariant),
+        // A card edge is a decorative rule, not a control boundary. Light
+        // cards are white on grey and need none; dark ones keep a faint one.
+        side: palette.brightness == Brightness.dark
+            ? BorderSide(color: palette.outlineVariant)
+            : BorderSide.none,
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: palette.surfaceContainer,
+      backgroundColor: palette.surfaceContainerLowest,
+      shadowColor: const Color(0x22101512),
       surfaceTintColor: Colors.transparent,
       indicatorColor: palette.navIndicator,
-      elevation: 0,
-      height: 68,
+      elevation: 2,
+      height: 72,
       labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
       labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>(
         (Set<WidgetState> states) => TextStyle(

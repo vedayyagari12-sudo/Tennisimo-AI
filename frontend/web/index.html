@@ -24,9 +24,8 @@
   <!--
     Pre-boot chrome, and the page behind the Flutter canvas. A static file
     cannot read a --dart-define, so this matches the canvas of the build these
-    files actually serve: the web build, which is built with the alternate
-    palette (`--dart-define=BRAND=school`, see README.md). It is that
-    palette's `surface`, #D6E8F5, exactly (OKLab dE 0). Painting it here,
+    files actually serve: the web build, which ships the same default palette
+    as the phone app (see README.md). It is that palette's `surface`, #F3F5F2, exactly (OKLab dE 0). Painting it here,
     before flutter_bootstrap.js runs, is what stops the browser flashing its
     default white canvas on first paint.
 
@@ -35,20 +34,20 @@
     showed up as a black band on overscroll, because this page is what is
     behind the canvas when the user scrolls past the top.
   -->
-  <meta name="theme-color" content="#D6E8F5">
+  <meta name="theme-color" content="#F3F5F2">
   <style>
     html, body {
       margin: 0;
       padding: 0;
       height: 100%;
-      background-color: #D6E8F5;
+      background-color: #F3F5F2;
       /* Keep overscroll from exposing the page at all, where supported. */
       overscroll-behavior: none;
     }
-    /* The same palette's dark `surface`, #02040A, for a visitor whose theme
+    /* The same palette's dark `surface`, #0E110F, for a visitor whose theme
        choice resolves to dark. Set by the script below, before first paint. */
     html.dark-canvas, html.dark-canvas body {
-      background-color: #02040A;
+      background-color: #0E110F;
     }
   </style>
   <!--
@@ -75,7 +74,7 @@
       if (!dark) return;
       document.documentElement.className += ' dark-canvas';
       var meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.setAttribute('content', '#02040A');
+      if (meta) meta.setAttribute('content', '#0E110F');
     })();
   </script>
 

@@ -431,21 +431,21 @@ const Color _scoreHighFillLight = Color(0xFF128D42);
 const Color _scoreMidFillLight = Color(0xFF824C00);
 const Color _scoreLowFillLight = Color(0xFF7A0000);
 
-/// Default flavor: warm tan, `#F6F0EA`-`#E8E0D5`, not corporate white, with
-/// the brand green as the accent and chartreuse kept for ball speed — both
+/// Default flavor: a cool court-grey canvas (`#F3F5F2`) with white cards, so
+/// a card reads by fill alone and needs no border, with the brand green as the accent and chartreuse kept for ball speed — both
 /// stepped into the band a light canvas can carry.
 const AppPalette tennisimoLight = AppPalette(
   brightness: Brightness.light,
-  surface: Color(0xFFF6F0EA),
-  surfaceContainerLowest: Color(0xFFFFFCF8),
-  surfaceContainerLow: Color(0xFFF1E9E1),
-  surfaceContainer: Color(0xFFECE5DB),
-  surfaceContainerHigh: Color(0xFFE8E0D5),
-  surfaceContainerHighest: Color(0xFFE1D9CD),
-  onSurface: Color(0xFF121C14),
-  onSurfaceVariant: Color(0xFF5B544C),
-  outline: Color(0xFF7B7261),
-  outlineVariant: Color(0xFFCEC6B9),
+  surface: Color(0xFFF3F5F2),
+  surfaceContainerLowest: Color(0xFFFFFFFF),
+  surfaceContainerLow: Color(0xFFF8FAF8),
+  surfaceContainer: Color(0xFFFFFFFF),
+  surfaceContainerHigh: Color(0xFFEDF1EE),
+  surfaceContainerHighest: Color(0xFFE3E8E4),
+  onSurface: Color(0xFF101512),
+  onSurfaceVariant: Color(0xFF515B54),
+  outline: Color(0xFF737D76),
+  outlineVariant: Color(0xFFDDE3DF),
   primary: Color(0xFF006A27),
   onPrimary: Color(0xFFFFFFFF),
   primaryFill: Color(0xFF008236),
@@ -588,25 +588,24 @@ const Color _scoreHighFillDark = Color(0xFF6ACB82);
 const Color _scoreMidFillDark = Color(0xFFDB8F00);
 const Color _scoreLowFillDark = Color(0xFFDE444C);
 
-/// Default flavor, dark: the tan canvas's warm charcoal counterpart
-/// (`#17130F`-`#302C27`, OKLab hue ~68 like the light tan, stepped ~0.03 L per
-/// elevation), with the brand green and the chartreuse lifted into the dark
+/// Default flavor, dark: a near-black green-tinted charcoal (`#0E110F`-
+/// `#272C28`, stepped ~0.03 L per elevation), with the brand green and the chartreuse lifted into the dark
 /// text and fill bands and dark ink on every accent.
 ///
 /// WEB ONLY: `main.dart` attaches a dark theme to `MaterialApp` only when
 /// `kIsWeb`. On a phone this constant is compiled in but never shown.
 const AppPalette tennisimoDark = AppPalette(
   brightness: Brightness.dark,
-  surface: Color(0xFF17130F),
-  surfaceContainerLowest: Color(0xFF100C08),
-  surfaceContainerLow: Color(0xFF1D1914),
-  surfaceContainer: Color(0xFF221D19),
-  surfaceContainerHigh: Color(0xFF292420),
-  surfaceContainerHighest: Color(0xFF302C27),
-  onSurface: Color(0xFFF3EEE6),
-  onSurfaceVariant: Color(0xFFBBB3AA),
-  outline: Color(0xFF877F75),
-  outlineVariant: Color(0xFF423C36),
+  surface: Color(0xFF0E110F),
+  surfaceContainerLowest: Color(0xFF0A0C0B),
+  surfaceContainerLow: Color(0xFF131714),
+  surfaceContainer: Color(0xFF181C19),
+  surfaceContainerHigh: Color(0xFF1F2420),
+  surfaceContainerHighest: Color(0xFF272C28),
+  onSurface: Color(0xFFEEF2EF),
+  onSurfaceVariant: Color(0xFFAAB4AD),
+  outline: Color(0xFF7F8A83),
+  outlineVariant: Color(0xFF2E3430),
   primary: Color(0xFF66DA85),
   onPrimary: Color(0xFF091A0D),
   primaryFill: Color(0xFF3BB360),

@@ -22,14 +22,10 @@ Future<void> main() async {
     url: supabaseUrl,
     publishableKey: supabasePublishableKey,
   );
-  // The light / dark choice exists on the web only. Off the web no controller
-  // is built, so nothing is ever read from storage and there is no choice to
-  // honour; TennisimoApp ignores one even if it were passed.
-  ThemeController? themeController;
-  if (kIsWeb) {
-    themeController = ThemeController();
-    await themeController.load();
-  }
+  // The light / dark / system choice, remembered across launches, on every
+  // platform. Read before the first frame so a dark choice never flashes light.
+  final ThemeController themeController = ThemeController();
+  await themeController.load();
   runApp(TennisimoApp(themeController: themeController));
 }
 
@@ -47,7 +43,7 @@ class TennisimoApp extends StatelessWidget {
   @visibleForTesting
   final Widget? home;
 
-  /// The web app's light / dark choice. Ignored unless [isWeb].
+  /// The light / dark / system choice. Null only in tests.
   final ThemeController? themeController;
 
   /// Whether this is the web build. Always [kIsWeb] in production; a
@@ -58,20 +54,16 @@ class TennisimoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeController? controller = isWeb ? themeController : null;
+    final ThemeController? controller = themeController;
     if (controller == null) {
-      // Mobile: light only. resolveAppTheme(isWeb: false) supplies no
-      // darkTheme, so a device in dark mode cannot put this app on a dark
-      // canvas: with darkTheme null, MaterialApp falls back to `theme`
-      // whatever the platform brightness is, and themeMode states the intent
-      // rather than leaving it to that fallback. No ThemeScope is installed,
-      // so no theme control is rendered anywhere below.
+      // Only a test passes no controller: follow the platform brightness.
       return _materialApp(
-        resolveAppTheme(isWeb: false, requested: ThemeMode.light),
+        resolveAppTheme(isWeb: isWeb, requested: ThemeMode.system),
         themeAnimationDuration: kThemeAnimationDuration,
       );
     }
-    // Web: the choice is live, and reachable below through ThemeScope. The
+    // The choice is live, and reachable below through ThemeScope (Profile ›
+    // Appearance). The
     // cross-fade between canvases is skipped under reduced motion.
     return ThemeScope(
       controller: controller,
@@ -80,7 +72,7 @@ class TennisimoApp extends StatelessWidget {
         child: ListenableBuilder(
           listenable: controller,
           builder: (BuildContext context, Widget? _) => _materialApp(
-            resolveAppTheme(isWeb: true, requested: controller.mode),
+            resolveAppTheme(isWeb: isWeb, requested: controller.mode),
             themeAnimationDuration:
                 motionDuration(context, kThemeAnimationDuration),
           ),
@@ -101,14 +93,11 @@ class TennisimoApp extends StatelessWidget {
       themeAnimationDuration: themeAnimationDuration,
       // Four of this app's screens have no AppBar, so the app bar's own
       // systemOverlayStyle never reaches them. This region is the floor under
-      // all of them. It is NOT keyed to Theme.of(context).brightness: on
-      // mobile the canvas never varies, and a brightness that never varies is
-      // exactly where the white-icons-on-white bug hid. On web, where the
-      // canvas can be dark, there is no native status bar for it to style.
-      // See [lightCanvasOverlayStyle].
+      // all of them, keyed to the canvas actually painted: dark icons on the
+      // light canvas, light icons on the dark one. See [canvasOverlayStyle].
       builder: (BuildContext context, Widget? child) =>
           AnnotatedRegion<SystemUiOverlayStyle>(
-        value: lightCanvasOverlayStyle(),
+        value: canvasOverlayStyle(Theme.of(context).brightness),
         child: child ?? const SizedBox.shrink(),
       ),
       home: home ?? const AuthGate(),

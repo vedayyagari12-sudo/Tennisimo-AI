@@ -16,6 +16,7 @@ import 'package:supabase_flutter/supabase_flutter.dart'
 import 'package:tennisimo_ai/models/analysis_response.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
 import 'package:tennisimo_ai/screens/login_screen.dart';
+import 'package:tennisimo_ai/screens/profile_screen.dart';
 import 'package:tennisimo_ai/services/account_deletion.dart';
 import 'package:tennisimo_ai/services/api_client.dart';
 import 'package:tennisimo_ai/services/haptics.dart';
@@ -113,7 +114,7 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 Future<void> _openDialog(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.more_vert));
+  await tester.tap(find.byTooltip(kProfileTooltip));
   await _settle(tester);
   await tester.tap(find.text('Delete account'));
   await _settle(tester);
@@ -347,11 +348,11 @@ void main() {
       return source;
     }
 
-    testWidgets('the menu entry sits below Sign out in the error colour', (
+    testWidgets('the Profile row sits below Sign out in the error colour', (
       WidgetTester tester,
     ) async {
       await pump(tester);
-      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.tap(find.byTooltip(kProfileTooltip));
       await _settle(tester);
 
       final Finder delete = find.text('Delete account');
@@ -507,7 +508,8 @@ void main() {
       expect(find.textContaining('Trying again is safe'), findsOneWidget);
       expect(source.signOuts, 0);
       expect(LoginNotice.take(), isNull);
-      expect(find.byType(DashboardScreen), findsOneWidget);
+      // Still signed in, still on the Profile page the dialog was opened from.
+      expect(find.byType(ProfileScreen), findsOneWidget);
 
       // The retry is one tap away and really sends a second request.
       await tester.tap(find.widgetWithText(TextButton, 'Try again'));

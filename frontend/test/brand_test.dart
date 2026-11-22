@@ -85,7 +85,7 @@ void main() {
         case BrandFlavor.tennisimo:
           expect(light.primary, const Color(0xFF006A27));
           expect(light.secondary, const Color(0xFF485F00));
-          expect(light.surface, const Color(0xFFF6F0EA));
+          expect(light.surface, const Color(0xFFF3F5F2));
         case BrandFlavor.school:
           expect(light.primary, const Color(0xFF1A3F74));
           expect(light.secondary, const Color(0xFF1F5596));

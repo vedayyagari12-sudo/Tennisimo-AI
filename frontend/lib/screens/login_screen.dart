@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/content_width.dart';
+import 'legal_screens.dart';
 
 /// Sign in and sign up, in one screen with a quiet toggle between them.
 ///
@@ -397,6 +398,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       foreground: colors.onErrorContainer,
                     ),
                   ],
+                  const SizedBox(height: AppSpacing.md),
+                  const _LegalLinks(),
                 ],
               ),
             ),
@@ -442,6 +445,47 @@ class _AuthBanner extends StatelessWidget {
                   .bodyMedium
                   ?.copyWith(color: foreground),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+/// "By continuing you agree to the Terms and Privacy Policy", with both
+/// documents one tap away before an account exists.
+class _LegalLinks extends StatelessWidget {
+  const _LegalLinks();
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final TextStyle? small = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.xs),
+      child: Column(
+        children: <Widget>[
+          Text(
+            'By continuing you agree to the',
+            textAlign: TextAlign.center,
+            style: small,
+          ),
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              TextButton(
+                onPressed: () => openTerms(context),
+                child: const Text('Terms of service'),
+              ),
+              Text('and', style: small),
+              TextButton(
+                onPressed: () => openPrivacyPolicy(context),
+                child: const Text('Privacy policy'),
+              ),
+            ],
           ),
         ],
       ),
