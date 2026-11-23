@@ -18,8 +18,8 @@
 ///   (`services/last_seen.dart`).
 library;
 
-/// REPLACE ME: the address users write to for help and privacy requests.
-const String kSupportEmail = 'support@tennisimo.app';
+/// The address users write to for help and privacy requests.
+const String kSupportEmail = 'va.appstudio@gmail.com';
 
 /// When the policy text below last changed. Update with any wording change.
 const String kLegalLastUpdated = 'November 22, 2026';

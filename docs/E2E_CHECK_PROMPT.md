@@ -61,7 +61,6 @@ production without asking; code fixes go on a branch.
 
 ---
 
-Before shipping, also replace the placeholder support address
-`kSupportEmail` in `frontend/lib/models/legal_content.dart` with a real
-inbox, then run `dart run tool/gen_legal_pages.dart` from `frontend/` and rebuild
-the web app.
+Support address in the app and legal pages: `kSupportEmail` in
+`frontend/lib/models/legal_content.dart` (after changing it, run
+`dart run tool/gen_legal_pages.dart` from `frontend/` and rebuild the web app).
