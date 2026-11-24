@@ -1,0 +1,120 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "DeleteAccount.dc.html": {
+      "h": 844,
+      "title": "Delete account",
+      "w": 390,
+      "x": 2350,
+      "y": 0
+    },
+    "Main.dc.html": {
+      "h": 1700,
+      "title": "Home",
+      "w": 390,
+      "x": 0,
+      "y": 0
+    },
+    "Match.dc.html": {
+      "h": 2050,
+      "title": "Match result",
+      "w": 390,
+      "x": 940,
+      "y": 0
+    },
+    "Privacy.dc.html": {
+      "h": 1100,
+      "title": "Privacy policy",
+      "w": 390,
+      "x": 1880,
+      "y": 0
+    },
+    "Profile.dc.html": {
+      "h": 1100,
+      "title": "Profile & settings",
+      "w": 390,
+      "x": 1410,
+      "y": 0
+    },
+    "Session.dc.html": {
+      "h": 1700,
+      "title": "Swing results",
+      "w": 390,
+      "x": 470,
+      "y": 0
+    },
+    "Web.dc.html": {
+      "h": 1700,
+      "title": "Home \u2014 dark (web, Android, iOS)",
+      "w": 390,
+      "x": 0,
+      "y": 1820
+    },
+    "MatchesList.dc.html": {
+      "x": 470,
+      "y": 1820,
+      "w": 390,
+      "h": 1000,
+      "title": "Matches and rallies (tab)"
+    },
+    "MatchesError.dc.html": {
+      "x": 1410,
+      "y": 1820,
+      "w": 390,
+      "h": 844,
+      "title": "Matches \u2014 could not load"
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-11-22T12:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "noteOrder": [
+    "title",
+    "sample",
+    "image-kaqbeg"
+  ],
+  "notes": {
+    "image-kaqbeg": {
+      "alt": "Pasted image",
+      "h": 591,
+      "kind": "image",
+      "src": "/_blob/250932369bca09db21621db30156c084",
+      "w": 1200,
+      "x": 1410,
+      "y": 4672
+    },
+    "sample": {
+      "text": "Numbers on these screens are sample data to show layout. Web, Android and iOS share one look: same screens, same green palette, and a Light / Dark / System choice in Profile \u203a Appearance (dark Home shown below). Five tabs: Home \u00b7 History \u00b7 Record \u00b7 Matches \u00b7 Profile (Rallies lives inside Matches).",
+      "w": 320,
+      "x": 2820,
+      "y": 0
+    },
+    "title": {
+      "kind": "title1",
+      "maxW": 2740,
+      "text": "Tennisimo \u2014 clean redesign",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "MatchesList.dc.html",
+    "MatchesError.dc.html",
+    "Session.dc.html",
+    "Match.dc.html",
+    "Profile.dc.html",
+    "Privacy.dc.html",
+    "DeleteAccount.dc.html",
+    "Web.dc.html"
+  ],
+  "pages": [],
+  "title": "Tennisimo Redesign"
+}

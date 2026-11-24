@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Match</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0B7A3B}a:hover{color:#075C2C}
+.card{background:#FFFFFF;border-radius:20px;padding:18px;box-shadow:0 1px 2px rgba(16,21,18,.06)}
+.lbl{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5C665F}
+.sec{margin:6px 4px 0;font-size:17px;font-weight:700}
+.big{font-size:26px;font-weight:800;margin-top:4px}
+</style>
+</helmet>
+<div style="width: 390px; height: 2050px; box-sizing: border-box; background: #F3F5F2; font-family: Inter, system-ui, sans-serif; color: #101512; overflow: hidden">
+<div style="height: 56px; display: flex; align-items: center; gap: 8px; padding: 0 8px">
+<a href="MatchesList.dc.html" aria-label="Back to matches" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #101512"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></a>
+<div style="flex: 1"><div style="font-size: 17px; font-weight: 700">Saturday hit</div><div style="font-size: 12px; color: #5C665F">Nov 21 · Singles · 4 min video</div></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 16px; padding: 4px 16px 32px">
+
+<div class="card" style="display: flex; flex-direction: column; gap: 10px; background: #E4F3E9; box-shadow: none">
+<div style="display: flex; align-items: center; justify-content: space-between"><b style="font-size: 15px">How to read this page</b><button style="border: 0; background: none; color: #0B7A3B; font: 600 13px Inter; min-height: 44px; padding: 0 4px">Got it</button></div>
+<div style="font-size: 14px; color: #26302A; line-height: 1.5">Everything here comes from your video. Start with the numbers, look at the shot map, then check your rallies. Tap a section below to jump to it.</div>
+<nav aria-label="Jump to a section" style="display: flex; flex-wrap: wrap; gap: 8px">
+<a href="#shot-map" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 22px; background: #FFFFFF; font-size: 14px; font-weight: 600; text-decoration: none">Shot map</a>
+<a href="#rallies" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 22px; background: #FFFFFF; font-size: 14px; font-weight: 600; text-decoration: none">Rallies</a>
+<a href="#coaching" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 22px; background: #FFFFFF; font-size: 14px; font-weight: 600; text-decoration: none">Coaching</a>
+<a href="#line-calls" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 22px; background: #FFFFFF; font-size: 14px; font-weight: 600; text-decoration: none">Line calls</a>
+</nav>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+<div class="card" style="padding: 14px"><div class="lbl">Shots in</div><div class="big">78%</div><div style="font-size: 12px; color: #5C665F">96 of 123</div></div>
+<div class="card" style="padding: 14px"><div class="lbl">Deep shots</div><div class="big">41%</div><div style="font-size: 12px; color: #5C665F">landed close to the baseline</div></div>
+</div>
+<div style="font-size: 12px; color: #5C665F; line-height: 1.5; padding: 0 4px">Shots in: of the shots we could call, how many landed inside the lines.</div>
+
+<div class="sec" id="shot-map">Shot map</div>
+<div style="font-size: 13px; color: #5C665F; line-height: 1.5; padding: 0 4px; margin-top: -8px">Each dot is a place a ball bounced, seen from above. Only the far half of the court is shown.</div>
+<div class="card" style="display: flex; flex-direction: column; gap: 12px; align-items: center">
+<svg width="300" height="300" viewBox="0 0 300 300" role="img" aria-label="Shot map of the far half of the court: most shots land in, misses are long">
+<rect x="20" y="10" width="260" height="280" rx="6" fill="#2F7D4F"></rect>
+<rect x="40" y="30" width="220" height="250" fill="none" stroke="#FFFFFF" stroke-width="2"></rect>
+<line x1="68" y1="30" x2="68" y2="280" stroke="#FFFFFF" stroke-width="2"></line>
+<line x1="232" y1="30" x2="232" y2="280" stroke="#FFFFFF" stroke-width="2"></line>
+<line x1="68" y1="160" x2="232" y2="160" stroke="#FFFFFF" stroke-width="2"></line>
+<line x1="150" y1="160" x2="150" y2="280" stroke="#FFFFFF" stroke-width="2"></line>
+<line x1="20" y1="280" x2="280" y2="280" stroke="#FFFFFF" stroke-width="4" opacity=".9"></line>
+<g fill="#D4F04C" stroke="#142000" stroke-width="1">
+<circle cx="90" cy="60" r="5"></circle><circle cx="120" cy="48" r="5"></circle><circle cx="160" cy="70" r="5"></circle><circle cx="200" cy="52" r="5"></circle><circle cx="215" cy="90" r="5"></circle><circle cx="105" cy="110" r="5"></circle><circle cx="140" cy="95" r="5"></circle><circle cx="180" cy="120" r="5"></circle><circle cx="95" cy="190" r="5"></circle><circle cx="190" cy="200" r="5"></circle><circle cx="130" cy="140" r="5"></circle><circle cx="225" cy="140" r="5"></circle><circle cx="75" cy="80" r="5"></circle><circle cx="170" cy="40" r="5"></circle><circle cx="210" cy="230" r="5"></circle>
+</g>
+<g fill="none" stroke="#FFA25E" stroke-width="2.5">
+<circle cx="120" cy="20" r="5"></circle><circle cx="250" cy="60" r="5"></circle><circle cx="200" cy="18" r="5"></circle><circle cx="48" cy="150" r="5"></circle>
+</g>
+</svg>
+<div style="display: flex; gap: 18px; font-size: 13px; color: #3D4640">
+<span><span style="display: inline-block; width: 10px; height: 10px; border-radius: 5px; background: #D4F04C; border: 1px solid #142000"></span> In</span>
+<span><span style="display: inline-block; width: 10px; height: 10px; border-radius: 5px; border: 2px solid #E07A2E"></span> Out</span>
+<span>Misses: mostly <b>long</b></span>
+</div>
+</div>
+
+<div class="sec" id="rallies">Rallies</div>
+<div style="font-size: 13px; color: #5C665F; line-height: 1.5; padding: 0 4px; margin-top: -8px">A rally is a run of shots until the point ends. Each bar is one rally, and taller means more shots.</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<div class="card" style="padding: 14px"><div class="lbl">Rallies</div><div class="big">22</div></div>
+<div class="card" style="padding: 14px"><div class="lbl">Longest</div><div class="big">14</div></div>
+<div class="card" style="padding: 14px"><div class="lbl">Average</div><div class="big">5.6</div></div>
+</div>
+<div class="card" style="display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">Shots per rally</div>
+<div style="display: flex; align-items: flex-end; gap: 4px; height: 90px" role="img" aria-label="Shots per rally over the session, peaking at 14">
+<span style="flex: 1; height: 30%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 45%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 20%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 60%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 35%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 100%; background: #D4F04C; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 40%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 25%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 55%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 30%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 50%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span><span style="flex: 1; height: 15%; background: #0B7A3B; border-radius: 4px 4px 0 0"></span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 12px; color: #5C665F"><span>Start</span><span>End of video</span></div>
+</div>
+
+<div class="sec" id="coaching">Coaching</div>
+<div class="card" style="display: flex; flex-direction: column; gap: 10px; font-size: 14px; line-height: 1.5">
+<div><b style="color: #0B7A3B">Working:</b> steady cross-court depth in long rallies.</div>
+<div><b style="color: #B4500B">Work on:</b> long misses after rally shot 6. Cue: “lift, then brush up.”</div>
+</div>
+
+<div class="sec" id="line-calls">Closest line calls</div>
+<div style="font-size: 13px; color: #5C665F; line-height: 1.5; padding: 0 4px; margin-top: -8px">The balls that landed nearest a line, closest first. The distance is how far inside or beyond the line the ball came down.</div>
+<div class="card" style="display: flex; justify-content: space-between; font-size: 14px"><span>Baseline, rally 9</span><b style="color: #B4500B">Out by 4 cm</b></div>
+<div style="font-size: 12px; color: #5C665F; padding: 0 4px">Everything here is an estimate from one camera.</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":2050}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

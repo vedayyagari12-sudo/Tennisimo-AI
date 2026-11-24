@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home dark</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#5FD38A}a:hover{color:#8BE3AA}
+.card{background:#181C19;border-radius:20px;padding:18px;border:1px solid #2E3430}
+.lbl{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#AAB4AD}
+.sec{display:flex;justify-content:space-between;align-items:baseline;margin:6px 4px 0}
+.sec h2{margin:0;font-size:17px;font-weight:700}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.bar{height:8px;border-radius:999px;background:#262B27;overflow:hidden}
+.bar span{display:block;height:100%;border-radius:999px;background:#4CC97A}
+.row{display:flex;align-items:center;gap:12px;padding:14px 18px}
+.navi{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#AAB4AD;text-decoration:none;min-width:56px;min-height:44px;justify-content:center}
+</style>
+</helmet>
+<div style="width: 390px; height: 1700px; box-sizing: border-box; background: #0E110F; font-family: Inter, system-ui, sans-serif; color: #EEF2EF; position: relative; overflow: hidden">
+<div style="display: flex; flex-direction: column; gap: 16px; padding: 20px 16px 110px">
+
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0">
+<div>
+<div style="font-size: 14px; color: #AAB4AD; font-weight: 500">Good evening</div>
+<div style="font-size: 26px; font-weight: 800; letter-spacing: -0.02em">Your tennis</div>
+</div>
+<a href="Profile.dc.html" aria-label="Profile and settings" style="width: 44px; height: 44px; border-radius: 22px; background: #1B3A26; color: #4CC97A; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px; text-decoration: none">S</a>
+</div>
+
+<a href="Session.dc.html" class="card" style="display: flex; gap: 18px; align-items: center; text-decoration: none; color: inherit; background: #12321F; color: #FFFFFF">
+<svg width="104" height="104" viewBox="0 0 104 104" role="img" aria-label="Score 78 out of 100">
+<circle cx="52" cy="52" r="44" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="10"></circle>
+<circle cx="52" cy="52" r="44" fill="none" stroke="#D4F04C" stroke-width="10" stroke-linecap="round" stroke-dasharray="215.6 276.5" transform="rotate(-90 52 52)"></circle>
+<text x="52" y="58" text-anchor="middle" font-family="Inter" font-size="30" font-weight="800" fill="#FFFFFF">78</text>
+</svg>
+<div style="display: flex; flex-direction: column; gap: 6px; flex: 1">
+<div style="font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: rgba(255,255,255,.7)">Latest swing · Today</div>
+<div style="font-size: 22px; font-weight: 800">Forehand</div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<span class="chip" style="background: #D4F04C; color: #142000">▲ 6 vs last forehand</span>
+</div>
+<div style="font-size: 13px; color: rgba(255,255,255,.75)">9 of 11 checks measured</div>
+</div>
+</a>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<div class="card" style="padding: 14px">
+<div class="lbl">Clips</div>
+<div style="font-size: 24px; font-weight: 800; margin-top: 4px">24</div>
+</div>
+<div class="card" style="padding: 14px">
+<div class="lbl">Top speed</div>
+<div style="font-size: 24px; font-weight: 800; margin-top: 4px">68<span style="font-size: 13px; font-weight: 600; color: #AAB4AD"> mph</span></div>
+</div>
+<div class="card" style="padding: 14px">
+<div class="lbl">Shot types</div>
+<div style="font-size: 24px; font-weight: 800; margin-top: 4px">3</div>
+</div>
+</div>
+
+<div class="card" style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 10px">
+<div style="width: 36px; height: 36px; border-radius: 12px; background: #3A2616; display: flex; align-items: center; justify-content: center">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F2A866" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="4"></circle></svg>
+</div>
+<div>
+<div class="lbl">Focus next session</div>
+<div style="font-size: 16px; font-weight: 700">Meet the ball further in front</div>
+</div>
+</div>
+<div style="font-size: 14px; color: #C3CCC6; line-height: 1.5">Contact was 12 cm behind your front hip. Aim for a hand-width in front.</div>
+<div style="background: #0E110F; border-radius: 12px; padding: 10px 12px; font-size: 13px; color: #C3CCC6"><b style="color: #EEF2EF">Drill:</b> Drop-feed 20 balls, freeze at contact and check the racket is ahead of your hip.</div>
+</div>
+
+<div class="sec"><h2>Progress</h2><span style="font-size: 13px; color: #AAB4AD">Last 8 forehands</span></div>
+<div class="card" style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; gap: 6px">
+<button style="border: 0; background: #EEF2EF; color: #0E110F; border-radius: 999px; padding: 8px 14px; font: 600 13px Inter; min-height: 36px">Forehand</button>
+<button style="border: 0; background: #262B27; color: #C3CCC6; border-radius: 999px; padding: 8px 14px; font: 600 13px Inter; min-height: 36px">Backhand</button>
+<button style="border: 0; background: #262B27; color: #C3CCC6; border-radius: 999px; padding: 8px 14px; font: 600 13px Inter; min-height: 36px">Serve</button>
+</div>
+<svg width="326" height="150" viewBox="0 0 326 150" role="img" aria-label="Forehand score rising from 61 to 78 over 8 clips">
+<line x1="28" y1="20" x2="326" y2="20" stroke="#262B27"></line>
+<line x1="28" y1="65" x2="326" y2="65" stroke="#262B27"></line>
+<line x1="28" y1="110" x2="326" y2="110" stroke="#262B27"></line>
+<text x="0" y="24" font-size="11" fill="#AAB4AD" font-family="Inter">100</text>
+<text x="6" y="69" font-size="11" fill="#AAB4AD" font-family="Inter">70</text>
+<text x="6" y="114" font-size="11" fill="#AAB4AD" font-family="Inter">40</text>
+<path d="M36 83 L77 89 L118 74 L159 77 L200 65 L241 68 L282 56 L318 47 L318 125 L36 125 Z" fill="#4CC97A" opacity=".08"></path>
+<polyline points="36,83 77,89 118,74 159,77 200,65 241,68 282,56 318,47" fill="none" stroke="#4CC97A" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
+<circle cx="318" cy="47" r="5" fill="#4CC97A" stroke="#181C19" stroke-width="2"></circle>
+<text x="300" y="36" font-size="12" font-weight="700" fill="#EEF2EF" font-family="Inter">78</text>
+<text x="36" y="144" font-size="11" fill="#AAB4AD" font-family="Inter">Oct 2</text>
+<text x="290" y="144" font-size="11" fill="#AAB4AD" font-family="Inter">Today</text>
+</svg>
+<div style="display: flex; justify-content: space-between; font-size: 13px; color: #C3CCC6"><span>Best <b style="color: #EEF2EF">78</b></span><span>Average <b style="color: #EEF2EF">69</b></span><span>Change <b style="color: #4CC97A">+17</b></span></div>
+</div>
+
+<div class="sec"><h2>Latest breakdown</h2><a href="Session.dc.html" style="font-size: 14px; font-weight: 600; text-decoration: none">Details</a></div>
+<div class="card" style="display: flex; flex-direction: column; gap: 14px">
+<div><div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px"><span>Rotation</span><b>84</b></div><div class="bar"><span style="width: 84%"></span></div></div>
+<div><div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px"><span>Contact</span><b>62</b></div><div class="bar"><span style="width: 62%; background: #F29A4A"></span></div></div>
+<div><div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px"><span>Balance</span><b>81</b></div><div class="bar"><span style="width: 81%"></span></div></div>
+<div><div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px"><span>Rhythm</span><b>77</b></div><div class="bar"><span style="width: 77%"></span></div></div>
+<div style="font-size: 12px; color: #AAB4AD">Orange = your biggest gain. Tap Details for every measurement.</div>
+</div>
+
+<div class="sec"><h2>Shot mix</h2><span style="font-size: 13px; color: #AAB4AD">24 clips</span></div>
+<div class="card" style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; height: 14px; border-radius: 999px; overflow: hidden; gap: 2px">
+<span style="flex: 13; background: #4CC97A"></span><span style="flex: 7; background: #5AA8F5"></span><span style="flex: 4; background: #F29A4A"></span>
+</div>
+<div style="display: flex; gap: 16px; font-size: 13px; color: #C3CCC6; flex-wrap: wrap">
+<span><span style="display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: #4CC97A"></span> Forehand 13</span>
+<span><span style="display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: #5AA8F5"></span> Backhand 7</span>
+<span><span style="display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: #F29A4A"></span> Serve 4</span>
+</div>
+</div>
+
+<div class="sec"><h2>Recent sessions</h2><a href="#" style="font-size: 14px; font-weight: 600; text-decoration: none">See all</a></div>
+<div class="card" style="padding: 0">
+<a href="Session.dc.html" class="row" style="text-decoration: none; color: inherit; border-bottom: 1px solid #262B27">
+<div style="width: 44px; height: 44px; border-radius: 12px; background: #1B3A26; color: #4CC97A; display: flex; align-items: center; justify-content: center; font-weight: 800">78</div>
+<div style="flex: 1"><div style="font-weight: 600">Forehand</div><div style="font-size: 13px; color: #AAB4AD">Today · 61 mph</div></div>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#AAB4AD" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+</a>
+<a href="Session.dc.html" class="row" style="text-decoration: none; color: inherit; border-bottom: 1px solid #262B27">
+<div style="width: 44px; height: 44px; border-radius: 12px; background: #1B3A26; color: #4CC97A; display: flex; align-items: center; justify-content: center; font-weight: 800">71</div>
+<div style="flex: 1"><div style="font-weight: 600">Backhand</div><div style="font-size: 13px; color: #AAB4AD">Yesterday · 54 mph</div></div>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#AAB4AD" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+</a>
+<a href="Session.dc.html" class="row" style="text-decoration: none; color: inherit">
+<div style="width: 44px; height: 44px; border-radius: 12px; background: #3A2616; color: #F2A866; display: flex; align-items: center; justify-content: center; font-weight: 800">58</div>
+<div style="flex: 1"><div style="font-weight: 600">Serve</div><div style="font-size: 13px; color: #AAB4AD">Nov 18 · speed not measured</div></div>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#AAB4AD" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+</a>
+</div>
+</div>
+
+<nav aria-label="Main" style="position: absolute; left: 0; right: 0; bottom: 0; height: 84px; background: #131714; border-top: 1px solid #2E3430; display: flex; justify-content: space-around; align-items: flex-start; padding-top: 8px">
+<a href="Main.dc.html" class="navi" style="color: #4CC97A"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"></path></svg>Home</a>
+<a href="#" class="navi"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>History</a>
+<a href="#" class="navi" aria-label="Record a swing"><span style="width: 52px; height: 52px; border-radius: 26px; background: #4CC97A; display: flex; align-items: center; justify-content: center; margin-top: -18px; box-shadow: 0 6px 16px rgba(76,201,122,.3)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#08170D" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"></rect><path d="M16 10l5-3v10l-5-3"></path></svg></span>Record</a>
+<a href="Match.dc.html" class="navi"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="1"></rect><path d="M4 12h16M8 3v18M16 3v18"></path></svg>Matches</a>
+<a href="Profile.dc.html" class="navi"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1-4 4-6 8-6s7 2 8 6"></path></svg>Profile</a>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1700}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
