@@ -134,17 +134,25 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           ),
           NavigationDestination(
             // The primary action, styled as the one filled accent in the bar.
+            // The redesign's round green Record button with a soft shadow.
             icon: Container(
-              width: 40,
-              height: 40,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
                 color: palette.recordAction,
-                borderRadius: BorderRadius.circular(14),
+                shape: BoxShape.circle,
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: palette.recordAction.withValues(alpha: 0.35),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
               ),
               child: Icon(
                 Icons.videocam,
                 color: palette.onRecordAction,
-                size: 22,
+                size: 24,
               ),
             ),
             label: 'Record',
