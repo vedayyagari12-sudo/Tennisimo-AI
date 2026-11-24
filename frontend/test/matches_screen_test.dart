@@ -519,7 +519,8 @@ void main() {
       )));
       await tester.pumpAndSettle();
       expect(find.text('Rallies'), findsWidgets);
-      expect(find.text('5 shots'), findsWidgets);
+      expect(find.text('LONGEST'), findsOneWidget);
+      expect(find.text('SHOTS IN'), findsOneWidget);
       expect(find.text('67%'), findsOneWidget);
       expect(find.byType(CourtMap), findsOneWidget);
       expect(find.byType(LineCallCard), findsWidgets);

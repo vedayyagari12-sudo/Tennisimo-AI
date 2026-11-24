@@ -23,7 +23,6 @@ import '../widgets/court_map.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/line_call_card.dart';
 import '../widgets/rally_timeline.dart';
-import '../widgets/section_header.dart';
 
 /// How often a running match is polled.
 const Duration kMatchPollInterval = Duration(seconds: 3);
@@ -39,6 +38,7 @@ extension SessionKindCopy on SessionKind {
   String get tabTitle => this == SessionKind.rally ? 'Rallies' : 'Matches';
   String get newLabel => this == SessionKind.rally ? 'New rally' : 'New match';
   String get emptyHeadline => this == SessionKind.rally ? 'No rallies yet' : 'No matches yet';
+  String get listTitle => this == SessionKind.rally ? 'Your rallies' : 'Your matches';
   String get intro => this == SessionKind.rally
       ? 'Film yourself rallying and get overall coaching on consistency, depth and '
           'placement. AI writes it from what we measured.'
@@ -68,8 +68,8 @@ extension SessionKindCopy on SessionKind {
 
   /// Points at the other tab, because the two are easy to mix up.
   String get otherTabHint => this == SessionKind.rally
-      ? 'Want the shot map and line calls instead? Switch to Matches at the top.'
-      : 'Want coaching on one rally instead? Switch to Rallies at the top.';
+      ? 'Want the shot map and line calls instead? Tap Matches above.'
+      : 'Want coaching on one rally instead? Tap Rallies above.';
 }
 
 String _matchTitle(MatchRecord match) {
@@ -180,14 +180,9 @@ class MatchesHubScreen extends StatefulWidget {
 class _MatchesHubScreenState extends State<MatchesHubScreen> {
   SessionKind _kind = SessionKind.match;
 
-  Widget _switcher() => SegmentedButton<SessionKind>(
-        showSelectedIcon: false,
-        segments: const <ButtonSegment<SessionKind>>[
-          ButtonSegment<SessionKind>(value: SessionKind.match, label: Text('Matches')),
-          ButtonSegment<SessionKind>(value: SessionKind.rally, label: Text('Rallies')),
-        ],
-        selected: <SessionKind>{_kind},
-        onSelectionChanged: (Set<SessionKind> s) => setState(() => _kind = s.first),
+  Widget _switcher() => _KindSwitch(
+        value: _kind,
+        onChanged: (SessionKind k) => setState(() => _kind = k),
       );
 
   @override
@@ -198,6 +193,64 @@ class _MatchesHubScreenState extends State<MatchesHubScreen> {
         MatchesScreen(switcher: _switcher()),
         MatchesScreen(kind: SessionKind.rally, switcher: _switcher()),
       ],
+    );
+  }
+}
+
+/// The redesign's Matches | Rallies switch: a grey track with the chosen
+/// side as a white raised pill.
+class _KindSwitch extends StatelessWidget {
+  const _KindSwitch({required this.value, required this.onChanged});
+
+  final SessionKind value;
+  final ValueChanged<SessionKind> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    Widget side(SessionKind kind, String label) {
+      final bool on = kind == value;
+      return Expanded(
+        child: Semantics(
+          button: true,
+          selected: on,
+          child: Material(
+            color: on ? theme.colorScheme.surfaceContainerLowest : Colors.transparent,
+            elevation: on ? 1 : 0,
+            borderRadius: BorderRadius.circular(10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => onChanged(kind),
+              child: SizedBox(
+                height: 44,
+                child: Center(
+                  child: Text(
+                    label,
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      fontWeight: on ? FontWeight.w700 : FontWeight.w600,
+                      color: on ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: <Widget>[
+          side(SessionKind.match, 'Matches'),
+          side(SessionKind.rally, 'Rallies'),
+        ],
+      ),
     );
   }
 }
@@ -269,72 +322,86 @@ class MatchesScreenState extends State<MatchesScreen> {
           children: <Widget>[
             Row(
               children: <Widget>[
-                Expanded(child: Text(kind.tabTitle, style: theme.textTheme.headlineSmall)),
+                Expanded(
+                  child: Text(
+                    kind.tabTitle,
+                    style: theme.textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800, letterSpacing: -0.5),
+                  ),
+                ),
                 FilledButton.icon(
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
                   onPressed: _newMatch,
-                  icon: const Icon(Icons.add),
+                  icon: const Icon(Icons.add, size: 18),
                   label: Text(kind.newLabel),
                 ),
               ],
             ),
             if (widget.switcher != null) ...<Widget>[
-              const SizedBox(height: AppSpacing.md),
-              SizedBox(width: double.infinity, child: widget.switcher),
+              const SizedBox(height: AppSpacing.lg),
+              widget.switcher!,
             ],
-            const SizedBox(height: AppSpacing.sm),
-            Text(kind.intro, style: theme.textTheme.bodyMedium),
-            const SizedBox(height: AppSpacing.lg),
-            _HowItWorksCard(
-              kind: kind,
-              open: _guideOpen ?? (matches == null || matches.isEmpty),
-              onToggle: () => setState(
-                () => _guideOpen = !(_guideOpen ?? (matches == null || matches.isEmpty)),
-              ),
+            const SizedBox(height: AppSpacing.md),
+            Text.rich(
+              TextSpan(children: <InlineSpan>[
+                TextSpan(text: '${kind.intro} '),
+                TextSpan(
+                  text: kind.otherTabHint,
+                  style: TextStyle(fontWeight: FontWeight.w700, color: theme.colorScheme.onSurface),
+                ),
+              ]),
+              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             const SizedBox(height: AppSpacing.lg),
-            if (matches == null && _failure == null)
-              const Center(child: Padding(padding: EdgeInsets.all(AppSpacing.xl), child: CircularProgressIndicator()))
-            else if (matches == null || matches.isEmpty)
-              EmptyState(
-                icon: Icons.sports_tennis,
-                headline: _failure != null ? '${kind.tabTitle} could not be loaded' : kind.emptyHeadline,
-                supporting: _failure != null
-                    ? 'Check your connection and try again. (${_failure!.message})'
-                    : kind.emptySupporting,
-                actionLabel: _failure != null ? 'Try again' : kind.newLabel,
-                onAction: _failure != null ? refresh : _newMatch,
-              )
-            else
-              for (final MatchRecord match in matches)
+            if (_failure != null && (matches == null || matches.isEmpty)) ...<Widget>[
+              _LoadErrorCard(kind: kind, failure: _failure!, onRetry: refresh),
+              const SizedBox(height: AppSpacing.lg),
+              _HowItWorksCard(kind: kind, open: true, compact: true, onToggle: () {}),
+            ] else ...<Widget>[
+              _HowItWorksCard(
+                kind: kind,
+                open: _guideOpen ?? (matches == null || matches.isEmpty),
+                onToggle: () => setState(
+                  () => _guideOpen = !(_guideOpen ?? (matches == null || matches.isEmpty)),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              if (matches == null)
+                const Center(child: Padding(padding: EdgeInsets.all(AppSpacing.xl), child: CircularProgressIndicator()))
+              else if (matches.isEmpty)
+                EmptyState(
+                  icon: Icons.sports_tennis,
+                  headline: kind.emptyHeadline,
+                  supporting: kind.emptySupporting,
+                  actionLabel: kind.newLabel,
+                  onAction: _newMatch,
+                )
+              else ...<Widget>[
                 Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                  child: AppCard(
-                    onTap: () => _open(match),
-                    child: Row(
-                      children: <Widget>[
-                        Icon(
-                          match.status == MatchStatus.failed
-                              ? Icons.error_outline
-                              : match.status.isFinished
-                                  ? Icons.sports_tennis
-                                  : Icons.hourglass_top,
-                        ),
-                        const SizedBox(width: AppSpacing.md),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(_matchTitle(match), style: theme.textTheme.titleMedium),
-                              const SizedBox(height: AppSpacing.xs),
-                              Text(_statusLine(match), style: theme.textTheme.bodySmall),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right),
-                      ],
-                    ),
+                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: <Widget>[
+                      Expanded(child: Text(kind.listTitle, style: theme.textTheme.titleMedium)),
+                      Text('Pull down to refresh',
+                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                    ],
                   ),
                 ),
+                AppCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: <Widget>[
+                      for (int i = 0; i < matches.length; i++) ...<Widget>[
+                        if (i > 0) const Divider(height: 1),
+                        _MatchRow(match: matches[i], onTap: () => _open(matches[i])),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ],
         ),
       ),
@@ -342,57 +409,205 @@ class MatchesScreenState extends State<MatchesScreen> {
   }
 }
 
-/// The three-step guide at the top of each tab. Open for a first-time visitor,
-/// folded away (one tap to bring back) once there is something to look at.
+/// One session in the list: an icon tile, its name and status, a chevron.
+class _MatchRow extends StatelessWidget {
+  const _MatchRow({required this.match, required this.onTap});
+
+  final MatchRecord match;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool done = match.status.isFinished && match.status != MatchStatus.failed;
+    final bool failed = match.status == MatchStatus.failed;
+    final Color tileInk = failed
+        ? theme.colorScheme.error
+        : done
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant;
+    final Color tile = failed
+        ? theme.colorScheme.errorContainer
+        : done
+            ? theme.colorScheme.primaryContainer
+            : theme.colorScheme.surfaceContainerHigh;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(color: tile, borderRadius: BorderRadius.circular(12)),
+              child: Icon(
+                failed ? Icons.error_outline : (done ? Icons.grid_view : Icons.hourglass_top),
+                color: tileInk,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(_matchTitle(match), style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)),
+                  Text(
+                    done || failed ? _statusLine(match) : '${_statusLine(match)} You can leave this screen.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The redesign's load-error card: what probably happened, that nothing is
+/// lost, a way to retry, and the technical detail kept small.
+class _LoadErrorCard extends StatelessWidget {
+  const _LoadErrorCard({required this.kind, required this.failure, required this.onRetry});
+
+  final SessionKind kind;
+  final ApiFailure failure;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final String what = kind.tabTitle.toLowerCase();
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(22, 32, 22, 24),
+      child: Column(
+        children: <Widget>[
+          Container(
+            width: 72,
+            height: 72,
+            decoration: const BoxDecoration(color: Color(0xFFFFF1E6), shape: BoxShape.circle),
+            child: const Icon(Icons.wifi_off, size: 32, color: Color(0xFFB4500B)),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            '${kind.tabTitle} could not be loaded',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'This is usually a weak connection, and your $what are safe. '
+            'Check your connection and try again.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 48), padding: const EdgeInsets.symmetric(horizontal: 28)),
+            onPressed: () => unawaited(onRetry()),
+            child: const Text('Try again'),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            'Still stuck? Sign out and back in from Profile. Details: ${failure.message}',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The three-step guide at the top of each tab, as in the redesign. Open
+/// for a first-time visitor, hidden (one tap to bring back) once there is
+/// something to look at. [compact] is the one-paragraph version shown under
+/// a load error.
 class _HowItWorksCard extends StatelessWidget {
-  const _HowItWorksCard({required this.kind, required this.open, required this.onToggle});
+  const _HowItWorksCard({
+    required this.kind,
+    required this.open,
+    required this.onToggle,
+    this.compact = false,
+  });
 
   final SessionKind kind;
   final bool open;
   final VoidCallback onToggle;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final List<(String, String)> steps = kind.guideSteps;
+    final Widget icon = Icon(Icons.help_outline, size: 20, color: theme.colorScheme.primary);
+    if (compact) {
+      return AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(children: <Widget>[
+              icon,
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text('While you wait: ${kind.guideTitle.toLowerCase()}',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              ),
+            ]),
+            const SizedBox(height: AppSpacing.sm),
+            for (int i = 0; i < steps.length; i++)
+              Text.rich(
+                TextSpan(children: <InlineSpan>[
+                  TextSpan(text: '${i + 1} ${steps[i].$1} ', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  TextSpan(text: steps[i].$2),
+                ]),
+                style: theme.textTheme.bodyMedium,
+              ),
+          ],
+        ),
+      );
+    }
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Semantics(
-            button: true,
-            expanded: open,
-            label: kind.guideTitle,
-            child: InkWell(
-              onTap: onToggle,
-              borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 44),
-                child: Row(
-                  children: <Widget>[
-                    Icon(Icons.help_outline, size: 20, color: theme.colorScheme.primary),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(child: ExcludeSemantics(child: Text(kind.guideTitle, style: theme.textTheme.titleMedium))),
-                    Icon(open ? Icons.expand_less : Icons.expand_more),
-                  ],
-                ),
+          Row(
+            children: <Widget>[
+              icon,
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(kind.guideTitle,
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, fontSize: 16)),
               ),
-            ),
+              TextButton(
+                style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+                onPressed: onToggle,
+                child: Text(open ? 'Hide' : 'Show'),
+              ),
+            ],
           ),
           if (open) ...<Widget>[
-            const SizedBox(height: AppSpacing.sm),
+            const SizedBox(height: AppSpacing.xs),
             for (int i = 0; i < steps.length; i++)
               Padding(
                 padding: const EdgeInsets.only(bottom: AppSpacing.md),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    CircleAvatar(
-                      radius: 13,
-                      backgroundColor: theme.colorScheme.primaryContainer,
+                    Container(
+                      width: 28,
+                      height: 28,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(color: theme.colorScheme.primaryContainer, shape: BoxShape.circle),
                       child: Text(
                         '${i + 1}',
-                        style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.onPrimaryContainer),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                     const SizedBox(width: AppSpacing.md),
@@ -400,15 +615,15 @@ class _HowItWorksCard extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          Text(steps[i].$1, style: theme.textTheme.titleSmall),
-                          Text(steps[i].$2, style: theme.textTheme.bodyMedium),
+                          Text(steps[i].$1, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+                          Text(steps[i].$2,
+                              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                         ],
                       ),
                     ),
                   ],
                 ),
               ),
-            Text(kind.otherTabHint, style: theme.textTheme.bodySmall),
           ],
         ],
       ),
@@ -953,6 +1168,10 @@ class _MatchResultBodyState extends State<_MatchResultBody> {
   final GlobalKey _ralliesKey = GlobalKey();
   final GlobalKey _lineCallsKey = GlobalKey();
   final GlobalKey _courtLinesKey = GlobalKey();
+  final GlobalKey _coachingKey = GlobalKey();
+
+  /// The "How to read this page" card, until "Got it".
+  bool _guideOpen = true;
 
   void _jumpTo(GlobalKey key) {
     final BuildContext? target = key.currentContext;
@@ -984,25 +1203,15 @@ class _MatchResultBodyState extends State<_MatchResultBody> {
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        if (tracked) ...<Widget>[
-          // One-line orientation, then a way to jump straight to a section.
-          Text(
-            match.kind == SessionKind.rally
-                ? 'Your coaching comes first, then the numbers behind it. Tap a section to jump to it.'
-                : 'Everything we measured from your video. Tap a section to jump to it.',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.xs,
-            children: <Widget>[
-              ActionChip(label: const Text('Shot map'), onPressed: () => _jumpTo(_shotMapKey)),
-              ActionChip(label: const Text('Rallies'), onPressed: () => _jumpTo(_ralliesKey)),
-              if (called.isNotEmpty)
-                ActionChip(label: const Text('Line calls'), onPressed: () => _jumpTo(_lineCallsKey)),
-              if (picture != null)
-                ActionChip(label: const Text('Court lines'), onPressed: () => _jumpTo(_courtLinesKey)),
+        if (tracked && _guideOpen) ...<Widget>[
+          _ReadThisPageCard(
+            onDismiss: () => setState(() => _guideOpen = false),
+            jumps: <(String, VoidCallback)>[
+              ('Shot map', () => _jumpTo(_shotMapKey)),
+              ('Rallies', () => _jumpTo(_ralliesKey)),
+              if (match.feedback != null) ('Coaching', () => _jumpTo(_coachingKey)),
+              if (called.isNotEmpty) ('Line calls', () => _jumpTo(_lineCallsKey)),
+              if (picture != null) ('Court lines', () => _jumpTo(_courtLinesKey)),
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -1026,18 +1235,10 @@ class _MatchResultBodyState extends State<_MatchResultBody> {
             CourtCheckCard(check: match.courtCheck!, picture: null),
             const SizedBox(height: AppSpacing.xl),
           ],
-          if (match.feedback != null) ...<Widget>[
-            CoachingSummaryCard(feedback: match.feedback!),
-            const SizedBox(height: AppSpacing.xl),
-          ],
           if (stats != null) ...<Widget>[
-            _StatsGrid(stats: stats),
+            _TwoTiles(stats: stats),
             const SizedBox(height: AppSpacing.sm),
-            Text(
-              'In: of the shots we could call, how many landed inside the lines. '
-              'Deep: how many landed in the deep zone, close to the baseline.',
-              style: theme.textTheme.bodySmall,
-            ),
+            const _Caption('Shots in: of the shots we could call, how many landed inside the lines.'),
           ],
           if (cameraUnverified || result.status == CourtSessionStatus.partial) ...<Widget>[
             const SizedBox(height: AppSpacing.md),
@@ -1052,34 +1253,34 @@ class _MatchResultBodyState extends State<_MatchResultBody> {
             ),
           ],
           const SizedBox(height: AppSpacing.xl),
-          SectionHeader(key: _shotMapKey, title: 'Shot map'),
-          Text(
-            'Each dot is a place a ball bounced, seen from above. Use the filter chips to look at '
-            'your shots, your opponent’s, serves or a type of line call.',
-            style: theme.textTheme.bodySmall,
-          ),
+          _Title(key: _shotMapKey, text: 'Shot map'),
+          const _Caption('Each dot is a place a ball bounced, seen from above. Use the filter chips to '
+              'look at your shots, your opponent’s, serves or a type of line call.'),
           const SizedBox(height: AppSpacing.sm),
           if (result.landings.isEmpty)
             Text('No bounces were found in this video.', style: theme.textTheme.bodyMedium)
           else
-            CourtMap(landings: result.landings),
+            AppCard(child: CourtMap(landings: result.landings)),
           const SizedBox(height: AppSpacing.xl),
-          SectionHeader(key: _ralliesKey, title: 'Rallies'),
-          Text(
-            'A rally is a run of shots until the point ends. Each row shows when it started, '
-            'how long it was and how it ended.',
-            style: theme.textTheme.bodySmall,
-          ),
+          _Title(key: _ralliesKey, text: 'Rallies'),
+          const _Caption('A rally is a run of shots until the point ends. Each bar is one rally, and '
+              'taller means more shots.'),
           const SizedBox(height: AppSpacing.sm),
-          RallyTimeline(rallies: result.rallies),
+          if (stats != null) ...<Widget>[
+            _ThreeTiles(stats: stats),
+            const SizedBox(height: AppSpacing.md),
+          ],
+          AppCard(child: RallyTimeline(rallies: result.rallies)),
+          if (match.feedback != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.xl),
+            _Title(key: _coachingKey, text: 'Coaching'),
+            CoachingSummaryCard(feedback: match.feedback!),
+          ],
           if (called.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppSpacing.xl),
-            SectionHeader(key: _lineCallsKey, title: 'Closest line calls'),
-            Text(
-              'The balls that landed nearest a line, closest first. The distance is how far '
-              'inside or beyond the line the ball came down.',
-              style: theme.textTheme.bodySmall,
-            ),
+            _Title(key: _lineCallsKey, text: 'Closest line calls'),
+            const _Caption('The balls that landed nearest a line, closest first. The distance is how '
+                'far inside or beyond the line the ball came down.'),
             const SizedBox(height: AppSpacing.sm),
             for (final ShotLanding landing in called.take(10))
               Padding(
@@ -1090,7 +1291,7 @@ class _MatchResultBodyState extends State<_MatchResultBody> {
         ],
         if (picture != null) ...<Widget>[
           const SizedBox(height: AppSpacing.xl),
-          SectionHeader(key: _courtLinesKey, title: 'Court lines we used'),
+          _Title(key: _courtLinesKey, text: 'Court lines we used'),
           const SizedBox(height: AppSpacing.sm),
           FutureBuilder<ApiResult<Uint8List>>(
             future: picture,
@@ -1186,47 +1387,217 @@ class CoachingSummaryCard extends StatelessWidget {
   }
 }
 
-class _StatsGrid extends StatelessWidget {
-  const _StatsGrid({required this.stats});
+/// The redesign's "How to read this page" card: a green-tinted note with
+/// jump buttons, dismissed with "Got it".
+class _ReadThisPageCard extends StatelessWidget {
+  const _ReadThisPageCard({required this.onDismiss, required this.jumps});
+
+  final VoidCallback onDismiss;
+  final List<(String, VoidCallback)> jumps;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 8, 8, 18),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  'How to read this page',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, fontSize: 15),
+                ),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+                onPressed: onDismiss,
+                child: const Text('Got it'),
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: Text(
+              'Everything here comes from your video. Start with the numbers, look at the shot '
+              'map, then check your rallies. Tap a section below to jump to it.',
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final (String label, VoidCallback go) in jumps)
+                Material(
+                  color: theme.colorScheme.surfaceContainerLowest,
+                  shape: const StadiumBorder(),
+                  child: InkWell(
+                    customBorder: const StadiumBorder(),
+                    onTap: go,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 44),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Text(
+                          label,
+                          style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A section title, as the redesign sets them.
+class _Title extends StatelessWidget {
+  const _Title({super.key, required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+        child: Text(
+          text,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+      );
+}
+
+/// The small grey explanation under a section title.
+class _Caption extends StatelessWidget {
+  const _Caption(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text(
+        text,
+        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+/// One stat tile: an upper-case label, a big number, an optional note.
+class _Tile extends StatelessWidget {
+  const _Tile({required this.label, required this.value, this.note});
+
+  final String label;
+  final String value;
+  final String? note;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            label.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              fontFeatures: kTabularFigures,
+            ),
+          ),
+          if (note != null)
+            Text(
+              note!,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Shots in" and "Deep shots", side by side.
+class _TwoTiles extends StatelessWidget {
+  const _TwoTiles({required this.stats});
 
   final MatchStats stats;
 
   @override
   Widget build(BuildContext context) {
-    final List<(String, String)> tiles = <(String, String)>[
-      ('Rallies', '${stats.rallies}'),
-      ('Longest rally', stats.longestRallyHits == null ? '—' : '${stats.longestRallyHits} shots'),
-      ('Average rally', stats.averageRallyHits == null ? '—' : '${stats.averageRallyHits!.toStringAsFixed(1)} shots'),
-      ('Shots landed', '${stats.shotsLanded}'),
-      ('In', _percent(stats.inPercent)),
-      ('Deep', _percent(stats.deepPercent)),
-    ];
-    final ThemeData theme = Theme.of(context);
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final int columns = constraints.maxWidth >= 520 ? 3 : 2;
-        final double width = (constraints.maxWidth - AppSpacing.md * (columns - 1)) / columns;
-        return Wrap(
-          spacing: AppSpacing.md,
-          runSpacing: AppSpacing.md,
-          children: <Widget>[
-            for (final (String label, String value) in tiles)
-              SizedBox(
-                width: width,
-                child: AppCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(label, style: theme.textTheme.bodySmall),
-                      const SizedBox(height: AppSpacing.xs),
-                      Text(value, style: theme.textTheme.titleLarge),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
+    final int called = stats.inCount + stats.outCount;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Expanded(
+          child: _Tile(
+            label: 'Shots in',
+            value: _percent(stats.inPercent),
+            note: called == 0 ? 'none called' : '${stats.inCount} of $called',
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _Tile(
+            label: 'Deep shots',
+            value: _percent(stats.deepPercent),
+            note: 'landed close to the baseline',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Rallies, longest and average, in a row of three.
+class _ThreeTiles extends StatelessWidget {
+  const _ThreeTiles({required this.stats});
+
+  final MatchStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Expanded(child: _Tile(label: 'Rallies', value: '${stats.rallies}')),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _Tile(
+            label: 'Longest',
+            value: stats.longestRallyHits == null ? '—' : '${stats.longestRallyHits}',
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _Tile(
+            label: 'Average',
+            value: stats.averageRallyHits == null ? '—' : stats.averageRallyHits!.toStringAsFixed(1),
+          ),
+        ),
+      ],
     );
   }
 }
