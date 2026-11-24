@@ -4,14 +4,16 @@ import 'package:flutter/material.dart';
 
 import '../models/analysis_response.dart';
 import '../models/ball_speed.dart';
-import '../models/chart_data.dart';
 import '../models/coaching_feedback.dart';
 import '../models/enums.dart';
 import '../models/metric_score.dart';
 import '../models/swing_coaching.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_card.dart';
+import '../widgets/category_bars.dart';
 import '../widgets/coaching_list.dart';
 import '../widgets/content_width.dart';
-import '../widgets/skill_radar.dart';
+import '../widgets/score_ring.dart';
 
 /// Renders one finished analysis.
 class ResultsScreen extends StatelessWidget {
@@ -71,6 +73,10 @@ class ResultsScreen extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                 child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
                   // The analysing screen replaced itself with this one, so a
                   // pop lands on the record screen it came from.
                   onPressed: () => Navigator.of(context).maybePop(),
@@ -100,9 +106,19 @@ class ResultsScreen extends StatelessWidget {
               _MismatchNote(analysis: analysis),
               const SizedBox(height: 16),
             ],
-            // What went wrong and how to fix it leads: each item is the
-            // change, the measured gap, and a drill. All from the fixed rule
-            // table, so it is here whether or not the AI feedback arrived.
+            // The redesign's order: the numbers first (speed), then the
+            // coach's summary and the breakdown of the score, then what to
+            // work on with drills, then what is working.
+            ..._buildBallSpeed(context),
+            if (feedback != null && feedback.summary.isNotEmpty) ...<Widget>[
+              _SectionCard(
+                title: 'Coach summary',
+                child: Text(feedback.summary, style: Theme.of(context).textTheme.bodyLarge),
+              ),
+              const SizedBox(height: 16),
+            ],
+            _CategoriesSection(analysis: analysis),
+            if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
             if (fixes.isNotEmpty) ...<Widget>[
               _SectionCard(
                 title: kWorkOnTitle,
@@ -129,14 +145,6 @@ class ResultsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
             ],
-            if (feedback != null && feedback.summary.isNotEmpty) ...<Widget>[
-              _SectionCard(
-                title: 'Coach summary',
-                child: Text(feedback.summary),
-              ),
-              const SizedBox(height: 16),
-            ],
-            ..._buildBallSpeed(context),
             // A strength is said once. When the swing notes already praise
             // something, they are the source: deterministic, tied to a
             // measured number, and never a template fallback. The AI's own
@@ -164,14 +172,6 @@ class ResultsScreen extends StatelessWidget {
                 ),
               ),
             ],
-            // Category summary first, individual metrics after: the categories
-            // are the breakdown of the overall score shown in the header above,
-            // so they read as the "why" of that number, and the metric list
-            // below is the detail behind them. It does not replace the metric
-            // list. The metric list itself is closed by default: its raw
-            // torso-unit figures are for advanced players, not a beginner.
-            _CategoriesSection(analysis: analysis),
-            if (analysis.categories.isNotEmpty) const SizedBox(height: 16),
             // Unscored metrics are left out by buildCoaching, so an older
             // backend's verdict and band for them are never shown.
             _MetricsSection(items: coaching),
@@ -376,74 +376,77 @@ class _ShotHeader extends StatelessWidget {
     final double? score = analysis.overallScore;
     final bool noShotScoring = showsNoShotSpecificScoring(analysis);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
+    Widget chip(String text, {required bool strong}) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: strong ? theme.colorScheme.primaryContainer : theme.colorScheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: strong ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
+              fontWeight: strong ? FontWeight.w700 : FontWeight.w600,
+            ),
+          ),
+        );
+
+    return AppCard(
+      padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
+      child: Column(
+        children: <Widget>[
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 6,
+            runSpacing: 6,
+            children: <Widget>[
+              chip(analysis.shotType.label, strong: true),
+              if (provenance != null) chip(provenance, strong: false),
+            ],
+          ),
+          if (score != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            ScoreRing(
+              score: score,
+              label: 'overall',
+              size: 150,
+              arcColor: CategoryBars.barGreen,
+            ),
+          ],
+          // Said in words rather than left blank. An existing score is
+          // never hidden: when there is one, a second line says what it
+          // was measured against.
+          if (noShotScoring) ...<Widget>[
+            const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
+                Icon(Icons.info_outline,
+                    size: 18, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(analysis.shotType.label,
-                          style: theme.textTheme.headlineSmall),
-                      if (provenance != null) ...<Widget>[
+                      Text(kNoShotSpecificScoringMessage,
+                          style: theme.textTheme.bodyMedium),
+                      if (score != null) ...<Widget>[
                         const SizedBox(height: 4),
-                        Text(provenance, style: theme.textTheme.bodySmall),
+                        Text(
+                          kGenericScoreMessage,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
                       ],
                     ],
                   ),
                 ),
-                if (score != null) ...<Widget>[
-                  const SizedBox(width: 12),
-                  Column(
-                    children: <Widget>[
-                      Text(score.round().toString(),
-                          style: theme.textTheme.headlineMedium),
-                      Text('overall', style: theme.textTheme.bodySmall),
-                    ],
-                  ),
-                ],
               ],
             ),
-            // Said in words rather than left blank. An existing score is
-            // never hidden: when there is one, a second line says what it
-            // was measured against.
-            if (noShotScoring) ...<Widget>[
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Icon(Icons.info_outline,
-                      size: 18, color: theme.colorScheme.onSurfaceVariant),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(kNoShotSpecificScoringMessage,
-                            style: theme.textTheme.bodyMedium),
-                        if (score != null) ...<Widget>[
-                          const SizedBox(height: 4),
-                          Text(
-                            kGenericScoreMessage,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
           ],
-        ),
+        ],
       ),
     );
   }
@@ -637,65 +640,11 @@ class _CategoriesSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final List<CategoryScore> categories = analysis.categories;
     if (categories.isEmpty) return const SizedBox.shrink();
-    // This one swing's shape. A single series, so no legend: the card title
-    // names it. The rows below are its exact numbers.
-    final SkillProfile? profile = buildSkillProfile(analysis);
+    // The redesign's bars: green, the weakest in orange. Exact numbers on
+    // each row; every measurement is in "All measurements" below.
     return _SectionCard(
       title: 'Score breakdown',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          if (profile != null) ...<Widget>[
-            SkillRadar(profile: profile),
-            const Divider(height: 24),
-          ],
-          for (int i = 0; i < categories.length; i++) ...<Widget>[
-            if (i > 0) const Divider(height: 24),
-            _CategoryRow(category: categories[i]),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _CategoryRow extends StatelessWidget {
-  const _CategoryRow({required this.category});
-
-  final CategoryScore category;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Expanded(
-              child: Text(category.displayName,
-                  style: theme.textTheme.titleSmall),
-            ),
-            const SizedBox(width: 12),
-            // An unmeasured category says so. It is never shown as 0, which
-            // would read as a score the user earned. Flexible, as in
-            // [_MetricRow], so "not measured" wraps instead of overflowing a
-            // narrow phone at large text.
-            Flexible(
-              child: Text(
-                category.displayScore,
-                textAlign: TextAlign.end,
-                style: category.isMeasured
-                    ? theme.textTheme.titleSmall
-                    : theme.textTheme.bodySmall,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(category.displayCoverage, style: theme.textTheme.bodySmall),
-      ],
+      child: CategoryBars(categories: categories),
     );
   }
 }
@@ -922,18 +871,15 @@ class _SectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(title, style: theme.textTheme.titleMedium),
-            const SizedBox(height: 10),
-            child,
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+          child: Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
         ),
-      ),
+        AppCard(padding: const EdgeInsets.all(18), child: child),
+      ],
     );
   }
 }

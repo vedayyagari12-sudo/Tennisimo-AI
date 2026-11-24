@@ -267,7 +267,7 @@ void main() {
           'ideal_max': 160.0,
         };
 
-    testWidgets('what to work on sits directly under the score header',
+    testWidgets('the sections follow the redesign: summary, breakdown, fixes',
         (WidgetTester tester) async {
       _tallView(tester);
       // Tall enough that the lazy list builds every section.
@@ -286,9 +286,10 @@ void main() {
       final double summary = tester.getTopLeft(find.text('Coach summary')).dy;
       final double breakdown =
           tester.getTopLeft(find.text('Score breakdown')).dy;
-      expect(header, lessThan(notes));
-      expect(notes, lessThan(summary));
+      // The redesign's order: score, coach summary, breakdown, then fixes.
+      expect(header, lessThan(summary));
       expect(summary, lessThan(breakdown));
+      expect(breakdown, lessThan(notes));
     });
 
     testWidgets('measured praise replaces the AI strengths',
