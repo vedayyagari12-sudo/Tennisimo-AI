@@ -141,6 +141,12 @@ class CameraMotionSampler:
         small = resize_to_long_edge(frame_bgr, self._analysis_long_edge_px)
         return np.asarray(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), dtype=np.uint8)
 
+    def wants(self, time_s: float) -> bool:
+        """True when ``add`` would use a frame at ``time_s``: it is the
+        reference, or its time has reached the next sample target. Lets a
+        caller skip converting the frames that are not measured."""
+        return self._reference is None or time_s >= self._start_s + self._next_index * self._interval_s
+
     def add(self, time_s: float, frame_bgr: U8Array) -> None:
         if self._reference is None:
             self._reference = self._small_gray(frame_bgr)

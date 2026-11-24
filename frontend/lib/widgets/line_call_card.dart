@@ -14,10 +14,21 @@ String centimetres(double metres) {
 /// uncertainty about 59 cm." Null when no call was made.
 String? lineCallSentence(LineCall? call) {
   if (call == null) return null;
+  // Too close to call although the ball was well clear of the line: the call
+  // was withheld because the bounce itself was not seen clearly, so quoting a
+  // distance would contradict the verdict.
+  if (call.verdict == LineVerdict.tooCloseToCall && call.signedMarginM.abs() > call.uncertaintyRadiusM) {
+    return kUnclearBounceText;
+  }
   final String side = call.signedMarginM >= 0 ? 'inside' : 'beyond';
   return 'About ${centimetres(call.signedMarginM)} $side the line, '
       'uncertainty about ${centimetres(call.uncertaintyRadiusM)}.';
 }
+
+/// Shown for a too-close call that distance does not explain.
+const String kUnclearBounceText =
+    'Not called in or out: the bounce was not clear enough in the video to judge, '
+    'even though it landed well away from the line.';
 
 const String kNoCallText =
     'No line call. Tap at least 8 court points when you set up to get in or out calls.';

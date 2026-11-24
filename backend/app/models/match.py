@@ -25,11 +25,33 @@ CalibrationSource = Literal["taps", "auto"]
 #: "match": shot map, calls and rallies. "rally": the same numbers plus an
 #: overall coaching summary that Gemini writes from them (text only).
 SessionKind = Literal["match", "rally"]
+#: What a running job is doing, for the progress bar: getting the video ready,
+#: finding the court lines, following the ball, following the players, writing
+#: the result.
+MatchStage = Literal["preparing", "court", "ball", "players", "finishing"]
 
 #: A match video may run this long (owner, 2026-11-09).
 MAX_MATCH_SECONDS: Final[float] = 300.0
 #: At most this many uploaded pieces (``requests.MATCH_MAX_PARTS``).
 MAX_MATCH_PARTS: Final[int] = 12
+
+
+class CourtCheck(BaseModel):
+    """How far the court calibration can be trusted, and why. Written as soon
+    as the court is found, long before the analysis ends, so the player can
+    look at the lines and stop a rally that would be wasted."""
+
+    confidence: Literal["good", "check", "poor"]
+    source: CalibrationSource
+    #: Share of the court lines that matched the picture (automatic only).
+    support: float | None = Field(default=None, ge=0.0, le=1.0)
+    lines_visible: int | None = Field(default=None, ge=0)
+    #: How many of the four doubles-court corners are inside the picture.
+    corners_in_frame: int = Field(ge=0, le=4)
+    #: Why it is not "good": ``court_cut_off``, ``few_lines``, ``weak_match``,
+    #: ``calls_off``, ``tap_error``.
+    reasons: list[str] = Field(default_factory=list)
+    calls_allowed: bool
 
 
 class CreateMatchRequest(BaseModel):
@@ -74,6 +96,10 @@ class MatchSummary(BaseModel):
     kind: SessionKind = "match"
     court_format: CourtFormat
     progress: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: While running: the step it is on, and seconds left at the rate so far
+    #: (null until there is enough progress to estimate from).
+    stage: MatchStage | None = None
+    eta_s: float | None = Field(default=None, ge=0.0)
     error_code: ErrorCode | None = None
     error_message: str | None = None
     court_status: str | None = None
@@ -87,7 +113,10 @@ class MatchRecord(MatchSummary):
 
     calibration_source: CalibrationSource | None = None
     #: A picture of the court lines that were used (``GET .../court.jpg``).
+    #: Available while the job runs, as soon as the court is found.
     has_court_picture: bool = False
+    #: Whether those lines can be trusted; same timing as the picture.
+    court_check: CourtCheck | None = None
     #: Seconds of video the engine analysed.
     duration_s: float | None = Field(default=None, ge=0.0)
     result: CourtAnalysisResponse | None = None
@@ -106,10 +135,12 @@ class MatchListResponse(BaseModel):
 
 __all__ = [
     "CalibrationSource",
+    "CourtCheck",
     "CreateMatchRequest",
     "MAX_MATCH_SECONDS",
     "MatchListResponse",
     "MatchRecord",
+    "MatchStage",
     "MatchStats",
     "MatchStatus",
     "MatchSummary",

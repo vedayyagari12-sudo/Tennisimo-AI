@@ -11,11 +11,10 @@ ball hit into that evidence.
 How the player is found and followed
 ------------------------------------
 * **Identity comes from the court, not from appearance.** The camera is
-  fixed and the court is calibrated, so each player is the person standing in
-  their own half. ``services/player_tracking.py`` runs pose on a crop of each
-  half, and drops any detection whose feet are not on that side of the net
-  (a spectator, a player on the next court). No re-identification is needed
-  because the two players never swap halves between hits.
+  fixed and the court is calibrated, so the hitter's end is the half of the
+  court their FEET stand on (feet are on the ground, which the homography
+  maps). ``services/player_tracking.py`` runs pose on a small crop around the
+  ball at each hit, so no re-identification is needed.
 * **The hitter is the player whose wrist was at the ball.** At a ball hit the
   hitting wrist and the ball are in the same place. ``contact_candidate`` takes
   the wrist trajectory around the hit, requires a real swing (wrist speed in
@@ -312,16 +311,6 @@ def pose_hit_from_contact(
     )
 
 
-def on_players_side(end: CourtEnd, ground_xy_m: tuple[float, float] | None, slack_m: float = 1.0) -> bool:
-    """A detection is this end's player only when the feet are on that side of
-    the net (court y > 0 is the far half), with ``slack_m`` for a step over
-    the line. No feet means no evidence against, so it is allowed."""
-    if ground_xy_m is None:
-        return True
-    along = ground_xy_m[1]
-    return along >= -slack_m if end is CourtEnd.FAR else along <= slack_m
-
-
 __all__ = [
     "CONTACT_WINDOW_S",
     "Contact",
@@ -333,7 +322,6 @@ __all__ = [
     "estimate_handedness",
     "feet_point",
     "lateral_offset",
-    "on_players_side",
     "pose_hit_from_contact",
     "torso_px",
 ]

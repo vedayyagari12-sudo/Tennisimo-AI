@@ -59,13 +59,79 @@ String _matchTitle(MatchRecord match) {
   return '${match.kind.noun}, ${at.day} ${months[at.month - 1]}';
 }
 
+/// The headline for the step a running job is on.
+String stageTitle(MatchStage? stage) {
+  switch (stage) {
+    case MatchStage.preparing:
+      return 'Getting your video ready';
+    case MatchStage.court:
+      return 'Finding the court lines';
+    case MatchStage.ball:
+      return 'Tracking the ball';
+    case MatchStage.players:
+      return 'Following the players';
+    case MatchStage.finishing:
+      return 'Writing your result';
+    case null:
+      return 'Tracking the ball';
+  }
+}
+
+/// The headline over the court-lines picture.
+String courtCheckHeadline(CourtCheck check) {
+  switch (check.confidence) {
+    case CourtConfidence.check:
+      return 'Check the court lines';
+    case CourtConfidence.poor:
+      return 'We’re not sure about the court lines';
+    case CourtConfidence.good:
+    case CourtConfidence.unknown:
+      return 'Court lines found';
+  }
+}
+
+/// One reason from the server, as a sentence a player can act on.
+String courtReasonText(String code) {
+  switch (code) {
+    case 'court_cut_off':
+      return 'Part of the court is outside the picture, so shots near that edge may be placed wrongly.';
+    case 'few_lines':
+      return 'Only a few court lines were clear in the picture.';
+    case 'weak_match':
+      return 'The lines we drew fit the picture only partly.';
+    case 'calls_off':
+      return 'In and out calls are switched off for this video.';
+    case 'tap_error':
+      return 'The court points you tapped do not agree with each other.';
+    default:
+      return code;
+  }
+}
+
+/// What to do about it. Worded so that nobody wastes a rally on a wrong court.
+String courtCheckAdvice(CourtCheck check) => check.needsAttention
+    ? 'Look closely at the yellow lines. If they are not on the real court lines, '
+        'stop now and film again with the whole court in view.'
+    : 'If the yellow lines sit on the real court lines, you’re set. '
+        'If they do not, stop now and film again.';
+
+/// "About 3 min left", or null when there is no estimate yet. The estimate is
+/// the server's rate so far, so it is worded as rough.
+String? etaText(double? seconds) {
+  if (seconds == null || !seconds.isFinite) return null;
+  if (seconds < 45) return 'Less than a minute left';
+  final int minutes = (seconds / 60).ceil();
+  return 'About $minutes min left';
+}
+
 String _statusLine(MatchRecord match) {
   switch (match.status) {
     case MatchStatus.queued:
       return 'Waiting to start…';
     case MatchStatus.running:
       final double? p = match.progress;
-      return p == null ? 'Tracking the ball…' : 'Tracking the ball… ${(p * 100).round()}%';
+      final String title = stageTitle(match.stage);
+      return p == null ? '$title…' : '$title… ${(p * 100).round()}%';
     case MatchStatus.failed:
       return match.errorMessage ?? 'This video could not be analysed.';
     case MatchStatus.complete:
@@ -316,7 +382,8 @@ class _NewMatchScreenState extends State<NewMatchScreen> {
                     'No tripod needed: lean it on the fence, a bag or a bottle. It just has to stay still.',
                     'Record with your normal camera app at 720p, then choose the video here.',
                     'Up to 5 minutes (450 MB). The video is deleted as soon as it has been analysed.',
-                    'We find the court lines ourselves and show you the ones we used.',
+                    'About half a minute after you upload, we show the court lines we found. '
+                        'If they are not on the real lines you can stop right away and film again.',
                     if (widget.kind == SessionKind.rally)
                       'Keep the ball going: the more bounces we see, the more the coaching can say.',
                   ])
@@ -379,11 +446,15 @@ class MatchResultScreen extends StatefulWidget {
     required this.matchId,
     this.loader = fetchMatch,
     this.pictureLoader = fetchMatchCourtPicture,
+    this.deleter = deleteMatch,
   });
 
   final String matchId;
   final Future<ApiResult<MatchRecord>> Function(String matchId) loader;
   final Future<ApiResult<Uint8List>> Function(String matchId) pictureLoader;
+
+  /// Deletes a finished match, or STOPS a running one.
+  final Future<ApiResult<void>> Function(String matchId) deleter;
 
   @override
   State<MatchResultScreen> createState() => _MatchResultScreenState();
@@ -394,6 +465,9 @@ class _MatchResultScreenState extends State<MatchResultScreen> {
   ApiFailure? _failure;
   Timer? _timer;
   Future<ApiResult<Uint8List>>? _picture;
+
+  /// The player said the court lines look right.
+  bool _linesConfirmed = false;
 
   @override
   void initState() {
@@ -436,12 +510,35 @@ class _MatchResultScreenState extends State<MatchResultScreen> {
       ),
     );
     if (sure != true || !mounted) return;
-    final ApiResult<void> deleted = await deleteMatch(widget.matchId);
+    final ApiResult<void> deleted = await widget.deleter(widget.matchId);
     if (!mounted) return;
     if (deleted.isOk) {
       Navigator.of(context).pop();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(deleted.failure!.message)));
+    }
+  }
+
+  /// Stop a running analysis: the video is deleted and nothing is kept.
+  Future<void> _stop() async {
+    final bool? sure = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Stop this analysis?'),
+        content: const Text('The video is deleted and nothing from it is kept. You can film and upload again.'),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep going')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Stop')),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final ApiResult<void> stopped = await widget.deleter(widget.matchId);
+    if (!mounted) return;
+    if (stopped.isOk) {
+      Navigator.of(context).pop();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(stopped.failure!.message)));
     }
   }
 
@@ -454,6 +551,8 @@ class _MatchResultScreenState extends State<MatchResultScreen> {
         actions: <Widget>[
           if (match != null && match.status.isFinished)
             IconButton(tooltip: 'Delete', onPressed: _delete, icon: const Icon(Icons.delete_outline)),
+          if (match != null && !match.status.isFinished)
+            TextButton(onPressed: _stop, child: const Text('Stop')),
         ],
       ),
       body: SafeArea(child: _body(context, match)),
@@ -461,7 +560,6 @@ class _MatchResultScreenState extends State<MatchResultScreen> {
   }
 
   Widget _body(BuildContext context, MatchRecord? match) {
-    final ThemeData theme = Theme.of(context);
     if (match == null) {
       if (_failure != null) {
         return EmptyState(
@@ -475,25 +573,32 @@ class _MatchResultScreenState extends State<MatchResultScreen> {
       return const Center(child: CircularProgressIndicator());
     }
     if (!match.status.isFinished) {
-      return Padding(
+      final CourtCheck? check = match.courtCheck;
+      return ListView(
         padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Icon(Icons.sports_tennis, size: 48),
-            const SizedBox(height: AppSpacing.lg),
-            Text(_statusLine(match), style: theme.textTheme.titleMedium, textAlign: TextAlign.center),
-            const SizedBox(height: AppSpacing.md),
-            LinearProgressIndicator(value: match.status == MatchStatus.running ? match.progress : null),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              'This takes about twice the length of the video. You can leave this screen: '
-              'it keeps going and shows up in ${match.kind.tabTitle}.',
-              style: theme.textTheme.bodySmall,
-              textAlign: TextAlign.center,
+        children: <Widget>[
+          if (check != null && !_linesConfirmed) ...<Widget>[
+            CourtCheckCard(
+              check: check,
+              picture: _picture,
+              onConfirm: () => setState(() => _linesConfirmed = true),
+              onStop: _stop,
             ),
-          ],
-        ),
+            const SizedBox(height: AppSpacing.xl),
+          ] else if (check != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Icon(Icons.check_circle, size: 18, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: AppSpacing.xs),
+                  const Text('You confirmed the court lines'),
+                ],
+              ),
+            ),
+          MatchProgressPanel(match: match),
+        ],
       );
     }
     if (match.status == MatchStatus.failed) {
@@ -506,6 +611,176 @@ class _MatchResultScreenState extends State<MatchResultScreen> {
     final CourtAnalysis? result = match.result;
     if (result == null) return const Center(child: Text('No result.'));
     return _MatchResultBody(match: match, result: result, picture: _picture);
+  }
+}
+
+/// The court lines found in the video, drawn on the first frame, with how far
+/// they can be trusted: shown within seconds of the court being found, so a
+/// rally with a wrong court is stopped before it is wasted.
+class CourtCheckCard extends StatelessWidget {
+  const CourtCheckCard({super.key, required this.check, required this.picture, this.onConfirm, this.onStop});
+
+  final CourtCheck check;
+  final Future<ApiResult<Uint8List>>? picture;
+
+  /// "Lines look right" and "Stop and film again"; both null for a read-only card.
+  final VoidCallback? onConfirm;
+  final VoidCallback? onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final IconData icon = check.needsAttention ? Icons.visibility : Icons.check_circle_outline;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                check.confidence == CourtConfidence.poor ? Icons.warning_amber_rounded : icon,
+                color: check.confidence == CourtConfidence.poor
+                    ? theme.colorScheme.error
+                    : theme.colorScheme.primary,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(child: Text(courtCheckHeadline(check), style: theme.textTheme.titleMedium)),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          if (picture != null)
+            FutureBuilder<ApiResult<Uint8List>>(
+              future: picture,
+              builder: (BuildContext context, AsyncSnapshot<ApiResult<Uint8List>> snapshot) {
+                final Uint8List? bytes = snapshot.data?.data;
+                if (bytes == null) {
+                  return snapshot.connectionState == ConnectionState.done
+                      ? const Text('The court picture could not be loaded.')
+                      : const SizedBox(height: 120, child: Center(child: CircularProgressIndicator()));
+                }
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
+                  child: Image.memory(bytes, fit: BoxFit.contain),
+                );
+              },
+            ),
+          for (final String reason in check.reasons)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text('•  '),
+                  Expanded(child: Text(courtReasonText(reason), style: theme.textTheme.bodyMedium)),
+                ],
+              ),
+            ),
+          const SizedBox(height: AppSpacing.md),
+          Text(courtCheckAdvice(check), style: theme.textTheme.bodyMedium),
+          if (onConfirm != null || onStop != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: <Widget>[
+                if (onConfirm != null) FilledButton(onPressed: onConfirm, child: const Text('Lines look right')),
+                if (onStop != null) OutlinedButton(onPressed: onStop, child: const Text('Stop and film again')),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A running job: the step it is on, a bar that moves with the real frames
+/// processed, the percentage and a rough time left.
+class MatchProgressPanel extends StatelessWidget {
+  const MatchProgressPanel({super.key, required this.match});
+
+  final MatchRecord match;
+
+  static const List<MatchStage> _steps = <MatchStage>[
+    MatchStage.preparing,
+    MatchStage.court,
+    MatchStage.ball,
+    MatchStage.players,
+    MatchStage.finishing,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool running = match.status == MatchStatus.running;
+    final double? progress = running ? match.progress : null;
+    final MatchStage? current = running ? match.stage : null;
+    final int currentIndex = current == null ? -1 : _steps.indexOf(current);
+    final String? left = running ? etaText(match.etaS) : null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        const Icon(Icons.sports_tennis, size: 48),
+        const SizedBox(height: AppSpacing.lg),
+        Text(
+          match.status == MatchStatus.queued ? 'Waiting to start' : stageTitle(current),
+          style: theme.textTheme.titleLarge,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            minHeight: 10,
+            value: progress,
+            semanticsLabel: 'Analysis progress',
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: <Widget>[
+            Text(progress == null ? '' : '${(progress * 100).round()}%', style: theme.textTheme.titleMedium),
+            const Spacer(),
+            if (left != null) Text(left, style: theme.textTheme.bodyMedium),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        for (int i = 0; i < _steps.length; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  i < currentIndex
+                      ? Icons.check_circle
+                      : i == currentIndex
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                  size: 20,
+                  color: i <= currentIndex ? theme.colorScheme.primary : theme.colorScheme.outline,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    stageTitle(_steps[i]),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: i == currentIndex ? FontWeight.w600 : FontWeight.w400,
+                      color: i > currentIndex ? theme.colorScheme.onSurfaceVariant : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: AppSpacing.lg),
+        Text(
+          'You can leave this screen: it keeps going and shows up in ${match.kind.tabTitle}.',
+          style: theme.textTheme.bodySmall,
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
   }
 }
 
@@ -544,6 +819,10 @@ class _MatchResultBody extends StatelessWidget {
             ),
           )
         else ...<Widget>[
+          if (match.courtCheck != null && match.courtCheck!.needsAttention) ...<Widget>[
+            CourtCheckCard(check: match.courtCheck!, picture: null),
+            const SizedBox(height: AppSpacing.xl),
+          ],
           if (match.feedback != null) ...<Widget>[
             CoachingSummaryCard(feedback: match.feedback!),
             const SizedBox(height: AppSpacing.xl),

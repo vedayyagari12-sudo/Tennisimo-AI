@@ -24,6 +24,9 @@ Map<String, dynamic> matchJson({
   String? errorMessage,
   String? kind,
   Map<String, dynamic>? feedback,
+  String? stage,
+  double? etaS,
+  Map<String, dynamic>? courtCheck,
 }) =>
     <String, dynamic>{
       'match_id': 'm-1',
@@ -53,6 +56,9 @@ Map<String, dynamic> matchJson({
       'duration_s': 42.0,
       'result': result,
       'kind': ?kind,
+      'stage': ?stage,
+      'eta_s': ?etaS,
+      'court_check': ?courtCheck,
       'feedback': ?feedback,
     };
 
@@ -141,6 +147,250 @@ void main() {
     test('the create body carries the piece count only when there are pieces', () {
       expect(createMatchBody(storagePath: 'p', courtFormat: 'singles', partCount: 3)['part_count'], 3);
       expect(createMatchBody(storagePath: 'p', courtFormat: 'singles').containsKey('part_count'), isFalse);
+    });
+  });
+
+
+  group('court check', () {
+    Map<String, dynamic> check(String confidence, {List<String> reasons = const <String>[]}) => <String, dynamic>{
+          'confidence': confidence,
+          'source': 'auto',
+          'support': 0.91,
+          'lines_visible': 9,
+          'corners_in_frame': confidence == 'good' ? 4 : 3,
+          'reasons': reasons,
+          'calls_allowed': true,
+        };
+
+    final Uint8List png = Uint8List.fromList(<int>[
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+      0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+      0x42, 0x60, 0x82,
+    ]);
+
+    test('the check parses; an unknown rating is not trusted as good', () {
+      final MatchRecord m = MatchRecord.fromJson(matchJson(
+        status: 'running',
+        progress: 0.3,
+        courtCheck: check('check', reasons: <String>['court_cut_off', 'weak_match']),
+      ));
+      expect(m.courtCheck!.confidence, CourtConfidence.check);
+      expect(m.courtCheck!.needsAttention, isTrue);
+      expect(m.courtCheck!.reasons, <String>['court_cut_off', 'weak_match']);
+      expect(m.courtCheck!.support, 0.91);
+      expect(m.courtCheck!.cornersInFrame, 3);
+      expect(MatchRecord.fromJson(matchJson()).courtCheck, isNull);
+      final CourtCheck? odd = CourtCheck.fromJsonOrNull(<String, dynamic>{'confidence': 'splendid', 'corners_in_frame': 4});
+      expect(odd!.confidence, CourtConfidence.unknown);
+      expect(odd.needsAttention, isTrue);
+    });
+
+    test('every reason and rating has words a player can act on', () {
+      for (final String code in <String>['court_cut_off', 'few_lines', 'weak_match', 'calls_off', 'tap_error']) {
+        expect(courtReasonText(code), isNot(code));
+        expect(courtReasonText(code).length, greaterThan(20));
+      }
+      final CourtCheck good = CourtCheck.fromJsonOrNull(check('good'))!;
+      final CourtCheck poor = CourtCheck.fromJsonOrNull(check('poor'))!;
+      expect(courtCheckHeadline(good), 'Court lines found');
+      expect(courtCheckHeadline(poor), 'We’re not sure about the court lines');
+      expect(courtCheckAdvice(good), contains('stop now and film again'));
+      expect(courtCheckAdvice(poor), contains('Look closely'));
+    });
+
+    testWidgets('a running job shows the court lines early, with advice and two choices',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(900, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(
+          status: 'running',
+          progress: 0.2,
+          stage: 'ball',
+          picture: true,
+          courtCheck: check('check', reasons: <String>['court_cut_off']),
+        )),
+        pictureLoader: (String _) async => ApiResult<Uint8List>.ok(png),
+        deleter: (String _) async => const ApiResult<void>.ok(null),
+      )));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('Check the court lines'), findsOneWidget);
+      expect(find.text(courtReasonText('court_cut_off')), findsOneWidget);
+      expect(find.textContaining('Look closely at the yellow lines'), findsOneWidget);
+      expect(find.text('Lines look right'), findsOneWidget);
+      expect(find.text('Stop and film again'), findsOneWidget);
+      // The progress is still shown under it.
+      expect(find.text('Tracking the ball'), findsWidgets);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('no card until the court is found', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(status: 'running', progress: 0.05, stage: 'court')),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pump();
+      expect(find.byType(CourtCheckCard), findsNothing);
+      expect(find.text('Finding the court lines'), findsWidgets);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('confirming the lines tucks the card away', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(900, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(status: 'running', progress: 0.2, stage: 'ball', courtCheck: check('good'))),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pump();
+      expect(find.text('Court lines found'), findsOneWidget);
+      await tester.tap(find.text('Lines look right'));
+      await tester.pump();
+      expect(find.byType(CourtCheckCard), findsNothing);
+      expect(find.text('You confirmed the court lines'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('stopping asks first, then deletes and leaves the screen', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(900, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final List<String> stopped = <String>[];
+      await tester.pumpWidget(_host(Builder(
+        builder: (BuildContext context) => Scaffold(
+          body: Center(
+            child: FilledButton(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (BuildContext context) => MatchResultScreen(
+                  matchId: 'm-1',
+                  loader: _fixed(matchJson(status: 'running', progress: 0.2, stage: 'ball', courtCheck: check('poor'))),
+                  pictureLoader: _noPicture,
+                  deleter: (String id) async {
+                    stopped.add(id);
+                    return const ApiResult<void>.ok(null);
+                  },
+                ),
+              )),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      )));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Stop and film again'));
+      await tester.pumpAndSettle();
+      expect(find.text('Stop this analysis?'), findsOneWidget);
+      expect(stopped, isEmpty); // nothing is stopped by the question alone
+      await tester.tap(find.text('Keep going'));
+      await tester.pumpAndSettle();
+      expect(stopped, isEmpty);
+      await tester.tap(find.text('Stop and film again'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
+      await tester.pumpAndSettle();
+      expect(stopped, <String>['m-1']);
+      expect(find.byType(MatchResultScreen), findsNothing); // back on the first screen
+      expect(find.text('open'), findsOneWidget);
+    });
+
+    testWidgets('the app bar can stop a running job at any time', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(status: 'running', progress: 0.05, stage: 'court')),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pump();
+      expect(find.widgetWithText(TextButton, 'Stop'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('a finished result warns when the lines were shaky, and not when they were good',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 3600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(
+          result: courtSessionJson(),
+          courtCheck: check('poor', reasons: <String>['weak_match', 'few_lines']),
+        )),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pumpAndSettle();
+      expect(find.text('We’re not sure about the court lines'), findsOneWidget);
+      expect(find.text(courtReasonText('few_lines')), findsOneWidget);
+      // A finished result has no stop or confirm buttons.
+      expect(find.text('Lines look right'), findsNothing);
+      expect(find.text('Stop and film again'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(result: courtSessionJson(), courtCheck: check('good'))),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pumpAndSettle();
+      expect(find.byType(CourtCheckCard), findsNothing);
+    });
+  });
+
+  group('progress', () {
+    test('the time left reads as rough and is absent without an estimate', () {
+      expect(etaText(null), isNull);
+      expect(etaText(double.nan), isNull);
+      expect(etaText(20), 'Less than a minute left');
+      expect(etaText(44), 'Less than a minute left');
+      expect(etaText(60), 'About 1 min left');
+      expect(etaText(61), 'About 2 min left');
+      expect(etaText(400), 'About 7 min left');
+    });
+
+    test('every stage has its own headline; an unknown one still reads', () {
+      expect(stageTitle(MatchStage.preparing), 'Getting your video ready');
+      expect(stageTitle(MatchStage.court), 'Finding the court lines');
+      expect(stageTitle(MatchStage.players), 'Following the players');
+      expect(stageTitle(MatchStage.finishing), 'Writing your result');
+      expect(stageTitle(null), 'Tracking the ball');
+      expect(MatchStage.fromJson('players'), MatchStage.players);
+      expect(MatchStage.fromJson('mystery'), isNull);
+    });
+
+    testWidgets('a running job shows the step, the percentage and the time left',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(status: 'running', progress: 0.62, stage: 'players', etaS: 95)),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pump();
+      expect(find.text('Following the players'), findsWidgets);
+      expect(find.text('62%'), findsOneWidget);
+      expect(find.text('About 2 min left'), findsOneWidget);
+      final LinearProgressIndicator bar = tester.widget(find.byType(LinearProgressIndicator));
+      expect(bar.value, 0.62);
+      expect(find.byIcon(Icons.check_circle), findsNWidgets(3)); // preparing, court and ball are done
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('with no estimate yet it says nothing about time', (WidgetTester tester) async {
+      await tester.pumpWidget(_host(MatchResultScreen(
+        matchId: 'm-1',
+        loader: _fixed(matchJson(status: 'running', progress: 0.1, stage: 'ball')),
+        pictureLoader: _noPicture,
+      )));
+      await tester.pump();
+      expect(find.textContaining('left'), findsNothing);
+      expect(find.text('10%'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
     });
   });
 
@@ -250,7 +500,8 @@ void main() {
         pictureLoader: _noPicture,
       )));
       await tester.pump();
-      expect(find.text('Tracking the ball… 45%'), findsOneWidget);
+      expect(find.text('Tracking the ball'), findsWidgets);
+      expect(find.text('45%'), findsOneWidget);
       expect(find.byType(LinearProgressIndicator), findsOneWidget);
       // Leave no poll timer behind.
       await tester.pumpWidget(const SizedBox());

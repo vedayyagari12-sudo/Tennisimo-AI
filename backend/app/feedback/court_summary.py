@@ -216,16 +216,31 @@ def render_court_prompt(payload: Mapping[str, Any]) -> str:
     )
 
 
+def _noun(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
 def court_template_summary(core: CourtFeedbackInput) -> str:
     """Deterministic text: only payload numbers, always marked as estimates."""
     calls = core.line_calls
-    parts = [
-        f"Estimated from {core.landings_counted} landings: {calls.in_} in, "
-        f"{calls.out} out and {calls.too_close} too close to call."
-    ]
+    landings = _noun(core.landings_counted, "landing", "landings")
+    if calls.in_ + calls.out + calls.too_close == 0:
+        # No call was made (the camera or the court could not be confirmed):
+        # "0 in, 0 out" would read as a measurement.
+        parts = [f"Estimated from {landings}. In and out calls were not made for this video."]
+    else:
+        parts = [
+            f"Estimated from {landings}: {calls.in_} in, "
+            f"{calls.out} out and {calls.too_close} too close to call."
+        ]
     if core.rally.rallies and core.rally.longest_hits is not None:
+        rallies = _noun(core.rally.rallies, "rally", "rallies")
+        hits = _noun(core.rally.longest_hits, "hit", "hits")
+        verb = "was" if core.rally.rallies > 1 else "lasted"
         parts.append(
-            f"{core.rally.rallies} rallies; the longest was {core.rally.longest_hits} hits."
+            f"{rallies}; the longest {verb} {hits}."
+            if core.rally.rallies > 1
+            else f"{rallies}, which lasted {hits}."
         )
     if core.data_quality == "limited":
         parts.append("These numbers are rougher than usual for this video.")

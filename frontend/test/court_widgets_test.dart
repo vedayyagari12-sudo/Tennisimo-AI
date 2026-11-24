@@ -235,6 +235,22 @@ void main() {
       expect((paint.painter! as CourtMapPainter).zones, isNotEmpty);
     });
 
+    test('a call withheld for an unclear bounce does not quote a misleading distance', () {
+      LineCall call(String verdict, double margin, double radius) => LineCall.fromJsonOrNull(<String, dynamic>{
+            'verdict': verdict,
+            'deciding_line': 'far_baseline',
+            'signed_margin_m': margin,
+            'normal_sigma_m': 0.1,
+            'uncertainty_radius_m': radius,
+            'flags': <String>['weak_bounce'],
+          })!;
+      expect(lineCallSentence(call('too_close_to_call', 5.4, 0.22)), kUnclearBounceText);
+      // Genuinely near the line: the distance is the explanation.
+      expect(lineCallSentence(call('too_close_to_call', 0.21, 0.59)), 'About 21 cm inside the line, uncertainty about 59 cm.');
+      // An ordinary in call keeps its distance.
+      expect(lineCallSentence(call('in', 0.8, 0.1)), 'About 80 cm inside the line, uncertainty about 10 cm.');
+    });
+
     testWidgets('has a semantic summary', (WidgetTester tester) async {
       final SemanticsHandle handle = tester.ensureSemantics();
       await tester.pumpWidget(_host(CourtMap(landings: _session.landings)));

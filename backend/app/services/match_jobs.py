@@ -40,20 +40,34 @@ from app.models.court import CourtAnalysisResponse, DepthZone, LineVerdict
 from app.models.enums import ErrorCode
 from app.models.match import (
     CalibrationSource,
+    CourtCheck,
     CreateMatchRequest,
     MatchRecord,
+    MatchStage,
     MatchStats,
     MatchSummary,
     SessionKind,
 )
 from app.models.responses import CoachingFeedback
+from app.services.job_cancel import JobCancelled
 from app.services.storage import ObjectHead
 
 logger = logging.getLogger("tennisform.matches")
 
 #: Queued plus running matches this process accepts before ``queue_full``.
 MAX_QUEUED_MATCHES: Final[int] = 3
-PROGRESS_WRITE_S: Final[float] = 10.0
+PROGRESS_WRITE_S: Final[float] = 3.0
+#: Share of the analysis that is the ball pass; the rest follows the players.
+#: Equal to ``court_offline.BALL_PASS_SHARE`` (a test keeps them in step).
+BALL_PASS_SHARE: Final[float] = 0.8
+#: Progress of the whole job: getting the video ready, then the analysis, then
+#: writing the result.
+PREPARE_SHARE: Final[float] = 0.05
+ANALYSIS_SHARE: Final[float] = 0.90
+#: No time estimate until this much of the ANALYSIS is done and it has been
+#: counting frames for this long.
+ETA_MIN_FRACTION: Final[float] = 0.08
+ETA_MIN_ELAPSED_S: Final[float] = 15.0
 STALE_AFTER_S: Final[float] = 180.0
 #: The list shows at most this many matches, newest first.
 MAX_LISTED: Final[int] = 50
@@ -80,7 +94,9 @@ class MatchStore(Protocol):
 
 #: (result, where the court came from, seconds analysed, court picture JPEG)
 AnalysisOutput = tuple[CourtAnalysisResponse, CalibrationSource | None, float | None, bytes | None]
-Analyzer = Callable[[Path, CreateMatchRequest, Callable[[float], None]], AnalysisOutput]
+#: ``on_court(check, picture)`` is called once, as soon as the court is found.
+CourtCallback = Callable[[Any, bytes], None]
+Analyzer = Callable[[Path, CreateMatchRequest, Callable[[float], None], CourtCallback | None], AnalysisOutput]
 #: Computed numbers in, coaching text out. Must not raise.
 Coach = Callable[[CourtAnalysisResponse], CoachingFeedback]
 
@@ -151,8 +167,27 @@ def is_stale(record: MatchRecord, *, now: datetime, active: bool) -> bool:
     )
 
 
+def analysis_progress(fraction: float, elapsed_s: float) -> tuple[float, MatchStage, float | None]:
+    """The record's progress, stage and seconds left, from the analysis's own
+    fraction (frames processed of frames in the video) and the seconds since it
+    STARTED COUNTING frames (not since the job began: finding the court lines
+    comes first, takes a fixed while, and would read as slow progress). PURE.
+    The estimate is the rate so far carried forward, so it is real but rough,
+    and it is None until there is enough to go on."""
+    clamped = min(max(fraction, 0.0), 1.0)
+    overall = PREPARE_SHARE + ANALYSIS_SHARE * clamped
+    stage: MatchStage = "ball" if clamped < BALL_PASS_SHARE else "players"
+    eta: float | None = None
+    if clamped >= ETA_MIN_FRACTION and elapsed_s >= ETA_MIN_ELAPSED_S:
+        eta = round(elapsed_s * (1.0 - clamped) / clamped / 5.0) * 5.0
+    return round(overall, 3), stage, eta
+
+
 def run_match_analysis(
-    video: Path, request: CreateMatchRequest, progress: Callable[[float], None]
+    video: Path,
+    request: CreateMatchRequest,
+    progress: Callable[[float], None],
+    on_court: CourtCallback | None = None,
 ) -> AnalysisOutput:
     """Decode and analyse one match video. Imported lazily: OpenCV and the
     court engine are not needed to serve a route."""
@@ -165,6 +200,9 @@ def run_match_analysis(
     inputs, result = analyze_court_video(
         video, request.calibration, court_format=request.court_format, progress=progress,
         track_players=True,
+        skip_without_court=True,
+        on_court=on_court,
+        trim_dead_time=True,
     )
     response = project_court_result(result, frame_size=inputs.track_size or (1, 1))
     times = inputs.frame_times_s
@@ -219,6 +257,8 @@ class MatchJobs:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="match")
         self._lock = threading.Lock()
         self._active: set[UUID] = set()
+        #: Jobs the user stopped; each checks this at its progress reports.
+        self._cancelled: set[UUID] = set()
 
     # -- routes
 
@@ -266,6 +306,8 @@ class MatchJobs:
                     "error_code": ErrorCode.WORKER_LOST,
                     "error_message": default_message_for(ErrorCode.WORKER_LOST),
                     "progress": None,
+                    "stage": None,
+                    "eta_s": None,
                     "updated_at": utcnow(),
                 }
             )
@@ -292,9 +334,18 @@ class MatchJobs:
         return summaries[:MAX_LISTED]
 
     async def delete(self, user_id: UUID, match_id: UUID) -> bool:
+        """Delete a finished match, or STOP a running one: the worker sees the
+        flag at its next progress report, removes the record and picture, and
+        deletes the videos as any job does when it ends."""
         path = record_path(self._bucket, user_id, match_id)
         if await self._store.get_bytes(path) is None:
             return False
+        with self._lock:
+            running = match_id in self._active
+            if running:
+                self._cancelled.add(match_id)
+        if running:
+            return True
         await self._store.delete_object(picture_path(self._bucket, user_id, match_id))
         await self._store.delete_object(path)
         return True
@@ -307,37 +358,103 @@ class MatchJobs:
 
     # -- the worker thread
 
+    def _check_cancelled(self, match_id: UUID) -> None:
+        with self._lock:
+            stopped = match_id in self._cancelled
+        if stopped:
+            raise JobCancelled()
+
     def _run(self, user_id: UUID, record: MatchRecord, request: CreateMatchRequest) -> None:
         try:
-            record = record.model_copy(update={"status": "running", "updated_at": utcnow()})
+            self._check_cancelled(record.match_id)
+            started = time.monotonic()
+            record = record.model_copy(
+                update={"status": "running", "stage": "preparing", "updated_at": utcnow()}
+            )
             self._await(self._write(user_id, record))
             last_write = time.monotonic()
 
+            counting_since: float | None = None
+
             def progress(fraction: float) -> None:
-                nonlocal record, last_write
-                if time.monotonic() - last_write < PROGRESS_WRITE_S:
+                nonlocal record, last_write, counting_since
+                self._check_cancelled(record.match_id)
+                now = time.monotonic()
+                if counting_since is None:
+                    counting_since = now
+                if now - last_write < PROGRESS_WRITE_S:
                     return
-                last_write = time.monotonic()
+                last_write = now
+                overall, stage, eta = analysis_progress(fraction, now - counting_since)
                 record = record.model_copy(
-                    update={"progress": round(0.05 + 0.9 * fraction, 3), "updated_at": utcnow()}
+                    update={"progress": overall, "stage": stage, "eta_s": eta, "updated_at": utcnow()}
                 )
                 try:
                     self._await(self._write(user_id, record))
                 except ApiError:
                     logger.warning("progress write failed for match %s", record.match_id)
 
+            def on_court(check: Any, picture: bytes) -> None:
+                """The court is found: store the picture and how far to trust
+                it NOW, so the player sees it while the analysis runs."""
+                nonlocal record, last_write
+                self._check_cancelled(record.match_id)
+                self._await(
+                    self._store.put_bytes(picture_path(self._bucket, user_id, record.match_id), picture, "image/jpeg")
+                )
+                record = record.model_copy(
+                    update={
+                        "stage": "ball",
+                        "has_court_picture": True,
+                        "calibration_source": check.source,
+                        "court_check": CourtCheck(
+                            confidence=check.confidence,
+                            source=check.source,
+                            support=check.support,
+                            lines_visible=check.lines_visible,
+                            corners_in_frame=check.corners_in_frame,
+                            reasons=list(check.reasons),
+                            calls_allowed=check.calls_allowed,
+                        ),
+                        "updated_at": utcnow(),
+                    }
+                )
+                self._await(self._write(user_id, record))
+                last_write = time.monotonic()
+
             with tempfile.TemporaryDirectory(prefix="tennisform-match-") as workdir:
                 video = Path(workdir) / "match.mp4"
                 piece = Path(workdir) / "piece"
                 with video.open("wb") as joined:
-                    for path in video_objects(request):
+                    paths = video_objects(request)
+                    for number, path in enumerate(paths, start=1):
                         # One piece on disk at a time, appended in byte order:
                         # the joined file is byte-for-byte the original.
                         self._await(self._store.download_to_path(path, piece))
                         with piece.open("rb") as part:
                             shutil.copyfileobj(part, joined)
                         piece.unlink()
-                result, source, duration, picture = self._analyze(video, request, progress)
+                        record = record.model_copy(
+                            update={"progress": round(PREPARE_SHARE * number / len(paths), 3), "updated_at": utcnow()}
+                        )
+                        self._await(self._write(user_id, record))
+                # Finding the court lines runs before any frame is counted and
+                # takes a while: say so rather than sit at the start of the bar.
+                record = record.model_copy(
+                    update={"stage": "court", "progress": PREPARE_SHARE, "updated_at": utcnow()}
+                )
+                self._await(self._write(user_id, record))
+                last_write = time.monotonic()
+                result, source, duration, picture = self._analyze(video, request, progress, on_court)
+            record = record.model_copy(
+                update={
+                    "stage": "finishing",
+                    "progress": round(PREPARE_SHARE + ANALYSIS_SHARE, 3),
+                    "eta_s": None,
+                    "updated_at": utcnow(),
+                }
+            )
+            self._await(self._write(user_id, record))
             feedback = self._feedback(record, result)
             if picture is not None:
                 self._await(
@@ -348,6 +465,8 @@ class MatchJobs:
             record = record.model_copy(
                 update={
                     "status": "complete",
+                    "stage": None,
+                    "eta_s": None,
                     "progress": 1.0,
                     "updated_at": utcnow(),
                     "court_status": result.status.value,
@@ -360,6 +479,17 @@ class MatchJobs:
                 }
             )
             self._await(self._write(user_id, record))
+        except JobCancelled:
+            # The user stopped it: nothing of it is kept.
+            logger.info("match %s stopped by the user", record.match_id)
+            for path in (
+                record_path(self._bucket, user_id, record.match_id),
+                picture_path(self._bucket, user_id, record.match_id),
+            ):
+                try:
+                    self._await(self._store.delete_object(path))
+                except Exception:  # noqa: BLE001 - best effort
+                    logger.warning("could not remove %s after a stop", path)
         except Exception as exc:  # noqa: BLE001 - a dead job must still leave a record
             code = exc.error_code if isinstance(exc, ApiError) else _decode_error_code(exc)
             if code is ErrorCode.INTERNAL_ERROR:
@@ -368,6 +498,8 @@ class MatchJobs:
                 update={
                     "status": "failed",
                     "progress": None,
+                    "stage": None,
+                    "eta_s": None,
                     "updated_at": utcnow(),
                     "error_code": code,
                     "error_message": default_message_for(code),
@@ -380,6 +512,7 @@ class MatchJobs:
         finally:
             with self._lock:
                 self._active.discard(record.match_id)
+                self._cancelled.discard(record.match_id)
             for path in video_objects(request):
                 try:
                     self._await(self._store.delete_object(path))

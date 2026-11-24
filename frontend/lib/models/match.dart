@@ -36,6 +36,83 @@ enum MatchStatus {
       );
 }
 
+/// How far the court lines found in the video can be trusted.
+enum CourtConfidence {
+  good('good'),
+  check('check'),
+  poor('poor'),
+  unknown('');
+
+  const CourtConfidence(this.wire);
+  final String wire;
+
+  static CourtConfidence fromJson(Object? raw) => values.firstWhere(
+        (CourtConfidence c) => c.wire == raw && c != unknown,
+        orElse: () => unknown,
+      );
+}
+
+/// Mirrors backend `CourtCheck`: written as soon as the court is found, so the
+/// player can look at the lines before the analysis ends.
+class CourtCheck {
+  const CourtCheck({
+    required this.confidence,
+    required this.source,
+    required this.support,
+    required this.linesVisible,
+    required this.cornersInFrame,
+    required this.reasons,
+    required this.callsAllowed,
+  });
+
+  final CourtConfidence confidence;
+  final String source;
+  final double? support;
+  final int? linesVisible;
+  final int cornersInFrame;
+
+  /// `court_cut_off`, `few_lines`, `weak_match`, `calls_off`, `tap_error`.
+  final List<String> reasons;
+  final bool callsAllowed;
+
+  /// True when the player should look at the lines before trusting the rest.
+  bool get needsAttention => confidence != CourtConfidence.good;
+
+  static CourtCheck? fromJsonOrNull(Map<String, dynamic>? json) {
+    if (json == null) return null;
+    final Object? raw = json['reasons'];
+    return CourtCheck(
+      confidence: CourtConfidence.fromJson(json['confidence']),
+      source: asString(json, 'source', fallback: 'auto'),
+      support: asDoubleOrNull(json, 'support'),
+      linesVisible: asIntOrNull(json, 'lines_visible'),
+      cornersInFrame: asInt(json, 'corners_in_frame'),
+      reasons: <String>[if (raw is List) for (final Object? r in raw) '$r'],
+      callsAllowed: asBool(json, 'calls_allowed', fallback: true),
+    );
+  }
+}
+
+/// What a running job is doing; drives the progress steps.
+enum MatchStage {
+  preparing('preparing'),
+  court('court'),
+  ball('ball'),
+  players('players'),
+  finishing('finishing');
+
+  const MatchStage(this.wire);
+  final String wire;
+
+  /// Null for a stage this app does not know: the bar still moves, unlabelled.
+  static MatchStage? fromJson(Object? raw) {
+    for (final MatchStage s in values) {
+      if (s.wire == raw) return s;
+    }
+    return null;
+  }
+}
+
 class MatchStats {
   const MatchStats({
     required this.shotsLanded,
@@ -88,6 +165,9 @@ class MatchRecord {
     required this.durationS,
     required this.result,
     this.feedback,
+    this.stage,
+    this.etaS,
+    this.courtCheck,
   });
 
   final String matchId;
@@ -113,6 +193,14 @@ class MatchRecord {
 
   /// Rallies only: the overall coaching summary. Null for a match.
   final CoachingFeedback? feedback;
+
+  /// While running: the step it is on, and seconds left at the rate so far.
+  /// Null when unknown (the estimate waits for enough progress).
+  final MatchStage? stage;
+  final double? etaS;
+
+  /// Whether the court lines can be trusted; available while it runs.
+  final CourtCheck? courtCheck;
 
   bool get courtFoundAutomatically => calibrationSource == 'auto';
 
@@ -140,6 +228,9 @@ class MatchRecord {
       durationS: asDoubleOrNull(json, 'duration_s'),
       result: result == null ? null : CourtAnalysis.fromJson(result),
       feedback: feedback == null ? null : CoachingFeedback.fromJson(feedback),
+      stage: MatchStage.fromJson(json['stage']),
+      etaS: asDoubleOrNull(json, 'eta_s'),
+      courtCheck: CourtCheck.fromJsonOrNull(asMap(json, 'court_check')),
     );
   }
 }

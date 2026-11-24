@@ -120,6 +120,27 @@ def _mad_threshold(signed_diff: npt.NDArray[np.int16]) -> int:
     integer histogram (no float sort over millions of pixels)."""
     offset = _GREY_LEVELS - 1
     histogram = np.bincount((signed_diff.ravel() + offset).astype(np.intp), minlength=2 * offset + 1)
+    return _threshold_from_histogram(histogram)
+
+
+def _signed_diff_histogram(a: U8Array, b: U8Array) -> npt.NDArray[np.float64]:
+    """The histogram of ``a - b`` (values -255..255, index = value + 255),
+    exactly, without ever making an int16 copy: OpenCV's saturating subtract
+    gives the positive part (``a - b`` where ``a > b``) and the negative part
+    (``b - a``) as 8-bit images, and each is histogrammed in 8 bits."""
+    positive = cv2.calcHist([cv2.subtract(a, b)], [0], None, [_GREY_LEVELS], [0, _GREY_LEVELS]).ravel()
+    negative = cv2.calcHist([cv2.subtract(b, a)], [0], None, [_GREY_LEVELS], [0, _GREY_LEVELS]).ravel()
+    offset = _GREY_LEVELS - 1
+    histogram = np.zeros(2 * offset + 1, dtype=np.float64)
+    histogram[offset + 1 :] = positive[1:]
+    histogram[:offset] = negative[1:][::-1]
+    histogram[offset] = a.size - positive[1:].sum() - negative[1:].sum()
+    return histogram
+
+
+def _threshold_from_histogram(histogram: npt.NDArray[np.floating]) -> int:
+    """max(floor, factor x MAD) from the histogram of a signed difference."""
+    offset = _GREY_LEVELS - 1
     total = int(histogram.sum())
     half = (total + 1) // 2
     median = int(np.searchsorted(np.cumsum(histogram), half)) - offset
@@ -140,11 +161,12 @@ def _double_difference(
     """(closed mask 0/255, strength = min(|d_before|, |d_after|), threshold)."""
     if not (prev_gray.shape == cur_gray.shape == next_gray.shape) or cur_gray.ndim != 2:
         raise ValueError("expected three single-channel frames of one shape")
-    before = cur_gray.astype(np.int16) - prev_gray.astype(np.int16)
-    after = next_gray.astype(np.int16) - cur_gray.astype(np.int16)
-    abs_before = np.abs(before).astype(np.uint8)
-    abs_after = np.abs(after).astype(np.uint8)
-    threshold_before, threshold_after = _mad_threshold(before), _mad_threshold(after)
+    # Exactly the int16 arithmetic this replaced, in 8 bits: |a - b| is
+    # ``absdiff``, and the signed histogram comes from two saturating subtracts.
+    abs_before = cv2.absdiff(cur_gray, prev_gray)
+    abs_after = cv2.absdiff(next_gray, cur_gray)
+    threshold_before = _threshold_from_histogram(_signed_diff_histogram(cur_gray, prev_gray))
+    threshold_after = _threshold_from_histogram(_signed_diff_histogram(next_gray, cur_gray))
     moving = (abs_before > threshold_before) & (abs_after > threshold_after)
     mask = _close_2x2(moving.astype(np.uint8) * 255)
     return mask, np.minimum(abs_before, abs_after), max(threshold_before, threshold_after)
@@ -254,6 +276,11 @@ def find_flight_candidates(
         x1 = x0 + int(stats[label, cv2.CC_STAT_WIDTH])
         y1 = y0 + int(stats[label, cv2.CC_STAT_HEIGHT])
         component = labels[y0:y1, x0:x1] == label
+        # The cheapest of the gates first (a max over the blob). Every gate in
+        # this loop only rejects, so their order cannot change what survives.
+        contrast = float(np.max(strength[y0:y1, x0:x1][component]))
+        if contrast < min_contrast:
+            continue
         cx, cy = float(centroids[label, 0]), float(centroids[label, 1])
 
         diameter: float | None = None
@@ -279,9 +306,6 @@ def find_flight_candidates(
             continue
         colour = colour_mask(np.ascontiguousarray(cur_bgr[y0:y1, x0:x1]))
         colour_score = float(np.count_nonzero(colour[component])) / float(area)
-        contrast = float(np.max(strength[y0:y1, x0:x1][component]))
-        if contrast < min_contrast:
-            continue
         records.append(
             (int(frame_index), float(time_s), cx, cy, float(area), minor, major, orientation,
              colour_score, contrast)

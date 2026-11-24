@@ -255,3 +255,23 @@ def test_template_uses_only_payload_numbers_and_passes_its_own_guard() -> None:
     assert text.startswith("Estimated from 212 landings: 151 in, 18 out and 43 too close")
     allowed = court_numeric_allowlist(court_payload(core))
     assert validate_text_field(text, allowed, None, banned_finder=find_court_banned) == []
+
+
+def test_the_plain_summary_reads_correctly_for_one_rally_and_for_no_calls() -> None:
+    from app.models.court import CourtFeedbackLineCalls, CourtFeedbackRally
+
+    core = build_court_feedback_input(analysis())
+    one = core.model_copy(update={
+        "landings_counted": 1,
+        "rally": CourtFeedbackRally(rallies=1, median_hits=15, longest_hits=15, low_confidence_rallies=0),
+    })
+    text = court_template_summary(one)
+    assert "1 landing:" in text and "1 rally, which lasted 15 hits." in text
+    assert "1 rallies" not in text and "1 landings" not in text
+    many = core.model_copy(update={"rally": CourtFeedbackRally(rallies=3, median_hits=5, longest_hits=1, low_confidence_rallies=0)})
+    assert "3 rallies; the longest was 1 hit." in court_template_summary(many)
+    nothing = core.model_copy(update={
+        "line_calls": CourtFeedbackLineCalls(in_=0, out=0, too_close=0, in_percent=0, out_percent=0, too_close_percent=0)
+    })
+    assert "calls were not made" in court_template_summary(nothing)
+    assert "0 in, 0 out" not in court_template_summary(nothing)

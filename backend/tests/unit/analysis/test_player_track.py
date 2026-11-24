@@ -29,7 +29,6 @@ from app.analysis.player_track import (
     estimate_handedness,
     feet_point,
     lateral_offset,
-    on_players_side,
     pose_hit_from_contact,
     torso_px,
 )
@@ -222,12 +221,3 @@ def test_the_pose_hit_carries_the_ball_hits_time_and_the_feet() -> None:
     assert 0.3 <= hit.confidence <= 1.0
     nearer = pose_hit_from_contact(12.5, contact, CourtEnd.NEAR, None, gate_px=3000.0)
     assert nearer.confidence > hit.confidence
-
-
-def test_a_detection_belongs_to_the_end_whose_side_it_stands_on() -> None:
-    assert on_players_side(CourtEnd.NEAR, (0.0, -10.0))
-    assert not on_players_side(CourtEnd.NEAR, (0.0, 6.0))
-    assert on_players_side(CourtEnd.NEAR, (0.0, 0.5))  # a step over the net line
-    assert on_players_side(CourtEnd.FAR, (0.0, 10.0))
-    assert not on_players_side(CourtEnd.FAR, (0.0, -6.0))
-    assert on_players_side(CourtEnd.FAR, None)  # no feet: no evidence against

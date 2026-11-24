@@ -740,6 +740,17 @@ class CourtMapPainter extends CustomPainter {
     }
   }
 
+  /// A small bold label on the map, in the theme's font (the style passed as
+  /// ``labelStyle``) without its letter spacing.
+  TextStyle _markText(Color color, double size, FontWeight weight) =>
+      (labelStyle ?? const TextStyle()).copyWith(
+        color: color,
+        fontSize: size,
+        fontWeight: weight,
+        letterSpacing: 0,
+        height: 1,
+      );
+
   void _paintLetter(Canvas canvas, Offset c, double r, String letter, Color colour, LineVerdict? verdict) {
     final bool onDisc = verdict == LineVerdict.inside;
     final Color ink = onDisc
@@ -748,7 +759,7 @@ class CourtMapPainter extends CustomPainter {
     final TextPainter text = TextPainter(
       text: TextSpan(
         text: letter,
-        style: TextStyle(color: ink, fontSize: onDisc ? 9.5 : 9, fontWeight: FontWeight.w800, height: 1),
+        style: _markText(ink, onDisc ? 9.5 : 9, FontWeight.w800),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -916,10 +927,7 @@ class CourtMapPainter extends CustomPainter {
         for (int i = 0; i < ordered.length; i++) {
           final Offset p = toCanvas(ordered[i].courtXy, size) + const Offset(9, 9);
           final TextPainter text = TextPainter(
-            text: TextSpan(
-              text: '${i + 1}',
-              style: TextStyle(color: selectColor, fontSize: 10, fontWeight: FontWeight.w700),
-            ),
+            text: TextSpan(text: '${i + 1}', style: _markText(selectColor, 10, FontWeight.w700)),
             textDirection: TextDirection.ltr,
           )..layout();
           text.paint(canvas, p - Offset(text.width / 2, text.height / 2));

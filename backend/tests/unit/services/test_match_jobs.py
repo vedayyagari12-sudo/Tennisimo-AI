@@ -65,7 +65,7 @@ PICTURE = b"\xff\xd8jpeg"
 
 
 def ok_analyzer(
-    video: Path, request: CreateMatchRequest, progress: Callable[[float], None]
+    video: Path, request: CreateMatchRequest, progress: Callable[[float], None], on_court: Any = None
 ) -> tuple[CourtAnalysisResponse, str, float, bytes]:
     assert video.read_bytes() == b"video"
     progress(0.5)
@@ -181,7 +181,7 @@ def test_a_video_in_pieces_is_joined_byte_for_byte_and_every_piece_deleted() -> 
     pieces = [b"first-", b"second-", b"third"]
     seen: list[bytes] = []
 
-    def joined(video: Path, request: CreateMatchRequest, progress: Callable[[float], None]) -> Any:
+    def joined(video: Path, request: CreateMatchRequest, progress: Callable[[float], None], on_court: Any = None) -> Any:
         seen.append(video.read_bytes())
         return sample_result(), "auto", 1.0, None
 
@@ -324,3 +324,165 @@ def test_match_stats_counts_calls_and_rallies() -> None:
     blank = match_stats(empty)
     assert blank.shots_landed == 0 and blank.longest_rally_hits is None
     assert blank.in_percent is None and blank.deep_percent is None
+
+
+# ------------------------------------------------------------- progress bar
+
+
+def test_progress_runs_from_the_prepared_video_to_just_under_done() -> None:
+    assert module.analysis_progress(0.0, 0.0)[0] == module.PREPARE_SHARE
+    assert module.analysis_progress(1.0, 100.0)[0] == pytest.approx(module.PREPARE_SHARE + module.ANALYSIS_SHARE)
+    assert module.analysis_progress(2.0, 1.0)[0] == module.analysis_progress(1.0, 1.0)[0]  # clamped
+    assert module.analysis_progress(-1.0, 1.0)[0] == module.PREPARE_SHARE
+
+
+def test_the_stage_follows_the_ball_then_the_players() -> None:
+    assert module.analysis_progress(0.3, 10.0)[1] == "ball"
+    assert module.analysis_progress(module.BALL_PASS_SHARE - 0.01, 10.0)[1] == "ball"
+    assert module.analysis_progress(module.BALL_PASS_SHARE, 10.0)[1] == "players"
+
+
+def test_the_time_left_is_the_rate_so_far_and_waits_for_enough_to_go_on() -> None:
+    assert module.analysis_progress(0.0, 100.0)[2] is None  # nothing done yet
+    assert module.analysis_progress(0.05, 100.0)[2] is None  # too little done to trust
+    assert module.analysis_progress(0.5, 5.0)[2] is None  # not counting long enough
+    _, _, eta = module.analysis_progress(0.5, 60.0)
+    # Half the frames in 60 s of counting: about another 60 s, never negative.
+    assert eta == pytest.approx(60.0, abs=5.0)
+    # The seconds spent finding the court are not in the rate: the same
+    # fraction after the same counting time gives the same answer.
+    assert module.analysis_progress(0.25, 30.0)[2] == pytest.approx(90.0, abs=5.0)
+    assert module.analysis_progress(1.0, 60.0)[2] is not None and module.analysis_progress(1.0, 60.0)[2] >= 0.0
+
+
+def test_the_ball_share_matches_the_court_pass() -> None:
+    from app.services import court_offline
+
+    assert module.BALL_PASS_SHARE == court_offline.BALL_PASS_SHARE
+
+
+def test_a_running_record_reports_its_stage_and_a_finished_one_does_not() -> None:
+    async def body(jobs: MatchJobs, store: MemoryStore) -> None:
+        record, future = await jobs.create(USER, CreateMatchRequest(storage_path=VIDEO))
+        await asyncio.wrap_future(future)
+        done = await jobs.get(USER, record.match_id)
+        assert done is not None and done.stage is None and done.eta_s is None and done.progress == 1.0
+
+    run_scenario(ok_analyzer, body)
+
+
+# ------------------------------------------------ the court check, and stopping
+
+
+class FakeCheck:
+    confidence = "check"
+    source = "auto"
+    support = 0.81
+    lines_visible = 8
+    corners_in_frame = 3
+    reasons = ("court_cut_off", "weak_match")
+    calls_allowed = True
+
+
+def test_the_court_picture_and_check_are_stored_as_soon_as_the_court_is_found() -> None:
+    seen_while_running: dict[str, Any] = {}
+
+    def analyzer(video: Path, request: CreateMatchRequest, progress: Callable[[float], None], on_court: Any = None) -> Any:
+        on_court(FakeCheck(), b"\xff\xd8early")
+        # What the app would read NOW, with the analysis still running.
+        seen_while_running["picture"] = True
+        progress(0.5)
+        return sample_result(), "auto", 3.0, PICTURE
+
+    async def body(jobs: MatchJobs, store: MemoryStore) -> None:
+        record, future = await jobs.create(USER, CreateMatchRequest(storage_path=VIDEO))
+        await asyncio.wrap_future(future)
+        done = await jobs.get(USER, record.match_id)
+        assert done is not None and done.status == "complete"
+        assert done.court_check is not None
+        assert done.court_check.confidence == "check"
+        assert done.court_check.reasons == ["court_cut_off", "weak_match"]
+        assert done.court_check.support == 0.81 and done.court_check.corners_in_frame == 3
+        assert done.has_court_picture
+
+    run_scenario(analyzer, body)
+
+
+def test_a_running_record_carries_the_check_before_the_job_ends() -> None:
+    import threading
+
+    gate = threading.Event()
+    announced = threading.Event()
+
+    def analyzer(video: Path, request: CreateMatchRequest, progress: Callable[[float], None], on_court: Any = None) -> Any:
+        on_court(FakeCheck(), b"\xff\xd8early")
+        announced.set()
+        gate.wait(10)
+        return sample_result(), "auto", 3.0, PICTURE
+
+    async def body(jobs: MatchJobs, store: MemoryStore) -> None:
+        record, future = await jobs.create(USER, CreateMatchRequest(storage_path=VIDEO))
+        for _ in range(200):
+            if announced.is_set():
+                break
+            await asyncio.sleep(0.05)
+        running = await jobs.get(USER, record.match_id)
+        assert running is not None and running.status == "running"
+        assert running.court_check is not None and running.has_court_picture
+        assert await jobs.court_picture(USER, record.match_id) == b"\xff\xd8early"
+        gate.set()
+        await asyncio.wrap_future(future)
+
+    run_scenario(analyzer, body)
+
+
+def test_stopping_a_running_job_removes_it_and_deletes_the_video() -> None:
+    import threading
+
+    started = threading.Event()
+
+    def analyzer(video: Path, request: CreateMatchRequest, progress: Callable[[float], None], on_court: Any = None) -> Any:
+        on_court(FakeCheck(), b"\xff\xd8early")
+        started.set()
+        for _ in range(400):
+            progress(0.3)  # the next report after the stop raises
+            time.sleep(0.02)
+        raise AssertionError("the job was never stopped")
+
+    async def body(jobs: MatchJobs, store: MemoryStore) -> None:
+        record, future = await jobs.create(USER, CreateMatchRequest(storage_path=VIDEO))
+        for _ in range(200):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.05)
+        assert await jobs.delete(USER, record.match_id) is True  # a stop, not a delete
+        await asyncio.wrap_future(future)
+        assert await jobs.get(USER, record.match_id) is None  # nothing of it is kept
+        assert await jobs.court_picture(USER, record.match_id) is None
+        assert VIDEO in store.deleted and VIDEO not in store.objects  # the video is gone too
+        assert await jobs.list(USER) == []
+
+    run_scenario(analyzer, body)
+
+
+def test_a_job_stopped_before_it_starts_never_runs_the_analysis() -> None:
+    ran: list[int] = []
+
+    def analyzer(video: Path, request: CreateMatchRequest, progress: Callable[[float], None], on_court: Any = None) -> Any:
+        ran.append(1)
+        return sample_result(), "auto", 1.0, PICTURE
+
+    async def body(jobs: MatchJobs, store: MemoryStore) -> None:
+        # Hold the single worker so the second job waits in the queue.
+        import threading
+
+        hold = threading.Event()
+        jobs._executor.submit(hold.wait, 10)
+        record, future = await jobs.create(USER, CreateMatchRequest(storage_path=VIDEO))
+        assert await jobs.delete(USER, record.match_id) is True
+        hold.set()
+        await asyncio.wrap_future(future)
+        assert ran == []
+        assert await jobs.get(USER, record.match_id) is None
+
+    run_scenario(analyzer, body)
