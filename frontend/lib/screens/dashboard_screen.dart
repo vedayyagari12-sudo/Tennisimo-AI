@@ -888,8 +888,10 @@ class _ProgressCardState extends State<_ProgressCard> {
               const SizedBox(height: AppSpacing.md),
               DefaultTextStyle.merge(
                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  spacing: 12,
+                  runSpacing: 4,
                   children: <Widget>[
                     Text.rich(TextSpan(children: <InlineSpan>[
                       const TextSpan(text: 'Best '),
@@ -971,13 +973,28 @@ class _SectionTitle extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: <Widget>[
-          Expanded(child: Text(title, style: theme.textTheme.titleMedium)),
-          Text(
-            trailing,
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          Flexible(
+            child: Text(
+              title,
+              style: theme.textTheme.titleMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            flex: 2,
+            child: Text(
+              trailing,
+              textAlign: TextAlign.end,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
           ),
         ],
       ),

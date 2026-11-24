@@ -200,11 +200,15 @@ class _Legend extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Text(
-                    slices[i].label,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                      fontWeight: selected == i ? FontWeight.w700 : FontWeight.w400,
+                  Flexible(
+                    child: Text(
+                      slices[i].label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                        fontWeight: selected == i ? FontWeight.w700 : FontWeight.w400,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 4),
