@@ -100,8 +100,12 @@ SIDE_MIN_SAMPLES: Final[int] = 2
 SIDE_FULL_SAMPLES: Final[int] = 3
 #: Sides this short are fitted with a line, not a quadratic.
 SIDE_LINE_MAX_SAMPLES: Final[int] = 3
-#: The single fit needs residual degrees of freedom to judge anything.
-BREAK_MIN_TOTAL_SAMPLES: Final[int] = 6
+#: The single fit needs residual degrees of freedom to judge anything. Five,
+#: not six: a ball that is small and often hidden (a broadcast clip at 23 fps)
+#: leaves short flights, and six dropped real bounces. Checked on the same
+#: clips with 4 and 3 as well: 5 added bounces without adding false ones; 4
+#: (with a 3-point flight) lost a clip's real ones.
+BREAK_MIN_TOTAL_SAMPLES: Final[int] = 5
 #: Brief Constants: keep a break when rss2 <= 0.5 x rss1.
 BREAK_MIN_RSS_RATIO: Final[float] = 0.5
 #: The single fit must miss by at least this RMS for a break to mean anything.
