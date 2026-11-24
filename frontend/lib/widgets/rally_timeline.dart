@@ -53,23 +53,48 @@ class RallyTimeline extends StatelessWidget {
       children: <Widget>[
         Text(rallyHeaderText(rallies), style: theme.textTheme.titleMedium),
         const SizedBox(height: AppSpacing.sm),
-        ExcludeSemantics(
-          child: SizedBox(
-            height: 20,
-            child: Row(
+        // Shots per rally, as in the redesign: one bar per rally in order,
+        // taller for more shots, the longest in the ball lime.
+        Semantics(
+          label: 'Shots per rally, ${rallies.length} '
+              '${rallies.length == 1 ? 'rally' : 'rallies'}, longest $longest',
+          child: ExcludeSemantics(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                for (final Rally r in rallies)
-                  Expanded(
-                    flex: r.lengthHits.clamp(1, 1000),
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 1),
-                      decoration: BoxDecoration(
-                        color: palette.primaryFill
-                            .withValues(alpha: 0.35 + 0.65 * r.lengthHits / longest),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    ),
+                Text('SHOTS PER RALLY',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+                const SizedBox(height: AppSpacing.sm),
+                SizedBox(
+                  height: 90,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      for (final Rally r in rallies)
+                        Expanded(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                            height: 90 * (r.lengthHits / longest).clamp(0.08, 1.0),
+                            decoration: BoxDecoration(
+                              color: r.lengthMax == longest
+                                  ? palette.ballAccent
+                                  : palette.primaryFill,
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: <Widget>[
+                    Text('Start', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                    Text('End of video', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  ],
+                ),
               ],
             ),
           ),

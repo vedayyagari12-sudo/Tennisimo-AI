@@ -102,18 +102,18 @@ void main() {
       await tester.pumpWidget(
         _host(const ShotMixChart(slices: <ShotMixSlice>[])),
       );
-      expect(_painted<DonutPainter>(), findsNothing);
+      expect(_painted<MixBarPainter>(), findsNothing);
       expect(find.byType(Text), findsNothing);
     });
 
-    testWidgets('one shot type is a sentence, never a full ring', (
+    testWidgets('one shot type is a sentence, never a full bar', (
       WidgetTester tester,
     ) async {
       final ShotMixSlice only = _slice('Serve', 4, 100);
       await tester.pumpWidget(
         _host(ShotMixChart(slices: <ShotMixSlice>[only])),
       );
-      expect(_painted<DonutPainter>(), findsNothing);
+      expect(_painted<MixBarPainter>(), findsNothing);
       expect(find.text(ShotMixChart.singleTypeMessage(only)), findsOneWidget);
       expect(ShotMixChart.singleTypeMessage(only), contains('All 4 clips'));
       expect(
@@ -122,7 +122,7 @@ void main() {
       );
     });
 
-    testWidgets('names every slice with count and percent, total in the hole', (
+    testWidgets('names every slice with count and percent, total above the bar', (
       WidgetTester tester,
     ) async {
       final List<ShotMixSlice> slices = <ShotMixSlice>[
@@ -133,16 +133,16 @@ void main() {
       await tester.pumpWidget(_host(ShotMixChart(slices: slices)));
       await tester.pumpAndSettle();
 
-      expect(_painted<DonutPainter>(), findsOneWidget);
+      expect(_painted<MixBarPainter>(), findsOneWidget);
       expect(find.text('Forehand topspin'), findsOneWidget);
       expect(find.text('5 · 56%'), findsOneWidget);
       expect(find.text('Other'), findsOneWidget);
-      expect(find.text('9'), findsOneWidget); // the total, in the hole
+      expect(find.text('9'), findsOneWidget); // the total, above the bar
       _expectInkOnly(tester, find.byType(ShotMixChart));
 
       // Fixed slot order for named slices, the neutral for the tail — never
       // the score ramp.
-      final DonutPainter p = _painter<DonutPainter>(tester);
+      final MixBarPainter p = _painter<MixBarPainter>(tester);
       expect(p.colors, <Color>[
         _palette.chartSeries[0],
         _palette.chartSeries[1],
@@ -156,7 +156,7 @@ void main() {
       expect(p.gapColor, _palette.surfaceContainer);
     });
 
-    testWidgets('tapping a legend row shows that slice in the hole', (
+    testWidgets('tapping a legend row shows that slice above the bar', (
       WidgetTester tester,
     ) async {
       await tester.pumpWidget(
@@ -174,22 +174,22 @@ void main() {
       await tester.pump();
       expect(find.text('44%'), findsOneWidget);
       expect(find.text('4 clips'), findsOneWidget);
-      expect(_painter<DonutPainter>(tester).selected, 1);
+      expect(_painter<MixBarPainter>(tester).selected, 1);
       // Again: back to the total.
       await tester.tap(find.text('Serve'));
       await tester.pump();
       expect(find.text('9'), findsOneWidget);
     });
 
-    test('the tap geometry maps angle to slice, hole to nothing', () {
-      const Size size = Size.square(100);
-      final List<double> values = <double>[1, 1, 2]; // 90°, 90°, 180°
-      // Just right of 12 o'clock, on the ring.
-      expect(DonutPainter.sliceAt(const Offset(60, 3), size, values), 0);
-      // 6 o'clock, on the ring: the second half is slice 2.
-      expect(DonutPainter.sliceAt(const Offset(45, 97), size, values), 2);
-      // The centre is the hole.
-      expect(DonutPainter.sliceAt(const Offset(50, 50), size, values), isNull);
+    test('the tap geometry maps x to segment, off the bar to nothing', () {
+      const Size size = Size(100, 14);
+      final List<double> values = <double>[1, 1, 2]; // 25, 25, 50 wide
+      expect(MixBarPainter.segmentAt(const Offset(10, 7), size, values), 0);
+      expect(MixBarPainter.segmentAt(const Offset(40, 7), size, values), 1);
+      expect(MixBarPainter.segmentAt(const Offset(90, 7), size, values), 2);
+      // Well above or below the bar is nothing.
+      expect(MixBarPainter.segmentAt(const Offset(50, -40), size, values), isNull);
+      expect(MixBarPainter.segmentAt(const Offset(50, 60), size, values), isNull);
     });
   });
 

@@ -6,7 +6,8 @@
 /// one [AppPalette] into a [ThemeData], and nothing here holds a colour of its
 /// own.
 ///
-/// * Default ([BrandFlavor.tennisimo]) — warm tan, the brand green as the
+/// * Default ([BrandFlavor.tennisimo]) — cool grey-green canvas, white cards,
+///   the brand green as the
 ///   accent with chartreuse reserved for ball speed.
 /// * Alternate ([BrandFlavor.school]) — a powder-blue canvas with white
 ///   cards, deep navy ink, and gold as a fill only (buttons, the nav pill, the
@@ -199,6 +200,23 @@ ThemeData buildAppTheme() => _buildTheme(paletteFor(kBrandFlavor));
 
 /// The web-only dark theme for the compiled flavor.
 ThemeData buildDarkAppTheme() => _buildTheme(darkPaletteFor(kBrandFlavor));
+
+/// The deep-green "latest swing" block on Home, in either canvas.
+///
+/// It is the dark palette with its card surfaces moved onto the brand's deep
+/// green, so every ink, ring and chip colour inside the block is the dark
+/// set's — stepped for a dark ground — and only the ground changes.
+ThemeData buildHeroTheme() => _buildTheme(
+      darkPaletteFor(kBrandFlavor).copyWith(
+        surface: const Color(0xFF0F3D24),
+        surfaceContainerLowest: const Color(0xFF0B3019),
+        surfaceContainerLow: const Color(0xFF0D3720),
+        surfaceContainer: const Color(0xFF0F3D24),
+        surfaceContainerHigh: const Color(0xFF1C4D31),
+        surfaceContainerHighest: const Color(0xFF265A3B),
+        outlineVariant: const Color(0xFF2B5E40),
+      ),
+    );
 
 ThemeData _buildTheme(AppPalette palette) {
   final ThemeData base = ThemeData(

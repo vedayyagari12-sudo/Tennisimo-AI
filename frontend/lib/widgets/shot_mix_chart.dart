@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../models/chart_data.dart';
@@ -7,31 +5,30 @@ import '../theme/app_theme.dart';
 import '../theme/motion.dart';
 import 'chart_legend.dart';
 
-/// Clips per shot type, as a donut beside a labelled legend.
+/// Clips per shot type, as one stacked bar over a labelled legend, as in the
+/// redesign.
 ///
-/// The one job a donut is for: part-to-whole at a glance, at most
-/// [kMaxMixSlices] slices ([buildShotMix] folds the tail). The total sits in
-/// the hole. Every slice is named, with its count and whole percent, in the
-/// legend beside it, so identity never rests on colour alone. Those labels
-/// are ink on the card rather than type set inside the slices: several slice
-/// hues cannot carry small text at AA in either ink or white.
+/// Part-to-whole at a glance, at most [kMaxMixSlices] slices ([buildShotMix]
+/// folds the tail). The total sits above the bar. Every slice is named, with
+/// its count and whole percent, in the legend below it, so identity never
+/// rests on colour alone.
 ///
-/// Tapping a slice or a legend row selects it: the hole switches to that
-/// slice's share and the other slices recede. Tapping it again, or the hole,
-/// goes back to the total.
+/// Tapping a segment or a legend row selects it: the figure above the bar
+/// switches to that slice's share and the other segments recede. Tapping it
+/// again goes back to the total.
 ///
 /// * No clips: nothing. The dashboard shows its empty state before it gets
 ///   here.
-/// * One shot type: a full ring says nothing, so a sentence instead.
+/// * One shot type: a full bar says nothing, so a sentence instead.
 class ShotMixChart extends StatefulWidget {
-  const ShotMixChart({super.key, required this.slices, this.size = 124});
+  const ShotMixChart({super.key, required this.slices, this.barHeight = 14});
 
   final List<ShotMixSlice> slices;
 
-  /// Outer diameter of the ring.
-  final double size;
+  /// Thickness of the stacked bar.
+  final double barHeight;
 
-  /// The sentence shown instead of a one-slice ring.
+  /// The sentence shown instead of a one-slice bar.
   static String singleTypeMessage(ShotMixSlice only) => only.count == 1
       ? 'Your only clip so far is ${only.label}. Film another shot type to '
             'see your mix.'
@@ -86,130 +83,73 @@ class _ShotMixChartState extends State<ShotMixChart> {
       (int a, ShotMixSlice s) => a + s.count,
     );
 
-    final Widget donut = _Donut(
-      slices: slices,
-      colors: colors,
-      total: total,
-      selected: _selected,
-      size: widget.size,
-      onSelect: _toggle,
-    );
-    final Widget legend = _Legend(
-      slices: slices,
-      colors: colors,
-      selected: _selected,
-      onSelect: _toggle,
-    );
-
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        // Side by side when the legend keeps ~130dp at the reader's text
-        // size; stacked below that, so long shot names wrap instead of
-        // squeezing the counts off the card.
-        final double legendMin =
-            130 * MediaQuery.textScalerOf(context).scale(1);
-        if (constraints.maxWidth >= widget.size + AppSpacing.lg + legendMin) {
-          return Row(
-            children: <Widget>[
-              donut,
-              const SizedBox(width: AppSpacing.lg),
-              Expanded(child: legend),
-            ],
-          );
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Center(child: donut),
-            const SizedBox(height: AppSpacing.md),
-            legend,
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _Donut extends StatelessWidget {
-  const _Donut({
-    required this.slices,
-    required this.colors,
-    required this.total,
-    required this.selected,
-    required this.size,
-    required this.onSelect,
-  });
-
-  final List<ShotMixSlice> slices;
-  final List<Color> colors;
-  final int total;
-  final int? selected;
-  final double size;
-  final ValueChanged<int?> onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final AppPalette palette = context.palette;
-    final int? sel = selected;
+    final int? sel = _selected;
     final bool hasSel = sel != null && sel >= 0 && sel < slices.length;
+    final List<double> values = <double>[
+      for (final ShotMixSlice s in slices) s.count.toDouble(),
+    ];
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (TapDownDetails d) => onSelect(
-        DonutPainter.sliceAt(d.localPosition, Size.square(size), <double>[
-          for (final ShotMixSlice s in slices) s.count.toDouble(),
-        ]),
-      ),
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: 0, end: 1),
-        duration: motionDuration(context, const Duration(milliseconds: 700)),
-        curve: kEnterCurve,
-        builder: (BuildContext context, double t, Widget? child) => CustomPaint(
-          size: Size.square(size),
-          painter: DonutPainter(
-            values: <double>[
-              for (final ShotMixSlice s in slices) s.count.toDouble(),
-            ],
-            colors: colors,
-            gapColor: palette.surfaceContainer,
-            selected: hasSel ? sel : null,
-            progress: t,
-          ),
-          child: child,
-        ),
-        child: SizedBox.square(
-          dimension: size,
-          child: Center(
-            // The hole is a fixed ~72% of the ring; text inside it is capped
-            // like the score ring's numeral so a 2.0x font cannot burst it.
-            child: MediaQuery.withClampedTextScaling(
-              maxScaleFactor: 1.3,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(
-                    hasSel ? '${slices[sel].percent}%' : '$total',
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                      fontWeight: FontWeight.w600,
-                      height: 1.1,
-                    ),
-                  ),
-                  Text(
-                    hasSel
-                        ? '${slices[sel].count} ${plural(slices[sel].count, 'clip')}'
-                        : plural(total, 'clip'),
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: <Widget>[
+            Text(
+              hasSel ? '${slices[sel].percent}%' : '$total',
+              style: theme.textTheme.titleLarge?.copyWith(
+                color: theme.colorScheme.onSurface,
+                fontFeatures: kTabularFigures,
               ),
             ),
-          ),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              hasSel
+                  ? '${slices[sel].count} ${plural(slices[sel].count, 'clip')}'
+                  : plural(total, 'clip'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ),
-      ),
+        const SizedBox(height: AppSpacing.sm),
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final Size size = Size(constraints.maxWidth, widget.barHeight);
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (TapDownDetails d) =>
+                  _toggle(MixBarPainter.segmentAt(d.localPosition, size, values)),
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0, end: 1),
+                duration:
+                    motionDuration(context, const Duration(milliseconds: 700)),
+                curve: kEnterCurve,
+                builder: (BuildContext context, double t, Widget? _) =>
+                    CustomPaint(
+                  size: size,
+                  painter: MixBarPainter(
+                    values: values,
+                    colors: colors,
+                    gapColor: palette.surfaceContainer,
+                    selected: hasSel ? sel : null,
+                    progress: t,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: AppSpacing.md),
+        _Legend(
+          slices: slices,
+          colors: colors,
+          selected: _selected,
+          onSelect: _toggle,
+        ),
+      ],
     );
   }
 }
@@ -278,12 +218,12 @@ class _Legend extends StatelessWidget {
   }
 }
 
-/// Paints a ring of [values] as proportional arcs, clockwise from 12 o'clock,
-/// with a 2px gap in [gapColor] between neighbours.
+/// Paints [values] as one rounded horizontal bar of proportional segments,
+/// left to right, with a 2px gap in [gapColor] between neighbours.
 ///
 /// Public so tests can check the hit geometry and the painted inputs.
-class DonutPainter extends CustomPainter {
-  DonutPainter({
+class MixBarPainter extends CustomPainter {
+  MixBarPainter({
     required this.values,
     required this.colors,
     required this.gapColor,
@@ -302,25 +242,18 @@ class DonutPainter extends CustomPainter {
   /// 0..1, the entry sweep.
   final double progress;
 
-  /// Ring thickness as a fraction of the diameter.
-  static const double thicknessRatio = 0.14;
-
-  /// Which slice a tap at [p] lands on, or null for the hole and outside.
-  static int? sliceAt(Offset p, Size size, List<double> values) {
+  /// Which segment a tap at [p] lands on, or null outside the bar.
+  static int? segmentAt(Offset p, Size size, List<double> values) {
     final double total = values.fold<double>(0, (double a, double b) => a + b);
-    if (total <= 0) return null;
-    final Offset c = size.center(Offset.zero);
-    final double r = size.shortestSide / 2;
-    final double d = (p - c).distance;
-    // Generous: from just inside the ring to a finger's width outside it.
-    if (d < r * (1 - thicknessRatio * 2) - 6 || d > r + 12) return null;
-    // Angle clockwise from 12 o'clock, 0..2pi.
-    double a = math.atan2(p.dy - c.dy, p.dx - c.dx) + math.pi / 2;
-    if (a < 0) a += math.pi * 2;
+    if (total <= 0 || size.width <= 0) return null;
+    // A finger's width of slack above and below a thin bar.
+    if (p.dx < 0 || p.dx > size.width || p.dy < -12 || p.dy > size.height + 12) {
+      return null;
+    }
     double acc = 0;
     for (int i = 0; i < values.length; i++) {
-      acc += values[i] / total * math.pi * 2;
-      if (a <= acc) return i;
+      acc += values[i] / total * size.width;
+      if (p.dx <= acc) return i;
     }
     return values.length - 1;
   }
@@ -329,47 +262,38 @@ class DonutPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final double total = values.fold<double>(0, (double a, double b) => a + b);
     if (total <= 0 || size.isEmpty) return;
-    final double thickness = size.shortestSide * thicknessRatio;
-    final Offset c = size.center(Offset.zero);
-    final double r = size.shortestSide / 2 - thickness / 2;
-    final Rect ring = Rect.fromCircle(center: c, radius: r);
-    final double sweepAll = math.pi * 2 * progress.clamp(0.0, 1.0);
-
-    double start = -math.pi / 2;
+    final double width = size.width * progress.clamp(0.0, 1.0);
+    final RRect clip = RRect.fromRectAndRadius(
+      Offset.zero & Size(width, size.height),
+      Radius.circular(size.height / 2),
+    );
+    canvas.save();
+    canvas.clipRRect(clip);
+    double x = 0;
     final List<double> boundaries = <double>[];
     for (int i = 0; i < values.length; i++) {
-      final double sweep = values[i] / total * sweepAll;
+      final double w = values[i] / total * width;
       final bool dim = selected != null && selected != i;
-      canvas.drawArc(
-        ring,
-        start,
-        sweep,
-        false,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = thickness
-          ..color = dim ? colors[i].withValues(alpha: 0.35) : colors[i],
+      canvas.drawRect(
+        Rect.fromLTWH(x, 0, w, size.height),
+        Paint()..color = dim ? colors[i].withValues(alpha: 0.35) : colors[i],
       );
-      start += sweep;
-      boundaries.add(start);
+      x += w;
+      if (i < values.length - 1) boundaries.add(x);
     }
-
-    // The 2px surface gap between neighbours. None with a single slice: a
-    // lone ring has no neighbour to separate.
-    if (values.where((double v) => v > 0).length < 2) return;
-    final Paint gap = Paint()
-      ..color = gapColor
-      ..strokeWidth = 2;
-    final double inner = r - thickness / 2 - 1;
-    final double outer = r + thickness / 2 + 1;
-    for (final double a in <double>[-math.pi / 2, ...boundaries]) {
-      final Offset u = Offset(math.cos(a), math.sin(a));
-      canvas.drawLine(c + u * inner, c + u * outer, gap);
+    if (values.where((double v) => v > 0).length >= 2) {
+      final Paint gap = Paint()
+        ..color = gapColor
+        ..strokeWidth = 2;
+      for (final double bx in boundaries) {
+        canvas.drawLine(Offset(bx, 0), Offset(bx, size.height), gap);
+      }
     }
+    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(DonutPainter old) =>
+  bool shouldRepaint(MixBarPainter old) =>
       old.progress != progress ||
       old.selected != selected ||
       old.gapColor != gapColor ||

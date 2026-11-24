@@ -4,7 +4,7 @@ import '../theme/app_theme.dart';
 
 /// The standard container every dashboard / history block sits in.
 ///
-/// Padding, radius and the 1px hairline border are defined here once so no
+/// Padding, radius and the hairline border are defined here once so no
 /// other widget has to restate them.
 class AppCard extends StatelessWidget {
   const AppCard({
@@ -32,7 +32,9 @@ class AppCard extends StatelessWidget {
       // if `borderRadius` is also given, so the radius lives here only.
       shape: RoundedRectangleBorder(
         borderRadius: radius,
-        side: BorderSide(color: scheme.outline),
+        // A hairline, as in the redesign: the white card on the grey-green
+        // canvas is the edge. Decorative, so not held to 3:1.
+        side: BorderSide(color: scheme.outlineVariant),
       ),
       child: InkWell(
         onTap: onTap,

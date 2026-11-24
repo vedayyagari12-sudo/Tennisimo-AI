@@ -157,7 +157,7 @@ void main() {
       );
       expect(
         find.byWidgetPredicate(
-          (Widget w) => w is CustomPaint && w.painter is DonutPainter,
+          (Widget w) => w is CustomPaint && w.painter is MixBarPainter,
         ),
         findsNothing,
       );

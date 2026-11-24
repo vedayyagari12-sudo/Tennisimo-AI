@@ -19,6 +19,7 @@ class ScoreRing extends StatelessWidget {
     this.strokeWidth = 12,
     this.label,
     this.delta,
+    this.arcColor,
   });
 
   /// 0-100, or null for not scored.
@@ -33,6 +34,11 @@ class ScoreRing extends StatelessWidget {
   /// Difference against the previous session. Rendered as "+4.2 vs last".
   final double? delta;
 
+  /// Overrides the score-band colour of the arc. Only the Home hero sets it,
+  /// to the ball lime: on its deep-green ground the low band's red would not
+  /// clear 3:1, and the numeral and caption still carry the score.
+  final Color? arcColor;
+
   /// Ceiling on the system font scale INSIDE the ring. See [build].
   static const double _maxNumeralScale = 1.3;
 
@@ -43,7 +49,7 @@ class ScoreRing extends StatelessWidget {
     final double? value = score;
     // The arc is a 12px-wide ring: a large filled area, so it takes the fill
     // tier, not the text step the numeral beside it would use.
-    final Color arcColor = palette.scoreFillColor(value);
+    final Color arcColor = this.arcColor ?? palette.scoreFillColor(value);
     // The tween runs over the SCORE itself, and the arc is derived from it,
     // so the digits and the sweep are the same number by construction.
     final double target = value ?? 0.0;

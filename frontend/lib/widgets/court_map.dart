@@ -135,6 +135,14 @@ String pathsLine(List<ShotLanding> landings) {
       '($withPath of ${landings.length} shots measured).';
 }
 
+/// The court's own colours, the same in light and dark: the map is a picture
+/// of a real green hard court, as in the redesign.
+const Color kCourtGreen = Color(0xFF2F7D4F);
+const Color kCourtRunoff = Color(0xFF276A43);
+const Color kCourtIn = Color(0xFFD4F04C);
+const Color kCourtOut = Color(0xFFFFA25E);
+const Color kCourtNeutral = Color(0xFFDCE6DF);
+
 const String kCourtMapTitle = 'Where your shots landed';
 const String kCourtMapFootnote = 'Estimates. Far-end landings are less certain.';
 
@@ -347,24 +355,24 @@ class _CourtMapState extends State<CourtMap> with SingleTickerProviderStateMixin
                             painter: CourtMapPainter(
                               landings: shown,
                               selectedId: _selected,
-                              // A hard court from above: the court a shade of
-                              // the accent over the surface, the run-off plain.
-                              courtFill: Color.alphaBlend(
-                                  palette.primaryFill.withValues(alpha: 0.20), theme.colorScheme.surfaceContainerHigh),
-                              runoffFill: theme.colorScheme.surfaceContainerLow,
-                              lineColor: theme.colorScheme.onSurface.withValues(alpha: 0.78),
-                              inColor: palette.primaryFill,
-                              outColor: palette.errorFill,
-                              neutralColor: palette.onSurfaceVariant,
-                              selectColor: theme.colorScheme.onSurface,
+                              // The redesign's court: a fixed hard-court green
+                              // with white lines in every theme, lime balls
+                              // that landed in and orange rings that went out.
+                              courtFill: kCourtGreen,
+                              runoffFill: kCourtRunoff,
+                              lineColor: const Color(0xFFFFFFFF),
+                              inColor: kCourtIn,
+                              outColor: kCourtOut,
+                              neutralColor: kCourtNeutral,
+                              selectColor: const Color(0xFFFFFFFF),
                               showPaths: _paths,
                               showTrace: _trace,
                               reveal: _reveal.value,
                               labelStyle: theme.textTheme.labelSmall?.copyWith(
-                                  color: palette.onSurfaceVariant.withValues(alpha: 0.7), letterSpacing: 1.6),
+                                  color: const Color(0xB3FFFFFF), letterSpacing: 1.6),
                               zones: _zones ? zonePercents(shown) : null,
-                              zoneColor: palette.primaryFill,
-                              zoneTextStyle: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface),
+                              zoneColor: kCourtIn,
+                              zoneTextStyle: theme.textTheme.labelSmall?.copyWith(color: const Color(0xFFFFFFFF)),
                             ),
                           ),
                         ),
@@ -512,8 +520,8 @@ class _MapLegend extends StatelessWidget {
           spacing: AppSpacing.md,
           runSpacing: AppSpacing.xs,
           children: <Widget>[
-            item(_LegendMark(_MarkShape.disc, palette.primaryFill), 'Landed in'),
-            item(_LegendMark(_MarkShape.cross, palette.errorFill), 'Landed out'),
+            item(const _LegendMark(_MarkShape.disc, kCourtIn), 'Landed in'),
+            item(const _LegendMark(_MarkShape.cross, kCourtOut), 'Landed out'),
             item(_LegendMark(_MarkShape.ring, palette.onSurfaceVariant), 'Too close to call'),
             item(_LegendMark(_MarkShape.square, palette.onSurfaceVariant), 'Not called'),
           ],
@@ -554,7 +562,7 @@ class _LegendMark extends CustomPainter {
 }
 
 /// Paints the court and the landings. Public for the hit test, like
-/// `DonutPainter.sliceAt`.
+/// `MixBarPainter.segmentAt`.
 class CourtMapPainter extends CustomPainter {
   CourtMapPainter({
     required this.landings,
@@ -647,7 +655,9 @@ class CourtMapPainter extends CustomPainter {
   static void paintMark(Canvas canvas, Offset c, double r, Color colour, LineVerdict? verdict) {
     switch (verdict) {
       case LineVerdict.inside:
-        canvas.drawCircle(c, r + 1.5, Paint()..color = const Color(0xE6FFFFFF));
+        // A dark edge, as in the redesign, so the lime ball reads on the
+        // green court and on a white card alike.
+        canvas.drawCircle(c, r + 1.2, Paint()..color = const Color(0xFF142000));
         canvas.drawCircle(c, r, Paint()..color = colour);
       case LineVerdict.out:
         final Paint cross = Paint()

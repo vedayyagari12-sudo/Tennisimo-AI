@@ -745,11 +745,10 @@ class _HeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // The block is drawn in the app's dark theme, whatever the page's theme,
-    // so every colour inside it comes from the validated dark palette.
-    final ThemeData dark = buildDarkAppTheme();
+    // The block is the design's deep green in either canvas; see
+    // [buildHeroTheme] for why its contents use the dark palette's inks.
     return Theme(
-      data: dark,
+      data: buildHeroTheme(),
       child: Builder(
         builder: (BuildContext context) {
           final ThemeData theme = Theme.of(context);
@@ -770,7 +769,9 @@ class _HeroCard extends StatelessWidget {
                       score: latest.overallScore,
                       delta: delta,
                       label: latest.overallScore == null ? 'Not scored' : 'Overall',
-                      size: 120,
+                      size: 104,
+                      strokeWidth: 10,
+                      arcColor: context.palette.ballAccent,
                     ),
                     const SizedBox(width: AppSpacing.lg),
                     Expanded(

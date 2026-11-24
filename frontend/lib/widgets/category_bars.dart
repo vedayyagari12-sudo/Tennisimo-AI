@@ -110,7 +110,7 @@ class _CategoryBar extends StatelessWidget {
               // (surfaceContainerHigh sat one step off the card) keeps it
               // visible in both flavors without competing with the fill.
               width: double.infinity,
-              height: 6,
+              height: 8,
               color: theme.colorScheme.outlineVariant,
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
