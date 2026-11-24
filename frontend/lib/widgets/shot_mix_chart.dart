@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../models/chart_data.dart';
 import '../theme/app_theme.dart';
 import '../theme/motion.dart';
-import 'chart_legend.dart';
 
 /// Clips per shot type, as one stacked bar over a labelled legend, as in the
 /// redesign.
@@ -53,11 +52,18 @@ class _ShotMixChartState extends State<ShotMixChart> {
   );
 
   /// A slice's colour: fixed slot order for the named slices, the neutral for
-  /// the folded tail. Never the score ramp.
+  /// the folded tail.
   static Color colorFor(AppPalette palette, ShotMixSlice slice, int index) =>
-      slice.isOther
-      ? palette.chartOther
-      : palette.chartSeries[index % palette.chartSeries.length];
+      slice.isOther ? palette.chartOther : mixColors[index % mixColors.length];
+
+  /// The redesign's shot-mix colours, in slice order: green, blue, orange,
+  /// then violet. Fixed, like the court map's, in both canvases.
+  static const List<Color> mixColors = <Color>[
+    Color(0xFF0B7A3B),
+    Color(0xFF1D6FD1),
+    Color(0xFFC2620F),
+    Color(0xFF6D28D9),
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +160,8 @@ class _ShotMixChartState extends State<ShotMixChart> {
   }
 }
 
+/// The legend under the bar, as in the redesign: a colour key, the shot
+/// and its count, in one wrapping row. Tapping an entry selects it.
 class _Legend extends StatelessWidget {
   const _Legend({
     required this.slices,
@@ -170,43 +178,42 @@ class _Legend extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Wrap(
+      spacing: AppSpacing.lg,
+      runSpacing: AppSpacing.xs,
       children: <Widget>[
         for (int i = 0; i < slices.length; i++)
           InkWell(
             onTap: () => onSelect(i),
             borderRadius: BorderRadius.circular(6),
             child: Padding(
-              // 4 + ~20 of text + 4 keeps each row near the 24dp minimum
-              // touch height the marks spec asks for.
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  LegendKey(color: colors[i]),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      slices[i].label,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        fontWeight: selected == i
-                            ? FontWeight.w700
-                            : FontWeight.w400,
-                      ),
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: colors[i],
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
-                  const SizedBox(width: AppSpacing.sm),
+                  const SizedBox(width: 6),
                   Text(
-                    '${slices[i].count} · ${slices[i].percent}%',
-                    style: theme.textTheme.labelMedium?.copyWith(
+                    slices[i].label,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                      fontWeight: selected == i ? FontWeight.w700 : FontWeight.w400,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${slices[i].count}',
+                    style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontFeatures: kTabularFigures,
-                      fontWeight: selected == i
-                          ? FontWeight.w700
-                          : FontWeight.w500,
+                      fontWeight: selected == i ? FontWeight.w700 : FontWeight.w500,
                     ),
                   ),
                 ],

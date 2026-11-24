@@ -5,35 +5,27 @@ import '../models/analysis_response.dart';
 import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
 import '../models/enums.dart';
-import '../models/swing_advice.dart';
 import '../models/swing_coaching.dart';
 import '../services/api_client.dart';
-import '../services/account_deletion.dart';
 import '../services/api_client.dart' as api
     show deleteAccount, fetchAnalysisDetail, fetchHistory;
 import '../theme/app_theme.dart';
-import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
 import '../widgets/category_bars.dart';
-import '../widgets/coaching_list.dart';
-import '../widgets/delete_account_dialog.dart';
 import '../widgets/content_width.dart';
+import '../widgets/score_line_chart.dart';
 import '../widgets/empty_state.dart';
-import '../widgets/focus_card.dart';
 import '../widgets/inline_stats.dart';
 import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
 import '../widgets/shot_mix_chart.dart';
-import '../widgets/shot_type_section.dart';
 import '../widgets/skeleton_block.dart';
-import '../widgets/skill_radar.dart';
 import 'home_shell.dart';
-import 'login_screen.dart';
 import 'record_screen.dart';
 import 'results_screen.dart';
 
 /// The dashboard's coaching section title.
-const String kDashboardImproveTitle = 'How to improve';
+const String kDashboardImproveTitle = 'Focus next session';
 
 /// Where the dashboard gets its data: the history list, the per-analysis
 /// details, and the signed-in account.
@@ -225,37 +217,6 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// The "Delete account" menu entry: confirm, delete, then leave.
-  ///
-  /// The dialog does the request itself and only closes with `true` once the
-  /// server has answered success, so nothing below runs on a failed or
-  /// unfinished deletion.
-  Future<void> _deleteAccount() async {
-    final bool? deleted = await showDialog<bool>(
-      context: context,
-      // Only an explicit Cancel closes it: a stray tap outside must not look
-      // like an answer to a question this serious.
-      barrierDismissible: false,
-      builder: (BuildContext context) =>
-          DeleteAccountDialog(onDelete: widget.dataSource.deleteAccount),
-    );
-    if (deleted != true || !mounted) return;
-
-    // Queued BEFORE signing out: the sign-out is what makes the AuthGate build
-    // the login screen that shows it.
-    LoginNotice.post(kAccountDeletedNotice);
-    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
-    try {
-      // Local scope (gotrue's default): the session is removed from memory and
-      // storage FIRST, then the server is told. The server has already
-      // deleted the user, so that second step may fail — harmlessly, since
-      // the local session, and with it the cached token, is already gone.
-      await widget.dataSource.signOut();
-    } catch (_) {
-      // See above: nothing is left signed in on this device.
-    }
-  }
-
   Future<void> _record() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -283,8 +244,6 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   Widget _header() => _DashboardHeader(
         email: widget.dataSource.accountEmail,
-        onSignOut: widget.dataSource.signOut,
-        onDeleteAccount: _deleteAccount,
         onOpenProfile: widget.onOpenProfile,
       );
 
@@ -359,13 +318,12 @@ class DashboardScreenState extends State<DashboardScreen> {
           coverage: _latestDetail == null ? null : coverageOf(_latestDetail!),
           onTap: _openingId == null ? () => _open(_items.first) : null,
         ),
-        const SizedBox(height: AppSpacing.md),
+        const SizedBox(height: AppSpacing.lg),
         _StatTiles(stats: _overallStats(insights)),
         const SizedBox(height: AppSpacing.lg),
-        ..._buildFocus(insights),
-        ..._buildShotTypes(insights),
+        ..._buildFocus(),
+        ..._buildProgress(insights),
         ..._buildLatestBreakdown(),
-        ..._buildSwingNotes(),
         ..._buildShotMix(insights),
         SectionHeader(
           title: 'Recent sessions',
@@ -377,15 +335,39 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  List<Widget> _buildFocus(DashboardInsights insights) {
+  /// "Focus next session": the newest clip's biggest fix, with its drill.
+  /// From the fixed rule table in `swing_coaching.dart`, not from AI text.
+  ///
+  /// Silent when the newest clip's detail is not loaded, or nothing in it is
+  /// off target: a fix borrowed from an older clip would be the wrong swing's.
+  List<Widget> _buildFocus() {
     if (_detailLoading && _details.isEmpty) {
       return const <Widget>[
         SkeletonBlock(height: 150),
         SizedBox(height: AppSpacing.lg),
       ];
     }
+    final AnalysisResponse? latest = _latestDetail;
+    if (latest == null) return const <Widget>[];
+    final List<CoachingItem> fixes = buildCoaching(latest)
+        .where((CoachingItem c) => c.isOffTarget && c.advice != null)
+        .toList();
+    if (fixes.isEmpty) return const <Widget>[];
     return <Widget>[
-      FocusCard(insight: insights.latestShotType),
+      _FocusNextCard(item: fixes.first),
+      const SizedBox(height: AppSpacing.lg),
+    ];
+  }
+
+  /// "Progress": one card, a chip per recorded shot type, that shot's
+  /// overall score over its recent clips, then best / average / change.
+  List<Widget> _buildProgress(DashboardInsights insights) {
+    if (insights.shotTypes.isEmpty) return const <Widget>[];
+    return <Widget>[
+      _ProgressCard(
+        insights: insights.shotTypes,
+        initial: insights.latestShotType?.shotType,
+      ),
       const SizedBox(height: AppSpacing.lg),
     ];
   }
@@ -397,7 +379,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     final List<ShotMixSlice> mix = buildShotMix(insights.shotTypes);
     if (mix.isEmpty) return const <Widget>[];
     return <Widget>[
-      const SectionHeader(title: 'Shot mix'),
+      _SectionTitle(title: 'Shot mix', trailing: '${insights.totalSessions} ${plural(insights.totalSessions, 'clip')}'),
       AppCard(child: ShotMixChart(slices: mix)),
       const SizedBox(height: AppSpacing.lg),
     ];
@@ -416,13 +398,13 @@ class DashboardScreenState extends State<DashboardScreen> {
     return <InlineStat>[
       InlineStat(label: 'Clips', value: insights.totalSessions.toString()),
       InlineStat(
-        label: 'Shot types',
-        value: insights.shotTypesRecorded.toString(),
-      ),
-      InlineStat(
         label: 'Top speed',
         value: insights.topSpeedMph?.toString(),
         unit: 'mph',
+      ),
+      InlineStat(
+        label: 'Shot types',
+        value: insights.shotTypesRecorded.toString(),
       ),
     ];
   }
@@ -468,82 +450,28 @@ class DashboardScreenState extends State<DashboardScreen> {
       ];
     }
     if (latest.categories.isEmpty) return const <Widget>[];
-    // The radar shows the SHAPE, against the previous swing of the same shot
-    // when that one loaded; the bars under it are its exact numbers and
-    // coverage, so no value on the radar is reachable only by tapping.
-    final SkillProfile? profile = buildSkillProfile(
-      latest,
-      previous: previousOfSameShot(_items, _details),
-    );
+    final ThemeData theme = Theme.of(context);
     return <Widget>[
-      const SectionHeader(title: 'Latest breakdown'),
+      SectionHeader(
+        title: 'Latest breakdown',
+        actionLabel: 'Details',
+        onAction: _openingId == null ? () => _open(_items.first) : null,
+      ),
       AppCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            if (profile != null) ...<Widget>[
-              SkillRadar(profile: profile),
-              const SizedBox(height: AppSpacing.md),
-              const Divider(height: 1),
-              const SizedBox(height: AppSpacing.md),
-            ],
             CategoryBars(categories: latest.categories),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Orange = your biggest gain. Tap Details for every measurement.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
           ],
         ),
       ),
       const SizedBox(height: AppSpacing.lg),
-    ];
-  }
-
-  /// The newest clip's top fixes — each with the measured gap and a drill —
-  /// and one thing that is working. From the fixed rule table in
-  /// `swing_coaching.dart`, not from AI text.
-  ///
-  /// Silent when the newest clip's detail is not loaded (the breakdown block
-  /// above already says so) or produced nothing to say.
-  List<Widget> _buildSwingNotes() {
-    final AnalysisResponse? latest = _latestDetail;
-    if (latest == null) return const <Widget>[];
-    final List<CoachingItem> coaching = buildCoaching(latest);
-    final List<CoachingItem> items = <CoachingItem>[
-      ...coaching
-          .where((CoachingItem c) => c.isOffTarget && c.advice != null)
-          .take(kDashboardFixBullets),
-      ...coaching
-          .where((CoachingItem c) => c.isInRange && c.advice != null)
-          .take(kDashboardPraiseBullets),
-    ];
-    if (items.isEmpty) return const <Widget>[];
-    return <Widget>[
-      const SectionHeader(title: kDashboardImproveTitle),
-      AppCard(child: CoachingList(items: items)),
-      const SizedBox(height: AppSpacing.lg),
-    ];
-  }
-
-  List<Widget> _buildShotTypes(DashboardInsights insights) {
-    return <Widget>[
-      const SectionHeader(title: 'Progress'),
-      for (final ShotTypeInsight insight in insights.shotTypes) ...<Widget>[
-        // Only the shot the player last hit starts open; the rest are one
-        // header row each. Keyed by shot so an open section stays open while
-        // the detail requests land and the list rebuilds.
-        ShotTypeSection(
-          key: ValueKey<ShotType>(insight.shotType),
-          insight: insight,
-          initiallyExpanded:
-              insight.shotType == insights.latestShotType?.shotType,
-        ),
-        const SizedBox(height: AppSpacing.md),
-      ],
-      // Never-recorded shots are listed rather than hidden, so the player can
-      // see what the app would analyse if they filmed it — and they carry no
-      // chart and no number at all.
-      if (insights.notRecorded.isNotEmpty) ...<Widget>[
-        ShotTypesNotRecordedCard(shotTypes: insights.notRecorded),
-        const SizedBox(height: AppSpacing.md),
-      ],
-      const SizedBox(height: AppSpacing.md),
     ];
   }
 
@@ -567,20 +495,16 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-/// Greeting and "Your tennis", then the account menu and the avatar,
-/// which opens Profile.
+/// Greeting and "Your tennis", then the avatar, which opens Profile. Sign
+/// out and Delete account live in Profile.
 class _DashboardHeader extends StatelessWidget {
   const _DashboardHeader({
     required this.email,
-    required this.onSignOut,
-    required this.onDeleteAccount,
     this.onOpenProfile,
   });
 
   final String? email;
   final VoidCallback? onOpenProfile;
-  final Future<void> Function() onSignOut;
-  final Future<void> Function() onDeleteAccount;
 
   @override
   Widget build(BuildContext context) {
@@ -590,12 +514,14 @@ class _DashboardHeader extends StatelessWidget {
         (email == null || email.isEmpty) ? '?' : email[0].toUpperCase();
 
     final Widget avatar = CircleAvatar(
-      radius: 20,
-      backgroundColor: theme.colorScheme.surfaceContainerHigh,
+      radius: 22,
+      backgroundColor: theme.colorScheme.primaryContainer,
       child: Text(
         initial,
-        style: theme.textTheme.titleMedium
-            ?.copyWith(color: theme.colorScheme.primary),
+        style: theme.textTheme.titleMedium?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
 
@@ -610,21 +536,15 @@ class _DashboardHeader extends StatelessWidget {
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
-              Text('Your tennis', style: theme.textTheme.headlineSmall),
-              if (email != null && email.isNotEmpty)
-                Text(
-                  email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              Text(
+                'Your tennis',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
                 ),
+              ),
             ],
           ),
-        ),
-        _OverflowMenu(
-          onSignOut: onSignOut,
-          onDeleteAccount: onDeleteAccount,
         ),
         if (onOpenProfile == null)
           avatar
@@ -654,74 +574,6 @@ class _DashboardHeader extends StatelessWidget {
   }
 }
 
-/// The overflow menu: the light / dark choice, then sign out, then — set apart
-/// and in the error colour — delete account.
-///
-/// The theme entries render only under a [ThemeScope], which `main.dart`
-/// installs on the web and nowhere else. On mobile, and in a widget test that
-/// mounts the dashboard on its own, the theme entries are absent.
-class _OverflowMenu extends StatelessWidget {
-  const _OverflowMenu({required this.onSignOut, required this.onDeleteAccount});
-
-  final Future<void> Function() onSignOut;
-
-  /// Opens the confirmation dialog. Choosing the menu entry deletes nothing.
-  final Future<void> Function() onDeleteAccount;
-
-  static const Map<ThemeMode, String> _themeLabels = <ThemeMode, String>{
-    ThemeMode.system: 'Follow system',
-    ThemeMode.light: 'Light',
-    ThemeMode.dark: 'Dark',
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeController? controller = ThemeScope.maybeOf(context);
-    final Color destructive = Theme.of(context).colorScheme.error;
-
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert),
-      onSelected: (String value) {
-        if (value == 'sign_out') {
-          onSignOut();
-          return;
-        }
-        if (value == 'delete_account') {
-          onDeleteAccount();
-          return;
-        }
-        for (final ThemeMode mode in _themeLabels.keys) {
-          if (value == 'theme_${mode.name}') controller?.setMode(mode);
-        }
-      },
-      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-        if (controller != null) ...<PopupMenuEntry<String>>[
-          for (final MapEntry<ThemeMode, String> entry in _themeLabels.entries)
-            CheckedPopupMenuItem<String>(
-              value: 'theme_${entry.key.name}',
-              checked: controller.mode == entry.key,
-              child: Text(entry.value),
-            ),
-          const PopupMenuDivider(),
-        ],
-        const PopupMenuItem<String>(
-          value: 'sign_out',
-          child: Text('Sign out'),
-        ),
-        const PopupMenuDivider(),
-        PopupMenuItem<String>(
-          value: 'delete_account',
-          child: Text(
-            'Delete account',
-            style: TextStyle(color: destructive),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// The latest session, as a score ring with its context.
 class _HeroCard extends StatelessWidget {
   const _HeroCard({
     required this.latest,
@@ -743,82 +595,346 @@ class _HeroCard extends StatelessWidget {
   /// Opens this session's results.
   final VoidCallback? onTap;
 
+  static const Color _ground = Color(0xFF0F3D24);
+  static const Color _lime = Color(0xFFD4F04C);
+  static const Color _onLime = Color(0xFF142000);
+
   @override
   Widget build(BuildContext context) {
-    // The block is the design's deep green in either canvas; see
-    // [buildHeroTheme] for why its contents use the dark palette's inks.
+    final ThemeData theme = Theme.of(context);
+    final BorderRadius radius = BorderRadius.circular(AppSpacing.cardRadius);
+    final double? d = delta;
+    final String shot = latest.shotType.label;
     return Theme(
       data: buildHeroTheme(),
-      child: Builder(
-        builder: (BuildContext context) {
-          final ThemeData theme = Theme.of(context);
-          final Color muted = theme.colorScheme.onSurfaceVariant;
-          final BorderRadius radius = BorderRadius.circular(AppSpacing.cardRadius);
-          return Material(
-            color: theme.colorScheme.surfaceContainer,
-            shape: RoundedRectangleBorder(borderRadius: radius),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: onTap,
-              borderRadius: radius,
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.lg),
-                child: Row(
-                  children: <Widget>[
-                    ScoreRing(
-                      score: latest.overallScore,
-                      delta: delta,
-                      label: latest.overallScore == null ? 'Not scored' : 'Overall',
-                      size: 104,
-                      strokeWidth: 10,
-                      arcColor: context.palette.ballAccent,
-                    ),
-                    const SizedBox(width: AppSpacing.lg),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            'LATEST SWING · ${_relativeTime(latest.createdAt).toUpperCase()}',
-                            style: theme.textTheme.labelSmall
-                                ?.copyWith(color: muted, fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: AppSpacing.xs),
-                          Text(
-                            latest.shotType.label,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleLarge,
-                          ),
-                          if (latest.ballSpeedMph != null) ...<Widget>[
-                            const SizedBox(height: AppSpacing.xs),
-                            Text('${latest.ballSpeedMph} mph',
-                                style: theme.textTheme.bodySmall?.copyWith(color: muted)),
-                          ],
-                          if (coverage case final CoverageSummary c
-                              when c.total > 0) ...<Widget>[
-                            const SizedBox(height: AppSpacing.xs),
-                            Text(
-                              '${c.available} of ${c.total} '
-                              '${plural(c.total, 'metric')} measured',
-                              style: theme.textTheme.bodySmall?.copyWith(color: muted),
-                            ),
-                          ],
-                          if (onTap != null) ...<Widget>[
-                            const SizedBox(height: AppSpacing.sm),
-                            Text('See details ›',
-                                style: theme.textTheme.labelLarge
-                                    ?.copyWith(color: theme.colorScheme.primary)),
-                          ],
-                        ],
+      child: Material(
+        color: _ground,
+        shape: RoundedRectangleBorder(borderRadius: radius),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: <Widget>[
+                // The ring shows the number alone; "Not scored" only when
+                // there is no number, never a 0.
+                ScoreRing(
+                  score: latest.overallScore,
+                  label: latest.overallScore == null ? 'Not scored' : null,
+                  size: 104,
+                  strokeWidth: 10,
+                  arcColor: _lime,
+                ),
+                const SizedBox(width: 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'LATEST SWING · ${_relativeTime(latest.createdAt).toUpperCase()}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: const Color(0xB3FFFFFF),
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                        ),
                       ),
+                      const SizedBox(height: 6),
+                      Text(
+                        shot,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      if (d != null) ...<Widget>[
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: _lime,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '${d >= 0 ? '▲' : '▼'} ${d.abs().round()} vs last ${shot.toLowerCase()}',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: _onLime,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (latest.ballSpeedMph != null) ...<Widget>[
+                        const SizedBox(height: 6),
+                        Text('${latest.ballSpeedMph} mph',
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(color: const Color(0xBFFFFFFF))),
+                      ],
+                      if (coverage case final CoverageSummary c
+                          when c.total > 0) ...<Widget>[
+                        const SizedBox(height: 6),
+                        Text(
+                          '${c.available} of ${c.total} '
+                          '${plural(c.total, 'check')} measured',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: const Color(0xBFFFFFFF)),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The newest clip's biggest fix, as the redesign's "Focus next session"
+/// card: an icon tile, the fix, what was measured, and a drill.
+class _FocusNextCard extends StatelessWidget {
+  const _FocusNextCard({required this.item});
+
+  final CoachingItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final String? measured = item.gapText ??
+        (item.targetText == null
+            ? null
+            : '${item.label}: ${item.valueText}, target ${item.targetText}.');
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF1E6),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.track_changes, size: 20, color: Color(0xFFB4500B)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      kDashboardImproveTitle.toUpperCase(),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      item.advice!,
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
               ),
+            ],
+          ),
+          if (measured != null) ...<Widget>[
+            const SizedBox(height: 10),
+            Text(measured, style: theme.textTheme.bodyMedium),
+          ],
+          if (item.drill != null) ...<Widget>[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface,
+                borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
+              ),
+              child: Text.rich(
+                TextSpan(
+                  children: <InlineSpan>[
+                    const TextSpan(text: 'Drill: ', style: TextStyle(fontWeight: FontWeight.w700)),
+                    TextSpan(text: item.drill),
+                  ],
+                ),
+                style: theme.textTheme.bodySmall,
+              ),
             ),
-          );
-        },
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The redesign's "Progress" card: a chip per recorded shot type, that
+/// shot's overall score over its clips, then best, average and change.
+class _ProgressCard extends StatefulWidget {
+  const _ProgressCard({required this.insights, required this.initial});
+
+  final List<ShotTypeInsight> insights;
+  final ShotType? initial;
+
+  @override
+  State<_ProgressCard> createState() => _ProgressCardState();
+}
+
+class _ProgressCardState extends State<_ProgressCard> {
+  ShotType? _picked;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final List<ShotTypeInsight> all = widget.insights;
+    final ShotTypeInsight shot = all.firstWhere(
+      (ShotTypeInsight i) => i.shotType == (_picked ?? widget.initial),
+      orElse: () => all.first,
+    );
+    final double? best = shot.bestScore;
+    final double? average = shot.averageScore;
+    final List<double> comparable = shot.comparableScores;
+    final double? change = comparable.length < 2 ? null : comparable.last - comparable.first;
+    String num(double? v) => v == null ? '—' : v.round().toString();
+    final TextStyle? figure = theme.textTheme.bodyMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+      color: theme.colorScheme.onSurface,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _SectionTitle(
+          title: 'Progress',
+          trailing: 'Last ${shot.sessions} ${shot.shotType.label.toLowerCase()}'
+              '${shot.sessions == 1 ? '' : 's'}',
+        ),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: <Widget>[
+                  for (final ShotTypeInsight i in all)
+                    _ShotPill(
+                      label: i.shotType.label,
+                      selected: i.shotType == shot.shotType,
+                      onTap: () => setState(() => _picked = i.shotType),
+                    ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+              ScoreLineChart(
+                title: '${shot.shotType.label} overall score',
+                points: shot.scorePoints,
+                dates: shot.sessionDates,
+                breaksBefore: shot.versionBoundaries,
+                height: 150,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              DefaultTextStyle.merge(
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: <Widget>[
+                    Text.rich(TextSpan(children: <InlineSpan>[
+                      const TextSpan(text: 'Best '),
+                      TextSpan(text: num(best), style: figure),
+                    ])),
+                    Text.rich(TextSpan(children: <InlineSpan>[
+                      const TextSpan(text: 'Average '),
+                      TextSpan(text: num(average), style: figure),
+                    ])),
+                    Text.rich(TextSpan(children: <InlineSpan>[
+                      const TextSpan(text: 'Change '),
+                      TextSpan(
+                        text: change == null ? '—' : '${change >= 0 ? '+' : ''}${change.round()}',
+                        style: figure?.copyWith(
+                          color: change == null || change < 0 ? null : CategoryBars.barGreen,
+                        ),
+                      ),
+                    ])),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A rounded filter pill: dark when chosen, grey when not.
+class _ShotPill extends StatelessWidget {
+  const _ShotPill({required this.label, required this.selected, required this.onTap});
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected ? theme.colorScheme.onSurface : theme.colorScheme.surfaceContainerHigh,
+        shape: const StadiumBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const StadiumBorder(),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 36),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Text(
+                label,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: selected ? theme.colorScheme.surfaceContainerLowest : theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A section title with a quiet note on the right ("24 clips").
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle({required this.title, required this.trailing});
+
+  final String title;
+  final String trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: <Widget>[
+          Expanded(child: Text(title, style: theme.textTheme.titleMedium)),
+          Text(
+            trailing,
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
       ),
     );
   }
@@ -968,26 +1084,20 @@ class _ScoreBadge extends StatelessWidget {
   }
 }
 
-/// "2 hours ago". Local, and without pulling in an i18n package.
+/// "Today", "Yesterday", else "Nov 18" (with the year when it is not this
+/// year), as in the redesign. Local, and without an i18n package.
 String _relativeTime(DateTime? value) {
   if (value == null) return 'Date unknown';
   final DateTime local = value.toLocal();
-  final Duration age = DateTime.now().difference(local);
-
-  if (age.inSeconds < 60) return 'Just now';
-  if (age.inMinutes < 60) {
-    return '${age.inMinutes} min ago';
-  }
-  if (age.inHours < 24) {
-    return '${age.inHours} hour${age.inHours == 1 ? '' : 's'} ago';
-  }
-  if (age.inDays < 7) {
-    return '${age.inDays} day${age.inDays == 1 ? '' : 's'} ago';
-  }
-  if (age.inDays < 30) {
-    final int weeks = age.inDays ~/ 7;
-    return '$weeks week${weeks == 1 ? '' : 's'} ago';
-  }
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${local.year}-${two(local.month)}-${two(local.day)}';
+  final DateTime now = DateTime.now();
+  final DateTime today = DateTime(now.year, now.month, now.day);
+  final DateTime day = DateTime(local.year, local.month, local.day);
+  final int days = today.difference(day).inDays;
+  if (days <= 0) return 'Today';
+  if (days == 1) return 'Yesterday';
+  const List<String> months = <String>[
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final String md = '${months[local.month - 1]} ${local.day}';
+  return local.year == now.year ? md : '$md, ${local.year}';
 }

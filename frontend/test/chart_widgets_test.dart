@@ -135,24 +135,19 @@ void main() {
 
       expect(_painted<MixBarPainter>(), findsOneWidget);
       expect(find.text('Forehand topspin'), findsOneWidget);
-      expect(find.text('5 · 56%'), findsOneWidget);
+      expect(find.text('5'), findsOneWidget);
       expect(find.text('Other'), findsOneWidget);
       expect(find.text('9'), findsOneWidget); // the total, above the bar
       _expectInkOnly(tester, find.byType(ShotMixChart));
 
-      // Fixed slot order for named slices, the neutral for the tail — never
-      // the score ramp.
+      // The redesign's fixed colours for named slices, the neutral for the
+      // tail.
       final MixBarPainter p = _painter<MixBarPainter>(tester);
       expect(p.colors, <Color>[
-        _palette.chartSeries[0],
-        _palette.chartSeries[1],
+        ShotMixChart.mixColors[0],
+        ShotMixChart.mixColors[1],
         _palette.chartOther,
       ]);
-      for (final Color c in p.colors) {
-        expect(c, isNot(_palette.scoreHighFill));
-        expect(c, isNot(_palette.scoreMidFill));
-        expect(c, isNot(_palette.scoreLowFill));
-      }
       expect(p.gapColor, _palette.surfaceContainer);
     });
 

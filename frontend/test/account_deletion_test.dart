@@ -14,7 +14,7 @@ import 'package:http/testing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show AuthResponse, User, UserIdentity;
 import 'package:tennisimo_ai/models/analysis_response.dart';
-import 'package:tennisimo_ai/screens/dashboard_screen.dart';
+import 'package:tennisimo_ai/screens/profile_screen.dart';
 import 'package:tennisimo_ai/screens/login_screen.dart';
 import 'package:tennisimo_ai/services/account_deletion.dart';
 import 'package:tennisimo_ai/services/api_client.dart';
@@ -95,13 +95,13 @@ class _FirstTimeSignUpAuth extends LoginAuthActions {
   }
 }
 
-/// A stand-in for AuthGate: dashboard while signed in, login once not.
+/// A stand-in for AuthGate: Profile while signed in, login once not.
 Widget _app(_DeletingSource source, LoginAuthActions auth) => MaterialApp(
   theme: buildAppTheme(),
   home: ValueListenableBuilder<bool>(
     valueListenable: source.signedIn,
     builder: (BuildContext context, bool signedIn, Widget? _) => signedIn
-        ? DashboardScreen(dataSource: source)
+        ? ProfileScreen(dataSource: source)
         : LoginScreen(auth: auth),
   ),
 );
@@ -113,16 +113,21 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 Future<void> _openDialog(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.more_vert));
+  await tester.ensureVisible(find.text('Delete account'));
   await _settle(tester);
   await tester.tap(find.text('Delete account'));
   await _settle(tester);
 }
 
-Finder get _deleteButton => find.widgetWithText(TextButton, 'Delete forever');
+/// The dialog's red button. Profile has a "Delete account" row too, so the
+/// finder is the button, not the words.
+Finder get _deleteButton => find.widgetWithText(FilledButton, 'Delete account');
 
-TextButton _button(WidgetTester tester, String label) =>
-    tester.widget<TextButton>(find.widgetWithText(TextButton, label));
+ButtonStyleButton _button(WidgetTester tester, String label) =>
+    tester.widget<ButtonStyleButton>(find.ancestor(
+      of: find.text(label),
+      matching: find.byWidgetPredicate((Widget w) => w is ButtonStyleButton),
+    ));
 
 const String _email = 'player@example.com';
 
@@ -347,11 +352,11 @@ void main() {
       return source;
     }
 
-    testWidgets('the menu entry sits below Sign out in the error colour', (
+    testWidgets('the Profile row sits below Sign out in the error colour', (
       WidgetTester tester,
     ) async {
       await pump(tester);
-      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.ensureVisible(find.text('Delete account'));
       await _settle(tester);
 
       final Finder delete = find.text('Delete account');
@@ -378,10 +383,10 @@ void main() {
           .widgetList<Text>(find.byType(Text))
           .map((Text t) => t.data ?? '')
           .join(' ');
-      expect(body, contains('permanently deletes your account'));
-      expect(body, contains('every swing'));
-      expect(body, contains('videos'));
-      expect(body, contains('cannot be undone'));
+      expect(body, contains('This permanently removes:'));
+      expect(body, contains('every swing video'));
+      expect(body, contains('your login'));
+      expect(body, contains('can’t be undone'));
       expect(source.deletes, isEmpty);
       expect(driver.calls, isEmpty);
     });
@@ -392,14 +397,14 @@ void main() {
       final _DeletingSource source = await pump(tester);
       await _openDialog(tester);
 
-      expect(_button(tester, 'Delete forever').onPressed, isNull);
+      expect(_button(tester, 'Delete account').onPressed, isNull);
       await tester.enterText(find.byType(TextField).last, 'delete');
       await tester.pump();
-      expect(_button(tester, 'Delete forever').onPressed, isNull);
+      expect(_button(tester, 'Delete account').onPressed, isNull);
 
       await tester.enterText(find.byType(TextField).last, 'DELETE');
       await tester.pump();
-      expect(_button(tester, 'Delete forever').onPressed, isNotNull);
+      expect(_button(tester, 'Delete account').onPressed, isNotNull);
       expect(source.deletes, isEmpty);
     });
 
@@ -432,7 +437,7 @@ void main() {
         await tester.pump();
         // And once rebuilt, a tap on the relabelled, disabled button.
         await tester.tap(
-          find.widgetWithText(TextButton, 'Deleting…'),
+          find.widgetWithText(FilledButton, 'Deleting…'),
           warnIfMissed: false,
         );
         await tester.pump();
@@ -470,7 +475,7 @@ void main() {
       await _settle(tester);
 
       expect(source.signOuts, 1);
-      expect(find.byType(DashboardScreen), findsNothing);
+      expect(find.byType(ProfileScreen), findsNothing);
       expect(find.byType(LoginScreen), findsOneWidget);
       expect(find.text(kAccountDeletedNotice), findsOneWidget);
       // Shown once: it was consumed by the login screen that showed it.
@@ -507,10 +512,10 @@ void main() {
       expect(find.textContaining('Trying again is safe'), findsOneWidget);
       expect(source.signOuts, 0);
       expect(LoginNotice.take(), isNull);
-      expect(find.byType(DashboardScreen), findsOneWidget);
+      expect(find.byType(ProfileScreen), findsOneWidget);
 
       // The retry is one tap away and really sends a second request.
-      await tester.tap(find.widgetWithText(TextButton, 'Try again'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Try again'));
       await tester.pump();
       expect(source.deletes, hasLength(2));
       source.deletes.last.complete(const ApiResult<void>.ok(null));

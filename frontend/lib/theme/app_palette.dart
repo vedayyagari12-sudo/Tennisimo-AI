@@ -446,24 +446,27 @@ const AppPalette tennisimoLight = AppPalette(
   onSurfaceVariant: Color(0xFF5C665F),
   outline: Color(0xFF77817A),
   outlineVariant: Color(0xFFDCE2DD),
-  primary: Color(0xFF0A7038),
+  primary: Color(0xFF0B7A3B),
   onPrimary: Color(0xFFFFFFFF),
   primaryFill: Color(0xFF0B7A3B),
   onPrimaryFill: Color(0xFFFFFFFF),
   secondary: Color(0xFF485F00),
   onSecondary: Color(0xFFFFFFFF),
-  secondaryFill: Color(0xFFBAEA4C),
-  ballAccent: Color(0xFFBAEA4C),
+  // The redesign's lime, exactly. Under tritanopia it sits closer to the grey
+  // canvas than the light-fill gate allows; see kDesignLimeTritanGate in
+  // palette_test.dart, which records that exception and its floor.
+  secondaryFill: Color(0xFFD4F04C),
+  ballAccent: Color(0xFFD4F04C),
   // The button face and nav pill this flavor has always had: primaryFill /
-  // onPrimaryFill, and primary (#0A7038) at 16% — spelled out channel by
+  // onPrimaryFill, and primary (#0B7A3B) at 16% — spelled out channel by
   // channel so it is the exact value `withValues(alpha: 0.16)` produces.
   actionFill: Color(0xFF0B7A3B),
   onActionFill: Color(0xFFFFFFFF),
   navIndicator: Color.from(
     alpha: 0.16,
-    red: 0x0A / 255,
-    green: 0x70 / 255,
-    blue: 0x38 / 255,
+    red: 0x0B / 255,
+    green: 0x7A / 255,
+    blue: 0x3B / 255,
   ),
   error: Color(0xFF9C1A20),
   onError: Color(0xFFFFFFFF),

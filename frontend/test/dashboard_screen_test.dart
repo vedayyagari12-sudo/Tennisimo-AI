@@ -15,7 +15,8 @@ import 'package:tennisimo_ai/screens/dashboard_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/widgets/comparison_bars.dart';
 import 'package:tennisimo_ai/widgets/shot_mix_chart.dart';
-import 'package:tennisimo_ai/widgets/skill_radar.dart';
+import 'package:tennisimo_ai/widgets/category_bars.dart';
+import 'package:tennisimo_ai/widgets/score_line_chart.dart';
 
 import 'dashboard_layout_matrix_test.dart' show kTextScales, kViewports;
 import 'support/dashboard_fixtures.dart';
@@ -101,7 +102,7 @@ void main() {
       expect(find.text('Not scored'), findsOneWidget);
       expect(find.text('0'), findsNothing);
       // The newest serve's own coverage is on its card.
-      expect(find.text('3 of 7 metrics measured'), findsOneWidget);
+      expect(find.text('3 of 7 checks measured'), findsOneWidget);
     });
 
     testWidgets(
@@ -112,42 +113,36 @@ void main() {
           find.textContaining('breakdown for your latest clip could not be'),
           findsOneWidget,
         );
-        // No coverage on the hero, no swing notes: both would be fh1's.
-        expect(find.textContaining('metrics measured'), findsNothing);
-        expect(find.text('How to improve'), findsNothing);
+        // No coverage on the hero, no focus card: both would be fh1's.
+        expect(find.textContaining('checks measured'), findsNothing);
+        expect(find.text(kDashboardImproveTitle.toUpperCase()), findsNothing);
         expect(find.text('Latest coverage'.toUpperCase()), findsNothing);
       },
     );
 
-    testWidgets('the forehand player sees how to improve, no raw torso units', (
+    testWidgets('the forehand player sees a focus with a drill, no raw torso units', (
       WidgetTester tester,
     ) async {
       await _pumpDashboard(tester, forehandOnly());
+      final Finder focus = find.text(kDashboardImproveTitle.toUpperCase());
       await tester.scrollUntilVisible(
-        find.text('How to improve'),
+        focus,
         300,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('How to improve'), findsOneWidget);
-      expect(
-        find.text(
-          'Swing a bit more from low to high — brush up the back of '
-          'the ball.',
-        ),
-        findsOneWidget,
-      );
+      expect(focus, findsOneWidget);
+      expect(find.textContaining('Drill: '), findsWidgets);
       expect(find.textContaining(' TU'), findsNothing);
     });
 
-    testWidgets('the shot mix is a donut only when there is a mix', (
+    testWidgets('the shot mix is a bar only when there is a mix', (
       WidgetTester tester,
     ) async {
       await _pumpDashboard(tester, severalShotTypes());
       expect(find.byType(ShotMixChart), findsOneWidget);
-      expect(find.text('5 · 56%'), findsOneWidget);
     });
 
-    testWidgets('one shot type is a sentence, not a full ring', (
+    testWidgets('one shot type is a sentence, not a full bar', (
       WidgetTester tester,
     ) async {
       await _pumpDashboard(tester, forehandOnly());
@@ -163,24 +158,20 @@ void main() {
       );
     });
 
-    testWidgets('a latest swing with two categories gets words, not a radar', (
-      WidgetTester tester,
-    ) async {
-      await _pumpDashboard(tester, unscoredServesAndVolleys());
-      expect(find.text(SkillRadar.tooFewMessage(2)), findsOneWidget);
-      expect(
-        find.byWidgetPredicate(
-          (Widget w) => w is CustomPaint && w.painter is RadarPainter,
-        ),
-        findsNothing,
-      );
-    });
-
-    testWidgets('the radar overlays the previous swing of the same shot', (
+    testWidgets('the breakdown is bars, with the biggest gain explained', (
       WidgetTester tester,
     ) async {
       await _pumpDashboard(tester, forehandOnly());
-      expect(find.text('Previous swing'), findsOneWidget);
+      final Finder caption = find.text(
+        'Orange = your biggest gain. Tap Details for every measurement.',
+      );
+      await tester.scrollUntilVisible(
+        caption,
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(caption, findsOneWidget);
+      expect(find.byType(CategoryBars), findsOneWidget);
     });
 
     testWidgets(
@@ -193,13 +184,18 @@ void main() {
       },
     );
 
-    testWidgets('never-recorded shots share one card', (
+    testWidgets('progress has a pill per recorded shot type', (
       WidgetTester tester,
     ) async {
-      await _pumpDashboard(tester, forehandOnly());
-      await _scrollThrough(tester);
-      expect(find.text('NOT RECORDED YET'), findsOneWidget);
-      expect(find.text('Volley'), findsOneWidget);
+      await _pumpDashboard(tester, severalShotTypes());
+      await tester.scrollUntilVisible(
+        find.text('Progress'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Progress'), findsOneWidget);
+      expect(find.byType(ScoreLineChart), findsOneWidget);
+      expect(find.textContaining('Best '), findsWidgets);
     });
   });
 }

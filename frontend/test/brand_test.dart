@@ -83,7 +83,7 @@ void main() {
 
       switch (kBrandFlavor) {
         case BrandFlavor.tennisimo:
-          expect(light.primary, const Color(0xFF0A7038));
+          expect(light.primary, const Color(0xFF0B7A3B));
           expect(light.secondary, const Color(0xFF485F00));
           expect(light.surface, const Color(0xFFF3F5F2));
         case BrandFlavor.school:

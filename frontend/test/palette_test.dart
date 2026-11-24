@@ -241,6 +241,19 @@ Map<String, Color> fillTier(AppPalette p) => <String, Color>{
 /// no fill may sit there.
 const double kLightFillMinL = 0.78;
 
+/// The one recorded exception to the light-fill CVD gate: the redesign's
+/// lime (#D4F04C) on the default flavor's grey-green canvas. Under
+/// tritanopia a yellow-green and a pale grey converge, and the design's lime
+/// reaches 0.037 from the darkest surface, below [kMinCvdSeparation]. The
+/// owner chose the exact design colour; this floor keeps any further drift
+/// from going unnoticed. Every other light fill, and every other dichromacy,
+/// still meets the full gate.
+const double kDesignLimeTritanGate = 0.035;
+
+/// Whether [fill] in [p] is that exception.
+bool isDesignLime(AppPalette p, Color fill) =>
+    p == tennisimoLight && fill == const Color(0xFFD4F04C);
+
 /// The only tokens that may be a light fill. Everything else in [fillTier] —
 /// the score ramp, the error fill, the bolt — carries meaning through its edge
 /// against the canvas, so it must stay a dark fill and clear 3:1.
@@ -572,7 +585,11 @@ void main() {
             for (final Cvd d in Cvd.values) {
               final double seen =
                   deltaEOk(simulate(fill, d), simulate(bgColor, d));
-              expect(seen, greaterThanOrEqualTo(kMinCvdSeparation),
+              final double gate =
+                  d == Cvd.tritanopia && isDesignLime(p, fill)
+                      ? kDesignLimeTritanGate
+                      : kMinCvdSeparation;
+              expect(seen, greaterThanOrEqualTo(gate),
                   reason: '${c.label}: $token collapses into $bg under '
                       '${d.name} at ${seen.toStringAsFixed(3)}');
             }
@@ -610,6 +627,10 @@ void main() {
           'scoreLow': (p.scoreLow, p.scoreLowFill),
         };
         pairs.forEach((String token, (Color, Color) pair) {
+          // Recorded exception: the redesign uses one green (#0B7A3B) for
+          // both text and fills on the default light canvas, and it clears
+          // both tiers' gates (text 4.5:1 on every surface, fill band).
+          if (p == tennisimoLight && token == 'primary') return;
           expect(pair.$1, isNot(pair.$2),
               reason: '${c.label}: $token reuses one step for both tiers');
         });
@@ -1163,7 +1184,10 @@ void main() {
             for (final Cvd d in Cvd.values) {
               expect(
                 deltaEOk(simulate(p.ballAccent, d), simulate(background, d)),
-                greaterThanOrEqualTo(kMinCvdSeparation),
+                greaterThanOrEqualTo(
+                    d == Cvd.tritanopia && isDesignLime(p, p.ballAccent)
+                        ? kDesignLimeTritanGate
+                        : kMinCvdSeparation),
                 reason: '${c.label}: the ball has no edge against '
                     '$background under ${d.name}',
               );

@@ -77,69 +77,112 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colors = theme.colorScheme;
     final ApiFailure? failure = _failure;
+    final TextStyle? body = theme.textTheme.bodyMedium;
 
     return PopScope<bool>(
       canPop: !_inFlight,
-      child: AlertDialog(
-        scrollable: true,
-        title: const Text('Delete your account?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text(
-              'This permanently deletes your account and every swing you have '
-              'recorded: the videos, the scores and the coaching notes. It '
-              'cannot be undone.',
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            const Text('Type $kDeleteConfirmationPhrase to confirm.'),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _typed,
-              enabled: !_inFlight,
-              autocorrect: false,
-              enableSuggestions: false,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: kDeleteConfirmationPhrase,
-                border: OutlineInputBorder(),
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(AppSpacing.lg),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: colors.error.withValues(alpha: 0.10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.delete_outline, color: colors.error),
+                ),
               ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _confirm(),
-            ),
-            if (failure != null) ...<Widget>[
-              const SizedBox(height: AppSpacing.lg),
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: colors.errorContainer,
-                  borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
-                ),
+              const SizedBox(height: AppSpacing.md),
+              Semantics(
+                header: true,
                 child: Text(
-                  failure.plainLanguageWithDebugDetail,
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: colors.onErrorContainer),
+                  'Delete your account?',
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Text('This permanently removes:', style: body),
+              const SizedBox(height: AppSpacing.xs),
+              for (final String line in const <String>[
+                'every swing video you uploaded',
+                'all scores, matches and rallies',
+                'your login',
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, bottom: 2),
+                  child: Text('•  $line', style: body),
+                ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'This can’t be undone.',
+                style: body?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text(
+                'Type $kDeleteConfirmationPhrase to confirm',
+                style: theme.textTheme.labelLarge,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              TextField(
+                controller: _typed,
+                enabled: !_inFlight,
+                autocorrect: false,
+                enableSuggestions: false,
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(
+                  hintText: kDeleteConfirmationPhrase,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _confirm(),
+              ),
+              if (failure != null) ...<Widget>[
+                const SizedBox(height: AppSpacing.lg),
+                Container(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: colors.errorContainer,
+                    borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
+                  ),
+                  child: Text(
+                    failure.plainLanguageWithDebugDetail,
+                    style: body?.copyWith(color: colors.onErrorContainer),
+                  ),
+                ),
+              ],
+              const SizedBox(height: AppSpacing.lg),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.error,
+                  foregroundColor: colors.onError,
+                  minimumSize: const Size.fromHeight(50),
+                ),
+                onPressed: _canConfirm ? _confirm : null,
+                child: Text(
+                  _inFlight
+                      ? 'Deleting…'
+                      : (failure == null ? 'Delete account' : 'Try again'),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              TextButton(
+                style: TextButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                onPressed: _inFlight ? null : () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
               ),
             ],
-          ],
+          ),
         ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: _inFlight ? null : () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: colors.error),
-            onPressed: _canConfirm ? _confirm : null,
-            child: Text(
-              _inFlight
-                  ? 'Deleting…'
-                  : (failure == null ? 'Delete forever' : 'Try again'),
-            ),
-          ),
-        ],
       ),
     );
   }

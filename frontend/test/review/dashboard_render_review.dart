@@ -34,6 +34,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tennisimo_ai/models/analysis_response.dart';
 import 'package:tennisimo_ai/screens/dashboard_screen.dart';
+import 'package:tennisimo_ai/screens/profile_screen.dart';
 import 'package:tennisimo_ai/screens/login_screen.dart';
 import 'package:tennisimo_ai/screens/results_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
@@ -339,8 +340,8 @@ void _renders(String out) {
     await _save(tester, '$out/login_412.png', 2);
   });
 
-  // The web-only theme entries, open, as a web user sees them.
-  testWidgets('render the overflow menu with the theme choice', (
+  // Profile, with the web-only Appearance row, as a web user sees it.
+  testWidgets('render Profile with the theme choice', (
     WidgetTester tester,
   ) async {
     addTearDown(tester.view.reset);
@@ -350,20 +351,11 @@ void _renders(String out) {
     await controller.setMode(_mode);
     await _pump(
       tester,
-      Scaffold(
-        body: DashboardScreen(
-          dataSource: forehandOnly().source,
-          onSeeAllHistory: () {},
-        ),
-      ),
+      ProfileScreen(dataSource: forehandOnly().source),
       const Size(412, 915),
       controller: controller,
     );
-    await tester.tap(find.byIcon(Icons.more_vert));
-    for (int i = 0; i < 10; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    await _save(tester, '$out/theme_menu_412.png', 2);
+    await _save(tester, '$out/profile_412.png', 2);
   });
 }
 

@@ -25,7 +25,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tennisimo_ai/main.dart';
-import 'package:tennisimo_ai/screens/dashboard_screen.dart';
+import 'package:tennisimo_ai/screens/profile_screen.dart';
 import 'package:tennisimo_ai/theme/app_theme.dart';
 import 'package:tennisimo_ai/theme/brand.dart';
 import 'package:tennisimo_ai/theme/theme_controller.dart';
@@ -51,13 +51,6 @@ Future<ThemeController> _storedDark() async {
 
 String _hex(Color c) =>
     '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
-
-Future<void> _openMenu(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.more_vert));
-  for (int i = 0; i < 10; i++) {
-    await tester.pump(const Duration(milliseconds: 100));
-  }
-}
 
 Future<void> _settle(WidgetTester tester) async {
   for (int i = 0; i < 20; i++) {
@@ -137,7 +130,7 @@ void main() {
       expect(app.themeMode, ThemeMode.light);
     });
 
-    testWidgets('the dashboard menu offers no theme choice',
+    testWidgets('Profile offers no theme choice',
         (WidgetTester tester) async {
       final ThemeController controller = await _storedDark();
       tester.view.physicalSize = const Size(412, 915);
@@ -147,16 +140,14 @@ void main() {
       await tester.pumpWidget(
         TennisimoApp(
           themeController: controller,
-          home: DashboardScreen(dataSource: forehandOnly().source),
+          home: ProfileScreen(dataSource: forehandOnly().source),
         ),
       );
       await _settle(tester);
-      await _openMenu(tester);
 
       expect(find.text('Sign out'), findsOneWidget);
+      expect(find.text('Appearance'), findsNothing);
       expect(find.text('Dark'), findsNothing);
-      expect(find.text('Light'), findsNothing);
-      expect(find.text('Follow system'), findsNothing);
     });
   });
 
@@ -220,7 +211,7 @@ void main() {
       expect(app.themeAnimationDuration, Duration.zero);
     });
 
-    testWidgets('the dashboard menu offers the choice, and it persists',
+    testWidgets('Profile offers the choice, and it persists',
         (WidgetTester tester) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final ThemeController controller = ThemeController();
@@ -232,32 +223,25 @@ void main() {
         TennisimoApp(
           themeController: controller,
           isWeb: true,
-          home: DashboardScreen(dataSource: forehandOnly().source),
+          home: ProfileScreen(dataSource: forehandOnly().source),
         ),
       );
       await _settle(tester);
-      await _openMenu(tester);
 
-      expect(find.text('Follow system'), findsOneWidget);
-      expect(find.text('Light'), findsOneWidget);
-      expect(find.text('Dark'), findsOneWidget);
-      expect(find.text('Sign out'), findsOneWidget);
-      final CheckedPopupMenuItem<String> system = tester.widget(
-        find.ancestor(
-          of: find.text('Follow system'),
-          matching: find.byType(CheckedPopupMenuItem<String>),
-        ),
-      );
-      expect(system.checked, isTrue, reason: 'the default is follow-system');
+      expect(find.text('Appearance'), findsOneWidget);
+      // The default is follow-system.
+      expect(find.text('System'), findsOneWidget);
+      expect(controller.mode, ThemeMode.system);
 
-      await tester.tap(find.text('Dark'));
+      await tester.tap(find.text('System'));
+      await _settle(tester);
+      await tester.tap(find.text('Dark').last);
       await _settle(tester);
 
       expect(controller.mode, ThemeMode.dark);
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       expect(prefs.getString(kThemeModePrefsKey), 'dark');
-      final BuildContext context =
-          tester.element(find.byType(DashboardScreen));
+      final BuildContext context = tester.element(find.byType(ProfileScreen));
       expect(context.palette, same(_dark));
     });
   });

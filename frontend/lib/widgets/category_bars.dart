@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../models/analysis_response.dart';
-import '../models/chart_data.dart';
 import '../theme/app_theme.dart';
-import 'split_row.dart';
 
-/// The five weighted scoring categories as horizontal bars.
+/// The five weighted scoring categories as horizontal bars, as in the
+/// redesign: name and score on one line, a green bar under it, and the
+/// weakest measured category in orange — the biggest gain.
 ///
 /// A category with a null score gets the words "Not measured" and NO bar at
 /// all. A zero-length bar would be a drawn claim that the player scored
@@ -15,15 +15,30 @@ class CategoryBars extends StatelessWidget {
 
   final List<CategoryScore> categories;
 
+  /// The redesign's two bar colours.
+  static const Color barGreen = Color(0xFF0B7A3B);
+  static const Color barOrange = Color(0xFFC2620F);
+
   @override
   Widget build(BuildContext context) {
     if (categories.isEmpty) return const SizedBox.shrink();
+    final List<double> measured = <double>[
+      for (final CategoryScore c in categories)
+        if (c.score != null) c.score!,
+    ];
+    // Only meaningful with two or more measured: one bar is not "weakest".
+    final double? lowest = measured.length < 2
+        ? null
+        : measured.reduce((double a, double b) => a < b ? a : b);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         for (int i = 0; i < categories.length; i++) ...<Widget>[
-          if (i > 0) const SizedBox(height: AppSpacing.md),
-          _CategoryBar(category: categories[i]),
+          if (i > 0) const SizedBox(height: AppSpacing.md + 2),
+          _CategoryBar(
+            category: categories[i],
+            weakest: lowest != null && categories[i].score == lowest,
+          ),
         ],
       ],
     );
@@ -31,87 +46,53 @@ class CategoryBars extends StatelessWidget {
 }
 
 class _CategoryBar extends StatelessWidget {
-  const _CategoryBar({required this.category});
+  const _CategoryBar({required this.category, required this.weakest});
 
   final CategoryScore category;
+  final bool weakest;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final AppPalette palette = context.palette;
     final double? score = category.score;
-    // Two tiers, two roles: the numeral is a small mark on the card, the bar
-    // is a filled area. Using one step for both is what looks wrong first.
-    final Color numeralColour = palette.scoreColor(score);
-    final Color barColour = palette.scoreFillColor(score);
-
-    // A category with no metric banded for this shot type is not "0 of 0
-    // measured"; it has nothing to measure against.
-    final String coverage = category.metricsTotal <= 0
-        ? 'No reference ranges for this shot'
-        : '${category.metricsAvailable} of ${category.metricsTotal} '
-            '${plural(category.metricsTotal, 'metric')} measured';
+    final Color barColour =
+        weakest ? CategoryBars.barOrange : CategoryBars.barGreen;
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        // Name and coverage share a line, the numeral is pinned to the right
-        // edge: one line per category instead of two, and every numeral in
-        // the card on one vertical.
-        SplitRow(
-          gap: AppSpacing.md,
+        Row(
           crossAxisAlignment: CrossAxisAlignment.end,
-          label: Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: 2,
-            crossAxisAlignment: WrapCrossAlignment.end,
-            children: <Widget>[
-              Text(
+          children: <Widget>[
+            Expanded(
+              child: Text(
                 // `swing_path` -> `Swing path`, straight off the model.
                 category.displayName,
                 style: theme.textTheme.bodyMedium,
               ),
-              Padding(
-                // Nudges the small caption onto the name's baseline.
-                padding: const EdgeInsets.only(bottom: 1),
-                child: Text(
-                  coverage,
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-              ),
-            ],
-          ),
-          // "Not measured" is three times the width of a numeral; SplitRow
-          // caps it at half the row, so at a 2.0x font scale it wraps rather
-          // than walking off a 320dp card. Wraps, never ellipsises — half of
-          // the word "measured" would read as a truncated number.
-          trailing: Text(
-            score == null ? 'Not measured' : score.round().toString(),
-            textAlign: TextAlign.end,
-            style: score == null
-                ? theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
-                : theme.textTheme.titleMedium?.copyWith(
-                    color: numeralColour,
-                    fontFeatures: kTabularFigures,
-                  ),
-          ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Text(
+              score == null ? 'Not measured' : score.round().toString(),
+              textAlign: TextAlign.end,
+              style: score == null
+                  ? theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)
+                  : theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: kTabularFigures,
+                    ),
+            ),
+          ],
         ),
         if (score != null) ...<Widget>[
-          const SizedBox(height: AppSpacing.xs + 2),
+          const SizedBox(height: 6),
           ClipRRect(
             borderRadius: BorderRadius.circular(999),
             child: Container(
-              // The track is what makes a bar readable as "out of 100". It
-              // never showed: inside this start-aligned Column the container
-              // shrink-wrapped to its own fill, so the track was exactly as
-              // long as the bar. A full width fixes that; the hairline token
-              // (surfaceContainerHigh sat one step off the card) keeps it
-              // visible in both flavors without competing with the fill.
               width: double.infinity,
               height: 8,
-              color: theme.colorScheme.outlineVariant,
+              color: theme.colorScheme.surfaceContainerHigh,
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
                 widthFactor: (score / 100).clamp(0.0, 1.0),
