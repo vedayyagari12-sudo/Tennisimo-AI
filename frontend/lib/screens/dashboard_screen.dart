@@ -14,7 +14,6 @@ import '../services/api_client.dart' as api
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
-import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
 import '../widgets/coaching_list.dart';
 import '../widgets/delete_account_dialog.dart';
@@ -358,14 +357,16 @@ class DashboardScreenState extends State<DashboardScreen> {
           // only comparison that means anything.
           delta: insights.latestShotType?.latestDelta,
           coverage: _latestDetail == null ? null : coverageOf(_latestDetail!),
+          onTap: _openingId == null ? () => _open(_items.first) : null,
         ),
+        const SizedBox(height: AppSpacing.md),
+        _StatTiles(stats: _overallStats(insights)),
         const SizedBox(height: AppSpacing.lg),
         ..._buildFocus(insights),
-        _buildOverview(insights),
-        const SizedBox(height: AppSpacing.lg),
+        ..._buildShotTypes(insights),
         ..._buildLatestBreakdown(),
         ..._buildSwingNotes(),
-        ..._buildShotTypes(insights),
+        ..._buildShotMix(insights),
         SectionHeader(
           title: 'Recent sessions',
           actionLabel: widget.onSeeAllHistory == null ? null : 'See all',
@@ -389,35 +390,17 @@ class DashboardScreenState extends State<DashboardScreen> {
     ];
   }
 
-  /// The overall counts, and the shot mix they break down into, in one card.
-  ///
-  /// The mix is a COUNT per shot type — a part-to-whole of clips — which is
-  /// the one cross-shot-type view that is legitimate: nothing is averaged.
-  Widget _buildOverview(DashboardInsights insights) {
-    final ThemeData theme = Theme.of(context);
+  /// The clip count per shot type, as its own section. A COUNT per shot type
+  /// — a part-to-whole of clips — is the one cross-shot-type view that is
+  /// legitimate: nothing is averaged.
+  List<Widget> _buildShotMix(DashboardInsights insights) {
     final List<ShotMixSlice> mix = buildShotMix(insights.shotTypes);
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          InlineStats(stats: _overallStats(insights)),
-          if (mix.isNotEmpty) ...<Widget>[
-            const SizedBox(height: AppSpacing.md),
-            const Divider(height: 1),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              'SHOT MIX',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            ShotMixChart(slices: mix),
-          ],
-        ],
-      ),
-    );
+    if (mix.isEmpty) return const <Widget>[];
+    return <Widget>[
+      const SectionHeader(title: 'Shot mix'),
+      AppCard(child: ShotMixChart(slices: mix)),
+      const SizedBox(height: AppSpacing.lg),
+    ];
   }
 
   /// The only cross-shot-type numbers allowed: counts and one record.
@@ -540,7 +523,7 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   List<Widget> _buildShotTypes(DashboardInsights insights) {
     return <Widget>[
-      const SectionHeader(title: 'By shot type'),
+      const SectionHeader(title: 'Progress'),
       for (final ShotTypeInsight insight in insights.shotTypes) ...<Widget>[
         // Only the shot the player last hit starts open; the rest are one
         // header row each. Keyed by shot so an open section stays open while
@@ -584,7 +567,8 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-/// Greeting, account, sign-out.
+/// Greeting and "Your tennis", then the account menu and the avatar,
+/// which opens Profile.
 class _DashboardHeader extends StatelessWidget {
   const _DashboardHeader({
     required this.email,
@@ -617,6 +601,31 @@ class _DashboardHeader extends StatelessWidget {
 
     return Row(
       children: <Widget>[
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                _greeting(),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+              Text('Your tennis', style: theme.textTheme.headlineSmall),
+              if (email != null && email.isNotEmpty)
+                Text(
+                  email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+            ],
+          ),
+        ),
+        _OverflowMenu(
+          onSignOut: onSignOut,
+          onDeleteAccount: onDeleteAccount,
+        ),
         if (onOpenProfile == null)
           avatar
         else
@@ -633,29 +642,6 @@ class _DashboardHeader extends StatelessWidget {
               ),
             ),
           ),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(_greeting(), style: theme.textTheme.titleLarge),
-              if (email != null && email.isNotEmpty)
-                Text(
-                  email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-            ],
-          ),
-        ),
-        const AppLogo(size: 28),
-        const SizedBox(width: AppSpacing.xs),
-        _OverflowMenu(
-          onSignOut: onSignOut,
-          onDeleteAccount: onDeleteAccount,
-        ),
       ],
     );
   }
@@ -741,6 +727,7 @@ class _HeroCard extends StatelessWidget {
     required this.latest,
     required this.delta,
     required this.coverage,
+    this.onTap,
   });
 
   final AnalysisSummary latest;
@@ -753,84 +740,144 @@ class _HeroCard extends StatelessWidget {
   /// type were both scored.
   final double? delta;
 
+  /// Opens this session's results.
+  final VoidCallback? onTap;
+
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-
-    return AppCard(
-      child: Row(
-        children: <Widget>[
-          ScoreRing(
-            score: latest.overallScore,
-            delta: delta,
-            label: latest.overallScore == null ? 'Not scored' : 'Overall',
-            size: 132,
-          ),
-          const SizedBox(width: AppSpacing.lg),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  'LATEST SESSION',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
+    // The block is drawn in the app's dark theme, whatever the page's theme,
+    // so every colour inside it comes from the validated dark palette.
+    final ThemeData dark = buildDarkAppTheme();
+    return Theme(
+      data: dark,
+      child: Builder(
+        builder: (BuildContext context) {
+          final ThemeData theme = Theme.of(context);
+          final Color muted = theme.colorScheme.onSurfaceVariant;
+          final BorderRadius radius = BorderRadius.circular(AppSpacing.cardRadius);
+          return Material(
+            color: theme.colorScheme.surfaceContainer,
+            shape: RoundedRectangleBorder(borderRadius: radius),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: radius,
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Row(
+                  children: <Widget>[
+                    ScoreRing(
+                      score: latest.overallScore,
+                      delta: delta,
+                      label: latest.overallScore == null ? 'Not scored' : 'Overall',
+                      size: 120,
+                    ),
+                    const SizedBox(width: AppSpacing.lg),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            'LATEST SWING · ${_relativeTime(latest.createdAt).toUpperCase()}',
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: muted, fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            latest.shotType.label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleLarge,
+                          ),
+                          if (latest.ballSpeedMph != null) ...<Widget>[
+                            const SizedBox(height: AppSpacing.xs),
+                            Text('${latest.ballSpeedMph} mph',
+                                style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+                          ],
+                          if (coverage case final CoverageSummary c
+                              when c.total > 0) ...<Widget>[
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              '${c.available} of ${c.total} '
+                              '${plural(c.total, 'metric')} measured',
+                              style: theme.textTheme.bodySmall?.copyWith(color: muted),
+                            ),
+                          ],
+                          if (onTap != null) ...<Widget>[
+                            const SizedBox(height: AppSpacing.sm),
+                            Text('See details ›',
+                                style: theme.textTheme.labelLarge
+                                    ?.copyWith(color: theme.colorScheme.primary)),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                _ShotChip(shotType: latest.shotType.label),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  <String>[
-                    _relativeTime(latest.createdAt),
-                    // No speed at all when the clip was not calibrated.
-                    if (latest.ballSpeedMph != null)
-                      '${latest.ballSpeedMph} mph',
-                  ].join(' · '),
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-                if (coverage case final CoverageSummary c
-                    when c.total > 0) ...<Widget>[
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    '${c.available} of ${c.total} '
-                    '${plural(c.total, 'metric')} measured',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                ],
-              ],
+              ),
             ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 }
 
-class _ShotChip extends StatelessWidget {
-  const _ShotChip({required this.shotType});
+/// Clips, shot types and top speed as three separate tiles.
+class _StatTiles extends StatelessWidget {
+  const _StatTiles({required this.stats});
 
-  final String shotType;
+  final List<InlineStat> stats;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: theme.colorScheme.outline),
-      ),
-      child: Text(
-        shotType,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: theme.textTheme.labelMedium,
-      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        for (int i = 0; i < stats.length; i++) ...<Widget>[
+          if (i > 0) const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: AppCard(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    stats[i].label.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text.rich(
+                      TextSpan(
+                        // Null means not measured: an em dash, never a zero.
+                        text: stats[i].value ?? '—',
+                        style: theme.textTheme.titleLarge,
+                        children: <InlineSpan>[
+                          if (stats[i].value != null && stats[i].unit != null)
+                            TextSpan(
+                              text: ' ${stats[i].unit}',
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
