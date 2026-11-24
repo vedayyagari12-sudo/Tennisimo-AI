@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Delete account</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0B7A3B}a:hover{color:#075C2C}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: rgba(16,21,18,.45); font-family: Inter, system-ui, sans-serif; color: #101512; display: flex; flex-direction: column; justify-content: flex-end">
+<div role="dialog" aria-labelledby="dt" style="background: #FFFFFF; border-radius: 24px 24px 0 0; padding: 12px 20px 32px; display: flex; flex-direction: column; gap: 16px">
+<div style="width: 40px; height: 4px; border-radius: 2px; background: #D5DBD7; align-self: center"></div>
+<div style="width: 52px; height: 52px; border-radius: 16px; background: #FCEBEC; display: flex; align-items: center; justify-content: center"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#A1161C" stroke-width="2" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></div>
+<div id="dt" style="font-size: 22px; font-weight: 800">Delete your account?</div>
+<div style="font-size: 15px; line-height: 1.55; color: #3D4640">This permanently removes:</div>
+<ul style="margin: -8px 0 0; padding-left: 20px; font-size: 15px; line-height: 1.8; color: #3D4640">
+<li>every swing video you uploaded</li>
+<li>all scores, matches and rallies</li>
+<li>your login</li>
+</ul>
+<div style="font-size: 14px; color: #A1161C; font-weight: 600">This can’t be undone.</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="cf" style="font-size: 14px; font-weight: 600">Type DELETE to confirm</label>
+<input id="cf" value="DELETE" style="height: 48px; border: 1.5px solid #7B857F; border-radius: 12px; padding: 0 14px; font: 600 16px Inter; letter-spacing: .06em">
+</div>
+<button style="height: 52px; border: 0; border-radius: 16px; background: #A1161C; color: #FFFFFF; font: 700 16px Inter">Delete account</button>
+<button style="height: 48px; border: 0; border-radius: 16px; background: #F0F3F1; color: #101512; font: 600 16px Inter">Cancel</button>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

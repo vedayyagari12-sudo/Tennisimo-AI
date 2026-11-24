@@ -2,16 +2,19 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../models/match.dart';
 import '../services/haptics.dart';
 import '../services/last_seen.dart';
 import '../theme/app_theme.dart';
 import 'dashboard_screen.dart';
 import 'history_screen.dart';
 import 'matches_screen.dart';
+import 'profile_screen.dart';
 import 'record_screen.dart';
 
-/// The signed-in shell: Dashboard · Record · History.
+/// The signed-in shell: Home · History · Record · Matches · Profile.
+///
+/// Matches holds both matches and rallies behind a switch at its top, which
+/// keeps the bar to five destinations with Record in the middle.
 ///
 /// Record is an ACTION, not a tab. Selecting it pushes [RecordScreen]
 /// full-screen and puts the selection straight back where it was, so the
@@ -31,10 +34,10 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   static const int _dashboardTab = 0;
-  static const int _recordTab = 1;
-  static const int _historyTab = 2;
+  static const int _historyTab = 1;
+  static const int _recordTab = 2;
   static const int _matchesTab = 3;
-  static const int _ralliesTab = 4;
+  static const int _profileTab = 4;
 
   int _selected = _dashboardTab;
 
@@ -95,23 +98,24 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
     return Scaffold(
       // IndexedStack keeps each tab's state and scroll position alive across
-      // switches. Only the two real tabs live in it.
+      // switches. Record is an action, so it has no page here.
       body: IndexedStack(
         index: _selected == _historyTab
             ? 1
             : _selected == _matchesTab
                 ? 2
-                : _selected == _ralliesTab
+                : _selected == _profileTab
                     ? 3
                     : 0,
         children: <Widget>[
           DashboardScreen(
             key: _dashboardKey,
             onSeeAllHistory: () => setState(() => _selected = _historyTab),
+            onOpenProfile: () => setState(() => _selected = _profileTab),
           ),
           const HistoryScreen(),
-          const MatchesScreen(),
-          const MatchesScreen(kind: SessionKind.rally),
+          const MatchesHubScreen(),
+          const ProfileScreen(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -119,9 +123,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         onDestinationSelected: _onDestinationSelected,
         destinations: <Widget>[
           const NavigationDestination(
-            icon: Icon(Icons.insights_outlined),
-            selectedIcon: Icon(Icons.insights),
-            label: 'Dashboard',
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.timeline_outlined),
+            selectedIcon: Icon(Icons.timeline),
+            label: 'History',
           ),
           NavigationDestination(
             // The primary action, styled as the one filled accent in the bar.
@@ -141,19 +150,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             label: 'Record',
           ),
           const NavigationDestination(
-            icon: Icon(Icons.timeline_outlined),
-            selectedIcon: Icon(Icons.timeline),
-            label: 'History',
-          ),
-          const NavigationDestination(
             icon: Icon(Icons.sports_tennis_outlined),
             selectedIcon: Icon(Icons.sports_tennis),
             label: 'Matches',
           ),
           const NavigationDestination(
-            icon: Icon(Icons.forum_outlined),
-            selectedIcon: Icon(Icons.forum),
-            label: 'Rallies',
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
           ),
         ],
       ),

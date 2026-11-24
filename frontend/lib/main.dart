@@ -1,10 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
+import 'services/haptics.dart';
 import 'theme/app_theme.dart';
 import 'theme/motion.dart';
 import 'theme/theme_controller.dart';
@@ -29,6 +31,11 @@ Future<void> main() async {
   if (kIsWeb) {
     themeController = ThemeController();
     await themeController.load();
+  }
+  // Profile › Haptics. Nothing to restore on the web, where haptics never fire.
+  if (!kIsWeb) {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    haptics.enabled = prefs.getBool(kHapticsEnabledPrefKey) ?? true;
   }
   runApp(TennisimoApp(themeController: themeController));
 }

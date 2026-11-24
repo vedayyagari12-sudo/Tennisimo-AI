@@ -1,4 +1,4 @@
-// Match mode (2026-11-09): the Matches and Rallies tabs, the upload flow and
+﻿// Match mode (2026-11-09): the Matches and Rallies tabs, the upload flow and
 // the result screen. Both are a video from one still phone; the server tracks
 // the ball, finds bounces, rallies and line calls. A rally also gets an
 // overall coaching summary that AI words from those measured numbers.
@@ -31,7 +31,7 @@ const Duration kMatchPollInterval = Duration(seconds: 3);
 /// Landing flag set when the camera could not be confirmed still.
 const String kCameraUnverifiedFlag = 'camera_unverified';
 
-String _percent(double? value) => value == null ? '—' : '${value.round()}%';
+String _percent(double? value) => value == null ? 'â€”' : '${value.round()}%';
 
 /// The words that differ between the two tabs.
 extension SessionKindCopy on SessionKind {
@@ -47,6 +47,29 @@ extension SessionKindCopy on SessionKind {
   String get emptySupporting => this == SessionKind.rally
       ? 'Film a rally from behind the baseline to get your first coaching summary.'
       : 'Film a rally from behind the baseline and the court map fills in.';
+
+  /// Title of the "how it works" card at the top of the tab.
+  String get guideTitle => this == SessionKind.rally ? 'How rallies work' : 'How matches work';
+
+  /// The three steps, in order, in plain words.
+  List<(String, String)> get guideSteps => this == SessionKind.rally
+      ? const <(String, String)>[
+          ('Film', 'Prop your phone still behind the baseline so the whole court is in view, then rally.'),
+          ('Upload', 'Tap â€œNew rallyâ€ and choose the video. Analysis takes about twice the video length, '
+              'and you can leave and come back.'),
+          ('Read the coaching', 'Tap the finished rally for a short coaching summary and the numbers behind it.'),
+        ]
+      : const <(String, String)>[
+          ('Film', 'Prop your phone still behind the baseline so the whole court is in view, then play.'),
+          ('Upload', 'Tap â€œNew matchâ€ and choose the video. Analysis takes about twice the video length, '
+              'and you can leave and come back.'),
+          ('Explore', 'Tap the finished match to see the shot map, your rallies and the closest line calls.'),
+        ];
+
+  /// Points at the other tab, because the two are easy to mix up.
+  String get otherTabHint => this == SessionKind.rally
+      ? 'Want the shot map and line calls instead? Switch to Matches at the top.'
+      : 'Want coaching on one rally instead? Switch to Rallies at the top.';
 }
 
 String _matchTitle(MatchRecord match) {
@@ -83,7 +106,7 @@ String courtCheckHeadline(CourtCheck check) {
     case CourtConfidence.check:
       return 'Check the court lines';
     case CourtConfidence.poor:
-      return 'We’re not sure about the court lines';
+      return 'Weâ€™re not sure about the court lines';
     case CourtConfidence.good:
     case CourtConfidence.unknown:
       return 'Court lines found';
@@ -112,7 +135,7 @@ String courtReasonText(String code) {
 String courtCheckAdvice(CourtCheck check) => check.needsAttention
     ? 'Look closely at the yellow lines. If they are not on the real court lines, '
         'stop now and film again with the whole court in view.'
-    : 'If the yellow lines sit on the real court lines, you’re set. '
+    : 'If the yellow lines sit on the real court lines, youâ€™re set. '
         'If they do not, stop now and film again.';
 
 /// "About 3 min left", or null when there is no estimate yet. The estimate is
@@ -127,28 +150,65 @@ String? etaText(double? seconds) {
 String _statusLine(MatchRecord match) {
   switch (match.status) {
     case MatchStatus.queued:
-      return 'Waiting to start…';
+      return 'Waiting to startâ€¦';
     case MatchStatus.running:
       final double? p = match.progress;
       final String title = stageTitle(match.stage);
-      return p == null ? '$title…' : '$title… ${(p * 100).round()}%';
+      return p == null ? '$titleâ€¦' : '$titleâ€¦ ${(p * 100).round()}%';
     case MatchStatus.failed:
       return match.errorMessage ?? 'This video could not be analysed.';
     case MatchStatus.complete:
     case MatchStatus.unrecognized:
       final MatchStats? s = match.stats;
       if (s == null) return 'Done';
-      return '${s.rallies} ${s.rallies == 1 ? 'rally' : 'rallies'} · '
-          '${s.shotsLanded} shots landed · In ${_percent(s.inPercent)}';
+      return '${s.rallies} ${s.rallies == 1 ? 'rally' : 'rallies'} Â· '
+          '${s.shotsLanded} shots landed Â· In ${_percent(s.inPercent)}';
   }
 }
 
 // ------------------------------------------------------------------ the tab
 
+/// The Matches tab: matches and rallies behind one switch at the top, so the
+/// bottom bar keeps room for Profile. Both lists stay alive when switching.
+class MatchesHubScreen extends StatefulWidget {
+  const MatchesHubScreen({super.key});
+
+  @override
+  State<MatchesHubScreen> createState() => _MatchesHubScreenState();
+}
+
+class _MatchesHubScreenState extends State<MatchesHubScreen> {
+  SessionKind _kind = SessionKind.match;
+
+  Widget _switcher() => SegmentedButton<SessionKind>(
+        showSelectedIcon: false,
+        segments: const <ButtonSegment<SessionKind>>[
+          ButtonSegment<SessionKind>(value: SessionKind.match, label: Text('Matches')),
+          ButtonSegment<SessionKind>(value: SessionKind.rally, label: Text('Rallies')),
+        ],
+        selected: <SessionKind>{_kind},
+        onSelectionChanged: (Set<SessionKind> s) => setState(() => _kind = s.first),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return IndexedStack(
+      index: _kind == SessionKind.rally ? 1 : 0,
+      children: <Widget>[
+        MatchesScreen(switcher: _switcher()),
+        MatchesScreen(kind: SessionKind.rally, switcher: _switcher()),
+      ],
+    );
+  }
+}
+
 class MatchesScreen extends StatefulWidget {
-  const MatchesScreen({super.key, this.kind = SessionKind.match, this.loader});
+  const MatchesScreen({super.key, this.kind = SessionKind.match, this.loader, this.switcher});
 
   final SessionKind kind;
+
+  /// The Matches / Rallies switch, shown under the title when given.
+  final Widget? switcher;
 
   /// Defaults to this tab's kind from the server.
   final Future<ApiResult<List<MatchRecord>>> Function()? loader;
@@ -160,6 +220,9 @@ class MatchesScreen extends StatefulWidget {
 class MatchesScreenState extends State<MatchesScreen> {
   List<MatchRecord>? _matches;
   ApiFailure? _failure;
+
+  /// null = automatic: open until the person has at least one session.
+  bool? _guideOpen;
 
   @override
   void initState() {
@@ -214,8 +277,20 @@ class MatchesScreenState extends State<MatchesScreen> {
                 ),
               ],
             ),
+            if (widget.switcher != null) ...<Widget>[
+              const SizedBox(height: AppSpacing.md),
+              SizedBox(width: double.infinity, child: widget.switcher),
+            ],
             const SizedBox(height: AppSpacing.sm),
             Text(kind.intro, style: theme.textTheme.bodyMedium),
+            const SizedBox(height: AppSpacing.lg),
+            _HowItWorksCard(
+              kind: kind,
+              open: _guideOpen ?? (matches == null || matches.isEmpty),
+              onToggle: () => setState(
+                () => _guideOpen = !(_guideOpen ?? (matches == null || matches.isEmpty)),
+              ),
+            ),
             const SizedBox(height: AppSpacing.lg),
             if (matches == null && _failure == null)
               const Center(child: Padding(padding: EdgeInsets.all(AppSpacing.xl), child: CircularProgressIndicator()))
@@ -223,7 +298,9 @@ class MatchesScreenState extends State<MatchesScreen> {
               EmptyState(
                 icon: Icons.sports_tennis,
                 headline: _failure != null ? '${kind.tabTitle} could not be loaded' : kind.emptyHeadline,
-                supporting: _failure?.message ?? kind.emptySupporting,
+                supporting: _failure != null
+                    ? 'Check your connection and try again. (${_failure!.message})'
+                    : kind.emptySupporting,
                 actionLabel: _failure != null ? 'Try again' : kind.newLabel,
                 onAction: _failure != null ? refresh : _newMatch,
               )
@@ -265,6 +342,80 @@ class MatchesScreenState extends State<MatchesScreen> {
   }
 }
 
+/// The three-step guide at the top of each tab. Open for a first-time visitor,
+/// folded away (one tap to bring back) once there is something to look at.
+class _HowItWorksCard extends StatelessWidget {
+  const _HowItWorksCard({required this.kind, required this.open, required this.onToggle});
+
+  final SessionKind kind;
+  final bool open;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final List<(String, String)> steps = kind.guideSteps;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Semantics(
+            button: true,
+            expanded: open,
+            label: kind.guideTitle,
+            child: InkWell(
+              onTap: onToggle,
+              borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 44),
+                child: Row(
+                  children: <Widget>[
+                    Icon(Icons.help_outline, size: 20, color: theme.colorScheme.primary),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(child: ExcludeSemantics(child: Text(kind.guideTitle, style: theme.textTheme.titleMedium))),
+                    Icon(open ? Icons.expand_less : Icons.expand_more),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (open) ...<Widget>[
+            const SizedBox(height: AppSpacing.sm),
+            for (int i = 0; i < steps.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    CircleAvatar(
+                      radius: 13,
+                      backgroundColor: theme.colorScheme.primaryContainer,
+                      child: Text(
+                        '${i + 1}',
+                        style: theme.textTheme.labelLarge?.copyWith(color: theme.colorScheme.onPrimaryContainer),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(steps[i].$1, style: theme.textTheme.titleSmall),
+                          Text(steps[i].$2, style: theme.textTheme.bodyMedium),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            Text(kind.otherTabHint, style: theme.textTheme.bodySmall),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 // ------------------------------------------------------------ new match
 
 class NewMatchScreen extends StatefulWidget {
@@ -291,7 +442,7 @@ class _NewMatchScreenState extends State<NewMatchScreen> {
   Future<void> _chooseAndSend() async {
     setState(() {
       _error = null;
-      _busy = 'Opening your videos…';
+      _busy = 'Opening your videosâ€¦';
     });
     final VideoPickOutcome outcome =
         await pickVideoClip(maxSeconds: kMaxMatchSeconds, maxBytes: kMaxMatchUploadBytes);
@@ -312,7 +463,7 @@ class _NewMatchScreenState extends State<NewMatchScreen> {
   }
 
   Future<void> _send(VideoClip clip) async {
-    setState(() => _busy = 'Uploading…');
+    setState(() => _busy = 'Uploadingâ€¦');
     final ApiResult<UploadTicket> ticket = await requestUploadTicket(
       contentType: clip.contentType,
       sizeBytes: clip.sizeBytes,
@@ -328,7 +479,7 @@ class _NewMatchScreenState extends State<NewMatchScreen> {
     }
     final List<(int, int)> ranges = uploadPartRanges(clip.sizeBytes, t.partBytes!, count);
     for (int i = 0; i < count; i++) {
-      setState(() => _busy = count == 1 ? 'Uploading…' : 'Uploading part ${i + 1} of $count…');
+      setState(() => _busy = count == 1 ? 'Uploadingâ€¦' : 'Uploading part ${i + 1} of $countâ€¦');
       final (int start, int end) = ranges[i];
       final ApiFailure? uploaded = await uploadVideoToSignedUrl(
         storagePath: t.parts[i].storagePath,
@@ -339,7 +490,7 @@ class _NewMatchScreenState extends State<NewMatchScreen> {
       if (!mounted) return;
       if (uploaded != null) return _fail(uploaded.message);
     }
-    setState(() => _busy = 'Starting the analysis…');
+    setState(() => _busy = 'Starting the analysisâ€¦');
     final ApiResult<MatchRecord> created = await createMatch(
       storagePath: ticket.data!.storagePath,
       courtFormat: _format,
@@ -392,7 +543,7 @@ class _NewMatchScreenState extends State<NewMatchScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          const Text('•  '),
+                          const Text('â€¢  '),
                           Expanded(child: Text(tip, style: theme.textTheme.bodyMedium)),
                         ],
                       ),
@@ -670,7 +821,7 @@ class CourtCheckCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text('•  '),
+                  const Text('â€¢  '),
                   Expanded(child: Text(courtReasonText(reason), style: theme.textTheme.bodyMedium)),
                 ],
               ),
@@ -784,7 +935,7 @@ class MatchProgressPanel extends StatelessWidget {
   }
 }
 
-class _MatchResultBody extends StatelessWidget {
+class _MatchResultBody extends StatefulWidget {
   const _MatchResultBody({required this.match, required this.result, required this.picture});
 
   final MatchRecord match;
@@ -792,7 +943,33 @@ class _MatchResultBody extends StatelessWidget {
   final Future<ApiResult<Uint8List>>? picture;
 
   @override
+  State<_MatchResultBody> createState() => _MatchResultBodyState();
+}
+
+class _MatchResultBodyState extends State<_MatchResultBody> {
+  // The page is a plain Column in a scroll view (not a lazy list) so every
+  // section is built and these keys can always be scrolled to.
+  final GlobalKey _shotMapKey = GlobalKey();
+  final GlobalKey _ralliesKey = GlobalKey();
+  final GlobalKey _lineCallsKey = GlobalKey();
+  final GlobalKey _courtLinesKey = GlobalKey();
+
+  void _jumpTo(GlobalKey key) {
+    final BuildContext? target = key.currentContext;
+    if (target == null) return;
+    Scrollable.ensureVisible(
+      target,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+      alignment: 0.02,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final MatchRecord match = widget.match;
+    final CourtAnalysis result = widget.result;
+    final Future<ApiResult<Uint8List>>? picture = widget.picture;
     final ThemeData theme = Theme.of(context);
     final MatchStats? stats = match.stats;
     final bool cameraUnverified =
@@ -801,15 +978,41 @@ class _MatchResultBody extends StatelessWidget {
       ..sort((ShotLanding a, ShotLanding b) =>
           a.lineCall!.signedMarginM.abs().compareTo(b.lineCall!.signedMarginM.abs()));
 
-    return ListView(
+    final bool tracked = result.status != CourtSessionStatus.refused;
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xxl),
+      child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        if (tracked) ...<Widget>[
+          // One-line orientation, then a way to jump straight to a section.
+          Text(
+            match.kind == SessionKind.rally
+                ? 'Your coaching comes first, then the numbers behind it. Tap a section to jump to it.'
+                : 'Everything we measured from your video. Tap a section to jump to it.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xs,
+            children: <Widget>[
+              ActionChip(label: const Text('Shot map'), onPressed: () => _jumpTo(_shotMapKey)),
+              ActionChip(label: const Text('Rallies'), onPressed: () => _jumpTo(_ralliesKey)),
+              if (called.isNotEmpty)
+                ActionChip(label: const Text('Line calls'), onPressed: () => _jumpTo(_lineCallsKey)),
+              if (picture != null)
+                ActionChip(label: const Text('Court lines'), onPressed: () => _jumpTo(_courtLinesKey)),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.lg),
+        ],
         if (result.status == CourtSessionStatus.refused)
           AppCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('We couldn’t track this one', style: theme.textTheme.titleMedium),
+                Text('We couldnâ€™t track this one', style: theme.textTheme.titleMedium),
                 const SizedBox(height: AppSpacing.sm),
                 Text(
                   (result.refusalReason ?? CourtRefusalReason.unrecognized).message,
@@ -827,13 +1030,21 @@ class _MatchResultBody extends StatelessWidget {
             CoachingSummaryCard(feedback: match.feedback!),
             const SizedBox(height: AppSpacing.xl),
           ],
-          if (stats != null) _StatsGrid(stats: stats),
+          if (stats != null) ...<Widget>[
+            _StatsGrid(stats: stats),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'In: of the shots we could call, how many landed inside the lines. '
+              'Deep: how many landed in the deep zone, close to the baseline.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
           if (cameraUnverified || result.status == CourtSessionStatus.partial) ...<Widget>[
             const SizedBox(height: AppSpacing.md),
             AppCard(
               child: Text(
                 cameraUnverified
-                    ? 'We couldn’t confirm the phone stayed still, so in/out calls are '
+                    ? 'We couldnâ€™t confirm the phone stayed still, so in/out calls are '
                         'switched off for this video. Where balls landed is still shown.'
                     : 'Only part of this video could be used: the phone was knocked part-way through.',
                 style: theme.textTheme.bodyMedium,
@@ -841,19 +1052,34 @@ class _MatchResultBody extends StatelessWidget {
             ),
           ],
           const SizedBox(height: AppSpacing.xl),
-          const SectionHeader(title: 'Shot map'),
+          SectionHeader(key: _shotMapKey, title: 'Shot map'),
+          Text(
+            'Each dot is a place a ball bounced, seen from above. Use the filter chips to look at '
+            'your shots, your opponentâ€™s, serves or a type of line call.',
+            style: theme.textTheme.bodySmall,
+          ),
           const SizedBox(height: AppSpacing.sm),
           if (result.landings.isEmpty)
             Text('No bounces were found in this video.', style: theme.textTheme.bodyMedium)
           else
             CourtMap(landings: result.landings),
           const SizedBox(height: AppSpacing.xl),
-          const SectionHeader(title: 'Rallies'),
+          SectionHeader(key: _ralliesKey, title: 'Rallies'),
+          Text(
+            'A rally is a run of shots until the point ends. Each row shows when it started, '
+            'how long it was and how it ended.',
+            style: theme.textTheme.bodySmall,
+          ),
           const SizedBox(height: AppSpacing.sm),
           RallyTimeline(rallies: result.rallies),
           if (called.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppSpacing.xl),
-            const SectionHeader(title: 'Closest line calls'),
+            SectionHeader(key: _lineCallsKey, title: 'Closest line calls'),
+            Text(
+              'The balls that landed nearest a line, closest first. The distance is how far '
+              'inside or beyond the line the ball came down.',
+              style: theme.textTheme.bodySmall,
+            ),
             const SizedBox(height: AppSpacing.sm),
             for (final ShotLanding landing in called.take(10))
               Padding(
@@ -864,7 +1090,7 @@ class _MatchResultBody extends StatelessWidget {
         ],
         if (picture != null) ...<Widget>[
           const SizedBox(height: AppSpacing.xl),
-          const SectionHeader(title: 'Court lines we used'),
+          SectionHeader(key: _courtLinesKey, title: 'Court lines we used'),
           const SizedBox(height: AppSpacing.sm),
           FutureBuilder<ApiResult<Uint8List>>(
             future: picture,
@@ -896,6 +1122,7 @@ class _MatchResultBody extends StatelessWidget {
           style: theme.textTheme.bodySmall,
         ),
       ],
+      ),
     );
   }
 }
@@ -926,12 +1153,12 @@ class CoachingSummaryCard extends StatelessWidget {
           Text(feedback.summary, style: theme.textTheme.bodyLarge),
           if (feedback.strengths.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppSpacing.md),
-            Text('What’s working', style: theme.textTheme.titleSmall),
+            Text('Whatâ€™s working', style: theme.textTheme.titleSmall),
             const SizedBox(height: AppSpacing.xs),
             for (final String strength in feedback.strengths)
               Padding(
                 padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                child: Text('•  $strength', style: theme.textTheme.bodyMedium),
+                child: Text('â€¢  $strength', style: theme.textTheme.bodyMedium),
               ),
           ],
           if (feedback.improvements.isNotEmpty) ...<Widget>[
@@ -968,8 +1195,8 @@ class _StatsGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final List<(String, String)> tiles = <(String, String)>[
       ('Rallies', '${stats.rallies}'),
-      ('Longest rally', stats.longestRallyHits == null ? '—' : '${stats.longestRallyHits} shots'),
-      ('Average rally', stats.averageRallyHits == null ? '—' : '${stats.averageRallyHits!.toStringAsFixed(1)} shots'),
+      ('Longest rally', stats.longestRallyHits == null ? 'â€”' : '${stats.longestRallyHits} shots'),
+      ('Average rally', stats.averageRallyHits == null ? 'â€”' : '${stats.averageRallyHits!.toStringAsFixed(1)} shots'),
       ('Shots landed', '${stats.shotsLanded}'),
       ('In', _percent(stats.inPercent)),
       ('Deep', _percent(stats.deepPercent)),

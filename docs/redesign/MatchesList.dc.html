@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Matches and rallies</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0B7A3B}a:hover{color:#075C2C}
+.card{background:#FFFFFF;border-radius:20px;padding:18px;box-shadow:0 1px 2px rgba(16,21,18,.06)}
+.sec{display:flex;justify-content:space-between;align-items:baseline;margin:6px 4px 0}
+.sec h2{margin:0;font-size:17px;font-weight:700}
+.step{display:flex;gap:12px;align-items:flex-start}
+.num{width:28px;height:28px;border-radius:14px;background:#E4F3E9;color:#0B7A3B;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex:none}
+.row{display:flex;align-items:center;gap:12px;padding:14px 18px;text-decoration:none;color:inherit;min-height:44px}
+.navi{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#5C665F;text-decoration:none;min-width:56px;min-height:44px;justify-content:center}
+</style>
+</helmet>
+<div style="width: 390px; height: 1000px; box-sizing: border-box; background: #F3F5F2; font-family: Inter, system-ui, sans-serif; color: #101512; position: relative; overflow: hidden">
+<div style="display: flex; flex-direction: column; gap: 16px; padding: 20px 16px 110px">
+
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0">
+<h1 style="margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em">Matches</h1>
+<a href="#" style="display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 16px; border-radius: 22px; background: #0B7A3B; color: #FFFFFF; font-weight: 700; font-size: 14px; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>New match</a>
+</div>
+
+<div role="tablist" aria-label="Choose what to look at" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: #E7EBE8; border-radius: 14px; padding: 4px">
+<button role="tab" aria-selected="true" style="border: 0; border-radius: 10px; background: #FFFFFF; font: 700 14px Inter; min-height: 44px; box-shadow: 0 1px 2px rgba(0,0,0,.08)">Matches</button>
+<button role="tab" aria-selected="false" style="border: 0; border-radius: 10px; background: none; font: 600 14px Inter; color: #3D4640; min-height: 44px">Rallies</button>
+</div>
+<div style="font-size: 14px; color: #3D4640; line-height: 1.5; padding: 0 4px">Play a set, then see where every ball landed, your rallies and the line calls. <b style="color: #101512">Want coaching on one rally instead? Tap Rallies above.</b></div>
+
+<div class="card" style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<div style="display: flex; align-items: center; gap: 8px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0B7A3B" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17h.01"></path></svg><h2 style="margin: 0; font-size: 16px; font-weight: 700">How matches work</h2></div>
+<button style="border: 0; background: none; color: #0B7A3B; font: 600 13px Inter; min-height: 44px; padding: 0 4px">Hide</button>
+</div>
+<div class="step"><div class="num">1</div><div><div style="font-weight: 700; font-size: 14px">Film</div><div style="font-size: 14px; color: #3D4640; line-height: 1.5">Prop your phone still behind the baseline so the whole court is in view, then play.</div></div></div>
+<div class="step"><div class="num">2</div><div><div style="font-weight: 700; font-size: 14px">Upload</div><div style="font-size: 14px; color: #3D4640; line-height: 1.5">Tap New match and choose the video. Analysis takes about twice the video length, and you can leave and come back.</div></div></div>
+<div class="step"><div class="num">3</div><div><div style="font-weight: 700; font-size: 14px">Explore</div><div style="font-size: 14px; color: #3D4640; line-height: 1.5">Tap the finished match to see the shot map, your rallies and the closest line calls.</div></div></div>
+</div>
+
+<div class="sec"><h2>Your matches</h2><span style="font-size: 13px; color: #5C665F">Pull down to refresh</span></div>
+<div class="card" style="padding: 0">
+<a href="Match.dc.html" class="row" style="border-bottom: 1px solid #EDF1EE">
+<div style="width: 44px; height: 44px; border-radius: 12px; background: #E4F3E9; color: #0B7A3B; display: flex; align-items: center; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="1"></rect><path d="M4 12h16M8 3v18M16 3v18"></path></svg></div>
+<div style="flex: 1"><div style="font-weight: 600">Saturday hit</div><div style="font-size: 13px; color: #5C665F">22 rallies · 123 shots landed · In 78%</div></div>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C665F" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+</a>
+<div class="row">
+<div style="width: 44px; height: 44px; border-radius: 12px; background: #EDF1EE; color: #5C665F; display: flex; align-items: center; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 3h10M7 21h10M8 3c0 5 8 4 8 9s-8 4-8 9"></path></svg></div>
+<div style="flex: 1"><div style="font-weight: 600">Sunday hit</div><div style="font-size: 13px; color: #5C665F">Tracking the ball… 45%. You can leave this screen.</div></div>
+</div>
+</div>
+</div>
+
+<nav aria-label="Main" style="position: absolute; left: 0; right: 0; bottom: 0; height: 84px; background: #FFFFFF; border-top: 1px solid #E3E8E4; display: flex; justify-content: space-around; align-items: flex-start; padding-top: 8px">
+<a href="Main.dc.html" class="navi"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"></path></svg>Home</a>
+<a href="#" class="navi"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>History</a>
+<a href="#" class="navi" aria-label="Record a swing"><span style="width: 52px; height: 52px; border-radius: 26px; background: #0B7A3B; display: flex; align-items: center; justify-content: center; margin-top: -18px; box-shadow: 0 6px 16px rgba(11,122,59,.35)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"></rect><path d="M16 10l5-3v10l-5-3"></path></svg></span>Record</a>
+<a href="MatchesList.dc.html" class="navi" aria-current="page" style="color: #0B7A3B"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="1"></rect><path d="M4 12h16M8 3v18M16 3v18"></path></svg>Matches</a>
+<a href="Profile.dc.html" class="navi"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1-4 4-6 8-6s7 2 8 6"></path></svg>Profile</a>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1000}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
