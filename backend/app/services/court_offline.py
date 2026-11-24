@@ -58,6 +58,7 @@ from app.ball.camera_motion import CameraMotionSamples, CameraMotionSampler
 from app.services.court_parallel import (
     MIN_RANGE_S,
     ParallelPass,
+    StallWatch,
     camera_motion_pass,
     number_candidates,
     scan_change,
@@ -463,8 +464,13 @@ def _extract_parallel(
         if pool is not None:
             # The camera check is usually done first; keep reporting the
             # workers' real frame count until they are too.
+            watch = StallWatch()
             while not pool.done():
                 report(PHASE1_LAST_INDEX + 1, pool.frames_done)
+                if watch.stalled(pool.frames_done, time.monotonic()):
+                    # Caught by ``extract_court_inputs``, which redoes the
+                    # pass on one core instead of waiting forever.
+                    raise BrokenProcessPool("the ball-pass workers stopped making progress")
                 time.sleep(REPORT_EVERY_S)
         worker_records = pool.results() if pool is not None else []
     except BaseException:

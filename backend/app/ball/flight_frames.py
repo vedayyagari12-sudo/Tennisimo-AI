@@ -90,6 +90,12 @@ def probe_court_clip(path: Path) -> ClipProbe:
             )
         rate = stream.guessed_rate or stream.average_rate or stream.base_rate
         source_fps = float(rate) if rate else 0.0
+        if stream.frames and stream.frames > 1:
+            # A variable-rate recording (a phone screen recording) declares a
+            # nominal rate several times its real one (120 against 23 here).
+            # The frame count over the duration is what the clip really holds,
+            # and the pass's work estimates and progress depend on it.
+            source_fps = stream.frames / duration_s
         if source_fps <= 0.0:
             raise VideoDecodeError(ErrorCode.DECODE_FAILED, "clip has no measurable frame rate")
         rotation = _display_rotation(stream, container)

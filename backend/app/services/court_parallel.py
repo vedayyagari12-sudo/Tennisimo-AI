@@ -78,7 +78,28 @@ START_TIMEOUT_S: Final[float] = 30.0
 #: A worker adds to the shared counter this often, in frames.
 COUNT_EVERY_FRAMES: Final[int] = 10
 
+#: The workers are given up on (and the pass redone on one core) when none of
+#: them has finished a frame for this long. A healthy worker reports every
+#: ``COUNT_EVERY_FRAMES`` frames, a second or two apart at worst.
+STALL_TIMEOUT_S: Final[float] = 90.0
+
 _counter: Any = None
+
+
+class StallWatch:
+    """Notices a worker pool that has stopped making progress. PURE: the caller
+    passes the frame count and the clock."""
+
+    def __init__(self, timeout_s: float = STALL_TIMEOUT_S) -> None:
+        self.timeout_s = timeout_s
+        self._frames = -1
+        self._since: float | None = None
+
+    def stalled(self, frames_done: int, now_s: float) -> bool:
+        if self._since is None or frames_done != self._frames:
+            self._frames, self._since = frames_done, now_s
+            return False
+        return now_s - self._since >= self.timeout_s
 
 
 def worker_count() -> int:
@@ -349,6 +370,8 @@ def number_candidates(
 
 __all__ = [
     "ParallelPass",
+    "STALL_TIMEOUT_S",
+    "StallWatch",
     "WORKERS_ENV",
     "camera_motion_pass",
     "number_candidates",

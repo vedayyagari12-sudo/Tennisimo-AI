@@ -217,3 +217,40 @@ def test_without_the_skip_ball_candidates_are_searched_even_with_no_court(monkey
     for index in range(last_fit + 25):
         state.step(index, index / 30.0, frame)
     assert len(state.chunks) == last_fit + 25 - 2
+
+
+def test_a_pool_that_stops_counting_frames_is_called_stalled() -> None:
+    from app.services.court_parallel import StallWatch
+
+    watch = StallWatch(timeout_s=60.0)
+    assert not watch.stalled(0, 0.0)  # the first look only starts the clock
+    assert not watch.stalled(0, 59.0)
+    assert watch.stalled(0, 60.0)
+    assert not watch.stalled(10, 61.0)  # a frame finished: the clock restarts
+    assert not watch.stalled(10, 120.0)
+    assert watch.stalled(10, 121.0)
+
+
+def test_a_clip_with_a_declared_rate_far_above_its_real_one_is_probed_by_its_frames() -> None:
+    from app.ball.flight_frames import probe_court_clip
+    import av, numpy as np, tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "vfr.mp4"
+        container = av.open(str(path), "w")
+        stream = container.add_stream("libx264", rate=120)  # the nominal rate
+        stream.width, stream.height, stream.pix_fmt = 64, 48, "yuv420p"
+        stream.codec_context.time_base = __import__("fractions").Fraction(1, 1000)
+        # 30 frames spread over 3 s: a real rate of 10 fps.
+        for i in range(30):
+            frame = av.VideoFrame.from_ndarray(np.full((48, 64, 3), i * 5, np.uint8), format="rgb24")
+            frame.pts = i * 100
+            frame.time_base = __import__("fractions").Fraction(1, 1000)
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        probe = probe_court_clip(path)
+    assert probe.source_fps < 30.0  # not the declared 120
