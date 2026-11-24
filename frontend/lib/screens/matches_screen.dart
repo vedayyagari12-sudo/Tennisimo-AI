@@ -68,8 +68,8 @@ extension SessionKindCopy on SessionKind {
 
   /// Points at the other tab, because the two are easy to mix up.
   String get otherTabHint => this == SessionKind.rally
-      ? 'Want the shot map and line calls instead? Use the Matches tab.'
-      : 'Want coaching on one rally? Use the Rallies tab.';
+      ? 'Want the shot map and line calls instead? Switch to Matches at the top.'
+      : 'Want coaching on one rally instead? Switch to Rallies at the top.';
 }
 
 String _matchTitle(MatchRecord match) {
@@ -102,10 +102,47 @@ String _statusLine(MatchRecord match) {
 
 // ------------------------------------------------------------------ the tab
 
+/// The Matches tab: matches and rallies behind one switch at the top, so the
+/// bottom bar keeps room for Profile. Both lists stay alive when switching.
+class MatchesHubScreen extends StatefulWidget {
+  const MatchesHubScreen({super.key});
+
+  @override
+  State<MatchesHubScreen> createState() => _MatchesHubScreenState();
+}
+
+class _MatchesHubScreenState extends State<MatchesHubScreen> {
+  SessionKind _kind = SessionKind.match;
+
+  Widget _switcher() => SegmentedButton<SessionKind>(
+        showSelectedIcon: false,
+        segments: const <ButtonSegment<SessionKind>>[
+          ButtonSegment<SessionKind>(value: SessionKind.match, label: Text('Matches')),
+          ButtonSegment<SessionKind>(value: SessionKind.rally, label: Text('Rallies')),
+        ],
+        selected: <SessionKind>{_kind},
+        onSelectionChanged: (Set<SessionKind> s) => setState(() => _kind = s.first),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return IndexedStack(
+      index: _kind == SessionKind.rally ? 1 : 0,
+      children: <Widget>[
+        MatchesScreen(switcher: _switcher()),
+        MatchesScreen(kind: SessionKind.rally, switcher: _switcher()),
+      ],
+    );
+  }
+}
+
 class MatchesScreen extends StatefulWidget {
-  const MatchesScreen({super.key, this.kind = SessionKind.match, this.loader});
+  const MatchesScreen({super.key, this.kind = SessionKind.match, this.loader, this.switcher});
 
   final SessionKind kind;
+
+  /// The Matches / Rallies switch, shown under the title when given.
+  final Widget? switcher;
 
   /// Defaults to this tab's kind from the server.
   final Future<ApiResult<List<MatchRecord>>> Function()? loader;
@@ -174,6 +211,10 @@ class MatchesScreenState extends State<MatchesScreen> {
                 ),
               ],
             ),
+            if (widget.switcher != null) ...<Widget>[
+              const SizedBox(height: AppSpacing.md),
+              SizedBox(width: double.infinity, child: widget.switcher),
+            ],
             const SizedBox(height: AppSpacing.sm),
             Text(kind.intro, style: theme.textTheme.bodyMedium),
             const SizedBox(height: AppSpacing.lg),

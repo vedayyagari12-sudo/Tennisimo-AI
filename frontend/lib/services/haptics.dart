@@ -73,6 +73,10 @@ class Haptics {
   /// True when this instance will never fire. Web, always.
   bool get isSilent => _isWeb;
 
+  /// The person's own on/off choice, from Profile › Haptics. On by default;
+  /// `main.dart` restores the saved choice at start-up.
+  bool enabled = true;
+
   /// Recording has begun — the most physical moment in the app.
   Future<void> recordingStarted() => _fire(HapticKind.heavy);
 
@@ -100,6 +104,7 @@ class Haptics {
   Future<void> _fire(HapticKind kind) async {
     // The one and only web gate.
     if (_isWeb) return;
+    if (!enabled) return;
     await _driver.send(kind);
   }
 }
@@ -109,3 +114,6 @@ class Haptics {
 /// Mutable so a test can swap in a recording driver, in the same spirit as the
 /// rest of this app's service layer. Production code never assigns to it.
 Haptics haptics = Haptics();
+
+/// Where Profile › Haptics keeps its choice in shared preferences.
+const String kHapticsEnabledPrefKey = 'haptics_enabled';

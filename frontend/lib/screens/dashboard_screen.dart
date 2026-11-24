@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -13,13 +11,13 @@ import '../services/api_client.dart';
 import '../services/account_deletion.dart';
 import '../services/api_client.dart' as api
     show deleteAccount, fetchAnalysisDetail, fetchHistory;
-import '../services/haptics.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/category_bars.dart';
 import '../widgets/coaching_list.dart';
+import '../widgets/delete_account_dialog.dart';
 import '../widgets/content_width.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/focus_card.dart';
@@ -87,11 +85,15 @@ class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
     super.key,
     this.onSeeAllHistory,
+    this.onOpenProfile,
     this.dataSource = const DashboardDataSource(),
   });
 
   /// Switches the shell to the History tab.
   final VoidCallback? onSeeAllHistory;
+
+  /// Switches the shell to the Profile tab. Tapping the avatar does this.
+  final VoidCallback? onOpenProfile;
 
   /// Always the default in the app; see [DashboardDataSource].
   final DashboardDataSource dataSource;
@@ -236,7 +238,7 @@ class DashboardScreenState extends State<DashboardScreen> {
       // like an answer to a question this serious.
       barrierDismissible: false,
       builder: (BuildContext context) =>
-          _DeleteAccountDialog(onDelete: widget.dataSource.deleteAccount),
+          DeleteAccountDialog(onDelete: widget.dataSource.deleteAccount),
     );
     if (deleted != true || !mounted) return;
 
@@ -284,6 +286,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         email: widget.dataSource.accountEmail,
         onSignOut: widget.dataSource.signOut,
         onDeleteAccount: _deleteAccount,
+        onOpenProfile: widget.onOpenProfile,
       );
 
   Widget _buildBody() {
@@ -587,9 +590,11 @@ class _DashboardHeader extends StatelessWidget {
     required this.email,
     required this.onSignOut,
     required this.onDeleteAccount,
+    this.onOpenProfile,
   });
 
   final String? email;
+  final VoidCallback? onOpenProfile;
   final Future<void> Function() onSignOut;
   final Future<void> Function() onDeleteAccount;
 
@@ -600,17 +605,34 @@ class _DashboardHeader extends StatelessWidget {
     final String initial =
         (email == null || email.isEmpty) ? '?' : email[0].toUpperCase();
 
+    final Widget avatar = CircleAvatar(
+      radius: 20,
+      backgroundColor: theme.colorScheme.surfaceContainerHigh,
+      child: Text(
+        initial,
+        style: theme.textTheme.titleMedium
+            ?.copyWith(color: theme.colorScheme.primary),
+      ),
+    );
+
     return Row(
       children: <Widget>[
-        CircleAvatar(
-          radius: 20,
-          backgroundColor: theme.colorScheme.surfaceContainerHigh,
-          child: Text(
-            initial,
-            style: theme.textTheme.titleMedium
-                ?.copyWith(color: theme.colorScheme.primary),
+        if (onOpenProfile == null)
+          avatar
+        else
+          Semantics(
+            button: true,
+            label: 'Profile and settings',
+            child: InkWell(
+              onTap: onOpenProfile,
+              customBorder: const CircleBorder(),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Center(child: ExcludeSemantics(child: avatar)),
+              ),
+            ),
           ),
-        ),
         const SizedBox(width: AppSpacing.md),
         Expanded(
           child: Column(
@@ -709,144 +731,6 @@ class _OverflowMenu extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Confirms, then performs, the permanent deletion of the account.
-///
-/// Three deliberate steps stand between the menu and the request: the menu
-/// entry only opens this dialog; the delete button stays disabled until
-/// [kDeleteConfirmationPhrase] is typed (see its doc for why a typed word);
-/// and only then does a tap send anything.
-///
-/// The request runs HERE rather than after the dialog closes, so a failure is
-/// shown in the same place the user asked, with the typed word still in the
-/// field and the button relabelled "Try again". The dialog closes with `true`
-/// only on a server-confirmed success; nothing ever pretends otherwise.
-class _DeleteAccountDialog extends StatefulWidget {
-  const _DeleteAccountDialog({required this.onDelete});
-
-  final Future<ApiResult<void>> Function() onDelete;
-
-  @override
-  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
-}
-
-class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
-  final TextEditingController _typed = TextEditingController();
-
-  /// True from the confirming tap until the server answers.
-  ///
-  /// Same idea as the record screen's intake guard: set synchronously, before
-  /// the first await, so a second tap in the same frame is refused by the
-  /// check in [_confirm] even before the rebuild disables the button. While it
-  /// is true the dialog also cannot be popped — the user must not be left
-  /// wondering whether a request they walked away from went through.
-  bool _inFlight = false;
-
-  /// The last failure, already worded for this action. See
-  /// [accountDeletionFailure].
-  ApiFailure? _failure;
-
-  @override
-  void dispose() {
-    _typed.dispose();
-    super.dispose();
-  }
-
-  bool get _canConfirm => !_inFlight && deleteConfirmationMatches(_typed.text);
-
-  Future<void> _confirm() async {
-    if (!_canConfirm) return;
-    setState(() {
-      _inFlight = true;
-      _failure = null;
-    });
-    unawaited(haptics.accountDeletionConfirmed());
-
-    final ApiResult<void> result = await widget.onDelete();
-    if (!mounted) return;
-
-    if (result.isOk) {
-      Navigator.of(context).pop(true);
-      return;
-    }
-    setState(() {
-      _inFlight = false;
-      _failure = accountDeletionFailure(result.failure!);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colors = theme.colorScheme;
-    final ApiFailure? failure = _failure;
-
-    return PopScope<bool>(
-      canPop: !_inFlight,
-      child: AlertDialog(
-        scrollable: true,
-        title: const Text('Delete your account?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text(
-              'This permanently deletes your account and every swing you have '
-              'recorded: the videos, the scores and the coaching notes. It '
-              'cannot be undone.',
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            const Text('Type $kDeleteConfirmationPhrase to confirm.'),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _typed,
-              enabled: !_inFlight,
-              autocorrect: false,
-              enableSuggestions: false,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: kDeleteConfirmationPhrase,
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _confirm(),
-            ),
-            if (failure != null) ...<Widget>[
-              const SizedBox(height: AppSpacing.lg),
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: colors.errorContainer,
-                  borderRadius: BorderRadius.circular(AppSpacing.innerRadius),
-                ),
-                child: Text(
-                  failure.plainLanguageWithDebugDetail,
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: colors.onErrorContainer),
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: _inFlight ? null : () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: colors.error),
-            onPressed: _canConfirm ? _confirm : null,
-            child: Text(
-              _inFlight
-                  ? 'Deleting…'
-                  : (failure == null ? 'Delete forever' : 'Try again'),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
