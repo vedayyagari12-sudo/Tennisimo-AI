@@ -17,6 +17,7 @@ import 'package:tennisimo_ai/widgets/comparison_bars.dart';
 import 'package:tennisimo_ai/widgets/shot_mix_chart.dart';
 import 'package:tennisimo_ai/widgets/category_bars.dart';
 import 'package:tennisimo_ai/widgets/score_line_chart.dart';
+import 'package:tennisimo_ai/widgets/skill_radar.dart';
 
 import 'dashboard_layout_matrix_test.dart' show kTextScales, kViewports;
 import 'support/dashboard_fixtures.dart';
@@ -116,6 +117,7 @@ void main() {
         // No coverage on the hero, no focus card: both would be fh1's.
         expect(find.textContaining('checks measured'), findsNothing);
         expect(find.text(kDashboardImproveTitle.toUpperCase()), findsNothing);
+        expect(find.text(kDashboardImproveListTitle), findsNothing);
         expect(find.text('Latest coverage'.toUpperCase()), findsNothing);
       },
     );
@@ -156,6 +158,46 @@ void main() {
         ),
         findsNothing,
       );
+    });
+
+    testWidgets('the forehand player sees how to improve, no raw torso units', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, forehandOnly());
+      await tester.scrollUntilVisible(
+        find.text(kDashboardImproveListTitle),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text(kDashboardImproveListTitle), findsOneWidget);
+      expect(
+        find.text(
+          'Swing a bit more from low to high — brush up the back of '
+          'the ball.',
+        ),
+        findsWidgets,
+      );
+      expect(find.textContaining(' TU'), findsNothing);
+    });
+
+    testWidgets('a latest swing with two categories gets words, not a radar', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, unscoredServesAndVolleys());
+      expect(find.text(SkillRadar.tooFewMessage(2)), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (Widget w) => w is CustomPaint && w.painter is RadarPainter,
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('the radar overlays the previous swing of the same shot', (
+      WidgetTester tester,
+    ) async {
+      await _pumpDashboard(tester, forehandOnly());
+      expect(find.text('Previous swing'), findsOneWidget);
     });
 
     testWidgets('the breakdown is bars, with the biggest gain explained', (

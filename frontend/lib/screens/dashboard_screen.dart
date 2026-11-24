@@ -5,6 +5,7 @@ import '../models/analysis_response.dart';
 import '../models/chart_data.dart';
 import '../models/dashboard_insights.dart';
 import '../models/enums.dart';
+import '../models/swing_advice.dart';
 import '../models/swing_coaching.dart';
 import '../services/api_client.dart';
 import '../services/api_client.dart' as api
@@ -12,6 +13,7 @@ import '../services/api_client.dart' as api
 import '../theme/app_theme.dart';
 import '../widgets/app_card.dart';
 import '../widgets/category_bars.dart';
+import '../widgets/coaching_list.dart';
 import '../widgets/content_width.dart';
 import '../widgets/score_line_chart.dart';
 import '../widgets/empty_state.dart';
@@ -20,12 +22,16 @@ import '../widgets/score_ring.dart';
 import '../widgets/section_header.dart';
 import '../widgets/shot_mix_chart.dart';
 import '../widgets/skeleton_block.dart';
+import '../widgets/skill_radar.dart';
 import 'home_shell.dart';
 import 'record_screen.dart';
 import 'results_screen.dart';
 
 /// The dashboard's coaching section title.
 const String kDashboardImproveTitle = 'Focus next session';
+
+/// The title of the full fixes list under the breakdown.
+const String kDashboardImproveListTitle = 'How to improve';
 
 /// Where the dashboard gets its data: the history list, the per-analysis
 /// details, and the signed-in account.
@@ -324,6 +330,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         ..._buildFocus(),
         ..._buildProgress(insights),
         ..._buildLatestBreakdown(),
+        ..._buildSwingNotes(),
         ..._buildShotMix(insights),
         SectionHeader(
           title: 'Recent sessions',
@@ -451,6 +458,12 @@ class DashboardScreenState extends State<DashboardScreen> {
     }
     if (latest.categories.isEmpty) return const <Widget>[];
     final ThemeData theme = Theme.of(context);
+    // The radar shows the SHAPE, against the previous swing of the same shot
+    // when that one loaded; the bars under it are its exact numbers.
+    final SkillProfile? profile = buildSkillProfile(
+      latest,
+      previous: previousOfSameShot(_items, _details),
+    );
     return <Widget>[
       SectionHeader(
         title: 'Latest breakdown',
@@ -461,6 +474,12 @@ class DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
+            if (profile != null) ...<Widget>[
+              SkillRadar(profile: profile),
+              const SizedBox(height: AppSpacing.md),
+              const Divider(height: 1),
+              const SizedBox(height: AppSpacing.md),
+            ],
             CategoryBars(categories: latest.categories),
             const SizedBox(height: AppSpacing.md),
             Text(
@@ -471,6 +490,32 @@ class DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       ),
+      const SizedBox(height: AppSpacing.lg),
+    ];
+  }
+
+  /// "How to improve": the newest clip's top fixes — each with the measured
+  /// gap and a drill — and one thing that is working. From the fixed rule
+  /// table in `swing_coaching.dart`, not from AI text.
+  ///
+  /// Silent when the newest clip's detail is not loaded (the breakdown block
+  /// above already says so) or produced nothing to say.
+  List<Widget> _buildSwingNotes() {
+    final AnalysisResponse? latest = _latestDetail;
+    if (latest == null) return const <Widget>[];
+    final List<CoachingItem> coaching = buildCoaching(latest);
+    final List<CoachingItem> items = <CoachingItem>[
+      ...coaching
+          .where((CoachingItem c) => c.isOffTarget && c.advice != null)
+          .take(kDashboardFixBullets),
+      ...coaching
+          .where((CoachingItem c) => c.isInRange && c.advice != null)
+          .take(kDashboardPraiseBullets),
+    ];
+    if (items.isEmpty) return const <Widget>[];
+    return <Widget>[
+      const SectionHeader(title: kDashboardImproveListTitle),
+      AppCard(child: CoachingList(items: items)),
       const SizedBox(height: AppSpacing.lg),
     ];
   }
